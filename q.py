@@ -630,6 +630,55 @@ def _update_lut_chart_and_table(self, lut_dict):
         self.update_rgbchannel_table(df, self.ui.vac_table_rbgLUT_4)
     except Exception as e:
         logging.exception(e)
-        
+# ───────────────────────────────────────────────
+# Jacobian 모델 로드 & A 행렬 생성 유틸
+# ───────────────────────────────────────────────
+def _load_jacobian_artifacts(self):
+    """
+    jacobian_Y0_high.pkl 파일을 불러와서 artifacts 딕셔너리로 반환
+    """
+    import joblib
+    import os
+    from utils import cf  # 만약 cf 모듈이 없다면 os.path.join으로 대체 가능
+
+    jac_path = cf.get_normalized_path(__file__, '.', 'models', 'jacobian_Y0_high.pkl')
+    if not os.path.exists(jac_path):
+        logging.error(f"[Jacobian] 파일을 찾을 수 없습니다: {jac_path}")
+        raise FileNotFoundError(f"Jacobian model not found: {jac_path}")
+
+    artifacts = joblib.load(jac_path)
+    logging.info(f"[Jacobian] 모델 로드 완료: {jac_path}")
+    return artifacts
+
+
+def _build_A_from_artifacts(self, artifacts, comp: str):
+    """
+    저장된 자코비안 pkl로부터 A 행렬 (ΔY ≈ A·ΔH) 복원
+    """
+    import numpy as np
+    from scripts.VACJacobianTrainer import stack_basis_all_grays
+
+    knots = np.asarray(artifacts["knots"], dtype=np.int32)
+    comp_obj = artifacts["components"][comp]
+    coef = np.asarray(comp_obj["coef"], dtype=np.float32)
+
+    s = comp_obj["feature_slices"]
+    s_high_R = slice(s["high_R"][0], s["high_R"][1])
+    s_high_G = slice(s["high_G"][0], s["high_G"][1])
+    s_high_B = slice(s["high_B"][0], s["high_B"][1])
+
+    beta_R = coef[s_high_R]
+    beta_G = coef[s_high_G]
+    beta_B = coef[s_high_B]
+
+    Phi = stack_basis_all_grays(knots, L=256)
+
+    A_R = Phi * beta_R.reshape(1, -1)
+    A_G = Phi * beta_G.reshape(1, -1)
+    A_B = Phi * beta_B.reshape(1, -1)
+
+    A = np.hstack([A_R, A_G, A_B]).astype(np.float32)
+    logging.info(f"[Jacobian] {comp} A 행렬 shape: {A.shape}")
+    return A
         
         
