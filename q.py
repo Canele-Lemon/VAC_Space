@@ -5,111 +5,7 @@
 import os, time, logging, joblib, numpy as np
 from PySide2.QtCore import QTimer
 from PySide2.QtWidgets import QTableWidgetItem
-def start_VAC_optimization(self):
-    """
-    1) VAC OFF 보장 → OFF 측정 (Ref)
-    2) DB에서 모델/프레임레이트 매칭 VAC Data 읽어 적용 → ON 측정
-    3) 스펙 확인 → 통과면 종료
-    4) 미통과면 자코비안 보정(High만) → 4096 보간 → 적용 → 재측정 (최대 N회)
-    """
-    try:
-        # (0) 자코비안 로드
-        jac_path = cf.get_normalized_path(__file__, '.', 'models', 'jacobian_Y0_high.pkl')
-        self._jac_artifacts = joblib.load(jac_path)
-        logging.info(f"[Jacobian] loaded: {jac_path}")
-    except Exception as e:
-        logging.exception("Jacobian pkl load failed")
-        return
 
-    # (1) VAC 상태 확인 → OFF 전환 (OnOff=false)
-    st = self.check_VAC_status()
-    if st.get("activated", False):
-        logging.debug("VAC 활성 상태 → OFF로 전환 시도")
-        self.send_command(self.ser_tv, 's')
-        cmd = 'luna-send -n 1 -f luna://com.webos.service.panelcontroller/setVACActive \'{"OnOff":false}\''
-        self.send_command(self.ser_tv, cmd)
-        self.send_command(self.ser_tv, 'exit')
-        st2 = self.check_VAC_status()
-        if st2.get("activated", False):
-            logging.warning("VAC OFF 실패로 보입니다. 그래도 측정 진행")
-        else:
-            logging.info("VAC OFF 전환 성공.")
-    else:
-        logging.debug("이미 VAC OFF 상태. OFF 레퍼런스 측정 진행")
-
-    # (2) OFF 측정 세션 시작
-    self._run_off_baseline_then_on()
-
-def _run_off_baseline_then_on(self):
-    # 감마 라인 준비(“VAC OFF (Ref.)”)
-    gamma_lines_off = {
-        'main': {p: self.vac_optimization_gamma_chart.add_series(axis_index=0, label="VAC OFF (Ref.)") for p in ('white','red','green','blue')},
-        'sub':  {p: self.vac_optimization_gamma_chart.add_series(axis_index=1, label="VAC OFF (Ref.)") for p in ('white','red','green','blue')},
-    }
-    profile_off = SessionProfile(
-        legend_text="VAC OFF (Ref.)",
-        cie_label="data_1",
-        table_cols={"lv":0, "cx":1, "cy":2, "gamma":3},
-        ref_store=None
-    )
-
-    def _after_off(store_off):
-        self._off_store = store_off
-        # (3) DB에서 모델/주사율에 맞는 VAC Data 적용 → 읽기 → LUT 차트 갱신
-        self._apply_vac_from_db_and_measure_on()
-
-    start_viewing_angle_session(
-        self, profile=profile_off, gamma_lines=gamma_lines_off,
-        gray_levels=list(range(256)), patterns=('white','red','green','blue'),
-        colorshift_patterns=op.colorshift_patterns,
-        first_gray_delay_ms=3000, cs_settle_ms=1000,
-        on_done=_after_off
-    )
-
-def _apply_vac_from_db_and_measure_on(self):
-    # (A) DB에서 panel/frame_rate로 VAC_Data 가져오기
-    panel = self.ui.vac_cmb_PanelMaker.currentText().strip()
-    fr    = self.ui.vac_cmb_FrameRate.currentText().strip()
-    vac_pk, vac_version, vac_data = self._fetch_vac_by_model(panel, fr)
-    if vac_data is None:
-        logging.error("매칭되는 VAC Data가 없습니다.")
-        return
-
-    # (B) TV에 적용 → 읽기 (기존 Thread 재사용 또는 직접 RPC)
-    ok = self._write_vac_to_tv(vac_data)
-    if not ok:
-        logging.error("VAC Data 쓰기 실패")
-    read_back = self._read_vac_from_tv()
-    if read_back:
-        self._update_lut_chart_and_table(read_back)  # self.vac_optimization_lut_chart, self.ui.vac_table_rbgLUT_4
-
-    # (C) VAC ON 측정
-    gamma_lines_on = {
-        'main': {p: self.vac_optimization_gamma_chart.add_series(axis_index=0, label="VAC ON") for p in ('white','red','green','blue')},
-        'sub':  {p: self.vac_optimization_gamma_chart.add_series(axis_index=1, label="VAC ON") for p in ('white','red','green','blue')},
-    }
-    profile_on = SessionProfile(
-        legend_text="VAC ON",
-        cie_label="data_2",
-        table_cols={"lv":4, "cx":5, "cy":6, "gamma":7, "d_cx":8, "d_cy":9, "d_gamma":10},
-        ref_store=self._off_store
-    )
-
-    def _after_on(store_on):
-        self._on_store = store_on
-        if self._check_spec_pass(self._off_store, self._on_store):
-            logging.info("스펙 통과 — 종료")
-            return
-        # (D) 보정 반복 시작
-        self._run_correction_iteration(iter_idx=1)
-
-    start_viewing_angle_session(
-        self, profile=profile_on, gamma_lines=gamma_lines_on,
-        gray_levels=list(range(256)), patterns=('white','red','green','blue'),
-        colorshift_patterns=op.colorshift_patterns,
-        first_gray_delay_ms=3000, cs_settle_ms=1000,
-        on_done=_after_on
-    )
 # =============== 테이블 & 감마 계산 유틸 ===============
 def _ensure_row_count(table, row_idx):
     if table.rowCount() <= row_idx:
@@ -353,6 +249,9 @@ def _finalize_session(self):
         except Exception as e:
             logging.exception(e)
             
+            
+            
+            
             def start_VAC_optimization(self):
     """
     1) VAC OFF 보장 → OFF 측정 (Ref)
@@ -459,6 +358,8 @@ def _apply_vac_from_db_and_measure_on(self):
         on_done=_after_on
     )
     
+    
+    
     def _run_correction_iteration(self, iter_idx, max_iters=2, lambda_ridge=1e-3):
     logging.info(f"[CORR] iteration {iter_idx} start")
 
@@ -563,6 +464,8 @@ def _apply_vac_from_db_and_measure_on(self):
         on_done=_after_corr
     )
     
+    
+    
     def _check_spec_pass(self, off_store, on_store, thr_gamma=0.05, thr_c=0.003):
     # white/main만 기준
     def _extract_white(series_store):
@@ -613,6 +516,7 @@ def _build_delta_targets_from_stores(self, off_store, on_store):
     for k in d:
         d[k] = np.nan_to_num(d[k], nan=0.0).astype(np.float32)
     return d
+    
     
     def _stack_basis(self, knots, L=256):
     knots = np.asarray(knots, dtype=np.int32)
@@ -726,3 +630,6 @@ def _update_lut_chart_and_table(self, lut_dict):
         self.update_rgbchannel_table(df, self.ui.vac_table_rbgLUT_4)
     except Exception as e:
         logging.exception(e)
+        
+        
+        
