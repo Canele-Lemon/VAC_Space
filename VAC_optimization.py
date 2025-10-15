@@ -1,448 +1,435 @@
 # -*- coding: utf-8 -*-
-# PySide2 기반: 여러분의 메인 윈도우 클래스(예: MainWindow) 내부에 그대로 넣어 쓰면 됩니다.
+import time, json, logging
+import numpy as np
+import pandas as pd
+import joblib
 
-from PySide2.QtCore import QObject, Signal, Slot, QTimer
-from PySide2.QtWidgets import QTableWidgetItem
-import logging, json, pymysql, numpy as np, pandas as pd
+from PySide2.QtCore import QObject, Signal, Slot, QEventLoop, QTimer
+# 위젯은 기존 UI 멤버(self.ui....) 그대로 사용
 
-# =========================
-# 1) 시작 버튼 핸들러
-# =========================
-def start_VAC_optimization(self):
+# =============== 유틸: 수치/보간/자코비안 ===============
+
+def compute_gamma_from_lv(nor_lv: np.ndarray, eps=1e-12) -> np.ndarray:
     """
-    버튼 연결: self.ui.vac_btn_startOptimization.clicked.connect(self.start_VAC_optimization)
-    플로우:
-      1) VAC OFF 보장 → OFF 측정
-      2) DB에서 대상 LUT 조회/적용 → Read-back → ON 측정
-      3) Diff 계산 & 표 업데이트 → 보정 로직 호출
+    nor_lv[g] (0~1 정규화된 Lv)로부터 감마 계산 (g=1..254 유효)
+    Γ(g) = log(nor_lv[g]) / log(g/255)
+    g=0,255 또는 nor_lv<=0 은 NaN
     """
-    try:
-        # 1) VAC OFF 보장
-        st = self.check_VAC_status()
-        if st.get("activated", False):
-            logging.debug("VAC 활성 상태 감지 → VAC OFF 시도")
-            cmd_off = 'luna-send -n 1 -f luna://com.webos.service.panelcontroller/setVACActive \'{"OnOff": false}\''
-            self.send_command(self.ser_tv, 's')
-            res = self.send_command(self.ser_tv, cmd_off)
-            self.send_command(self.ser_tv, 'exit')
-            logging.debug(f"VAC OFF 명령 응답: {res}")
+    L = len(nor_lv)
+    g = np.arange(L, dtype=np.float32)
+    gray_norm = np.clip(g / 255.0, eps, 1.0)  # 0→eps
+    gamma = np.full(L, np.nan, np.float32)
 
-            # 재확인
-            st2 = self.check_VAC_status()
-            if st2.get("activated", False):
-                logging.warning("VAC OFF 실패로 보입니다. 그래도 진행합니다(OFF로 간주).")
-            else:
-                logging.info("VAC OFF 전환 성공.")
+    mask = (g > 0) & (g < 255) & (nor_lv > eps)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        gamma[mask] = np.log(nor_lv[mask]) / np.log(gray_norm[mask])
+    return gamma
+
+def linear_interp_weights_1d(x, x0, x1):
+    # 0..1 선형 보간 가중치
+    if x1 == x0: 
+        return 1.0, 0.0
+    t = (x - x0) / float(x1 - x0)
+    return (1.0 - t), t
+
+def resample_curve_linear(src: np.ndarray, dst_len: int) -> np.ndarray:
+    """
+    src: 길이 N (예: 256) → dst_len (예: 4096) 선형보간
+    """
+    N = len(src)
+    if dst_len == N:
+        return src.copy()
+    out = np.empty(dst_len, np.float32)
+    for i in range(dst_len):
+        x = (i / (dst_len - 1.0)) * (N - 1.0)
+        i0 = int(np.floor(x))
+        i1 = min(N - 1, i0 + 1)
+        w0, w1 = linear_interp_weights_1d(x, i0, i1)
+        out[i] = src[i0] * w0 + src[i1] * w1
+    return out
+
+def enforce_monotone_inplace(arr: np.ndarray):
+    np.maximum.accumulate(arr, out=arr)
+
+def clamp01_inplace(arr: np.ndarray):
+    np.clip(arr, 0.0, 1.0, out=arr)
+
+def stack_basis_all_grays(knots_idx: np.ndarray, L=256) -> np.ndarray:
+    """
+    knot 인덱스(0..255) 기반 모자(hat) 기저행렬 Φ (LxK)
+    """
+    K = len(knots_idx)
+    Phi = np.zeros((L, K), np.float32)
+    for g in range(L):
+        # 경계
+        if g <= knots_idx[0]:
+            Phi[g, 0] = 1.0
+            continue
+        if g >= knots_idx[-1]:
+            Phi[g, -1] = 1.0
+            continue
+        i = np.searchsorted(knots_idx, g) - 1
+        g0, g1 = knots_idx[i], knots_idx[i+1]
+        denom = max(1, (g1 - g0))
+        t = (g - g0) / denom
+        Phi[g, i]   = 1.0 - t
+        Phi[g, i+1] = t
+    return Phi
+
+def build_A_from_artifacts(artifacts: dict, comp: str) -> np.ndarray:
+    """
+    ΔY ≈ A Δh, 여기서 Δh = [Δh_R(K), Δh_G(K), Δh_B(K)] (총 3K)
+    A = [Φ * diag(β_R) | Φ * diag(β_G) | Φ * diag(β_B)]
+    """
+    knots = np.asarray(artifacts["knots"], dtype=np.int32)
+    Phi = stack_basis_all_grays(knots, L=256)  # (256, K)
+
+    comp_obj = artifacts["components"][comp]
+    coef = np.asarray(comp_obj["coef"], dtype=np.float32)
+    s = comp_obj["feature_slices"]
+    sR = slice(s["high_R"][0], s["high_R"][1])
+    sG = slice(s["high_G"][0], s["high_G"][1])
+    sB = slice(s["high_B"][0], s["high_B"][1])
+
+    beta_R = coef[sR]  # (K,)
+    beta_G = coef[sG]
+    beta_B = coef[sB]
+
+    A_R = Phi * beta_R.reshape(1, -1)
+    A_G = Phi * beta_G.reshape(1, -1)
+    A_B = Phi * beta_B.reshape(1, -1)
+    A = np.hstack([A_R, A_G, A_B]).astype(np.float32)  # (256, 3K)
+    return A
+
+def solve_delta_h(A: np.ndarray, dY: np.ndarray, ridge_lambda=1e-3, max_step=0.05):
+    """
+    Ridge 해: Δh = (A^T A + λI)^-1 A^T dY
+    채널별(K,R/G/B) 묶음 반환: Δh_R, Δh_G, Δh_B (각 K,)
+    max_step: knot 변화량 제한(안정화)
+    """
+    # 정방형 해
+    AT = A.T
+    ATA = AT @ A
+    b = AT @ dY
+    # (ATA + λI) x = b
+    K3 = ATA.shape[0]
+    ATA.flat[::K3+1] += ridge_lambda
+    delta_h = np.linalg.solve(ATA, b).astype(np.float32)
+
+    # 안정화: 과도 변화 clamp
+    delta_h = np.clip(delta_h, -max_step, max_step)
+    return delta_h
+
+def delta_h_to_delta_high256(delta_h: np.ndarray, artifacts: dict) -> dict:
+    """
+    Δh(3K,) → 각 채널 ΔHigh(256,) 생성
+    """
+    knots = np.asarray(artifacts["knots"], dtype=np.int32)
+    Phi = stack_basis_all_grays(knots, L=256)  # (256, K)
+    K = len(knots)
+
+    dR = Phi @ delta_h[:K]
+    dG = Phi @ delta_h[K:2*K]
+    dB = Phi @ delta_h[2*K:3*K]
+
+    return {"R_High": dR.astype(np.float32),
+            "G_High": dG.astype(np.float32),
+            "B_High": dB.astype(np.float32)}
+
+# =============== 유틸: QThread 동기화 래퍼 ===============
+
+def wait_thread_result(start_thread_fn, on_success_signal, on_error_signal=None, timeout_ms=600000):
+    """
+    QThread 기반 비동기 → 동기처럼 기다리기
+    start_thread_fn(): thread.start()를 내부에서 호출
+    on_success_signal: Signal(object or tuple)
+    on_error_signal: (optional) Signal(str)
+    timeout_ms: 타임아웃
+    return: (ok, payload_or_msg)
+    """
+    loop = QEventLoop()
+    payload_box = {"ok": False, "data": None}
+
+    def _on_ok(*args):
+        payload_box["ok"] = True
+        payload_box["data"] = args[0] if len(args) == 1 else args
+        loop.quit()
+
+    def _on_err(msg):
+        payload_box["ok"] = False
+        payload_box["data"] = msg
+        loop.quit()
+
+    on_success_signal.connect(_on_ok)
+    if on_error_signal is not None:
+        on_error_signal.connect(_on_err)
+
+    start_thread_fn()
+    QTimer.singleShot(timeout_ms, loop.quit)
+    loop.exec_()
+
+    # disconnect는 생략(짧은 루틴)
+    return payload_box["ok"], payload_box["data"]
+
+# =============== 메인 플로우 메서드들 ===============
+
+def vac_luna_send(self, cmd: str) -> str:
+    self.send_command(self.ser_tv, 's')
+    res = self.send_command(self.ser_tv, cmd)
+    self.send_command(self.ser_tv, 'exit')
+    return res
+
+def vac_off_if_needed(self) -> bool:
+    st = self.check_VAC_status()  # {'supported':..., 'activated':..., 'vacdata':...}
+    if not st.get("supported", False):
+        logging.info("VAC 미지원 모델. OFF 측정만 진행합니다.")
+        return True
+    if st.get("activated", False):
+        logging.debug("VAC 활성 상태 감지 → VAC OFF 시도")
+        cmd = 'luna-send -n 1 -f luna://com.webos.service.panelcontroller/setVACActive \'{"OnOff":false}\''
+        res = vac_luna_send(self, cmd)
+        logging.debug(f"[VAC OFF] 응답: {res}")
+        st2 = self.check_VAC_status()
+        if st2.get("activated", False):
+            logging.warning("VAC OFF 실패로 보입니다. 그래도 측정은 진행합니다.")
         else:
-            logging.debug("이미 VAC control OFF 상태. OFF 측정 시작.")
-
-        # 2) VAC OFF 상태 측정
-        self._measure_for_mode(
-            mode_label="OFF",
-            on_finished=self._after_off_measured
-        )
-
-    except Exception as e:
-        logging.exception(f"[start_VAC_optimization] 실패: {e}")
-
-
-# =========================
-# 2) OFF 측정 완료 → ON 단계 준비
-# =========================
-def _after_off_measured(self, off_result):
-    """
-    off_result: dict
-      {
-        "gamma_main": {("W",g): Lv/Cx/Cy ...},  # 구현에 따라 구조는 앱 내 표준으로
-        "gamma_sub":  {...},
-        "colorshift": {...},                    # main/sub 좌표
-        "table_rows_main": [(Lv, Cx, Cy) ...], # 테이블 반영에도 사용 가능
-      }
-    """
-    try:
-        self._off_result = off_result  # 다음 단계에서 Diff 계산 때 사용
-
-        # 3) DB에서 모델/주사율에 맞는 VAC LUT 조회 & TV 적용
-        vac_pk, vac_data_json = self._fetch_target_vac_from_db()
-        if not vac_data_json:
-            logging.error("DB에서 대상 VAC LUT를 가져오지 못했습니다. 중단합니다.")
-            return
-
-        # TV Writing (스레드 사용)
-        self._write_vac_to_tv(
-            vac_data_json=vac_data_json,
-            on_written=lambda ok, msg: self._after_tv_written(ok, msg, vac_pk)
-        )
-
-    except Exception as e:
-        logging.exception(f"[_after_off_measured] 실패: {e}")
-
-
-# =========================
-# 3) TV에 LUT Writing → Readback 후 차트/테이블 갱신
-# =========================
-def _after_tv_written(self, ok, msg, vac_pk):
-    if not ok:
-        logging.warning(f"[VAC Write] 실패: {msg}")
-        # 그래도 진행할지, 중단할지는 정책에 따라 결정
-        return
-
-    logging.info(f"[VAC Write] 성공: PK={vac_pk}, msg={msg}")
-
-    # Read-back으로 실제 적용 LUT 확인
-    self._read_vac_from_tv(on_read=self._after_tv_readback)
-
-
-def _after_tv_readback(self, read_data_dict):
-    """
-    read_data_dict: {"R_Low":[...], "R_High":[...], ...} 형태라고 가정
-    """
-    try:
-        # 그래프/테이블 업데이트
-        rgb_df = pd.DataFrame(read_data_dict)
-        self.update_rgbchannel_chart(
-            rgb_df,
-            self.graph['vac_laboratory']['data_acquisition_system']['input']['ax'],
-            self.graph['vac_laboratory']['data_acquisition_system']['input']['canvas']
-        )
-        self.update_rgbchannel_table(rgb_df, self.ui.vac_table_rbgLUT_4)
-
-        # 4) VAC ON으로 전환(기능 활성화)
-        cmd_on = 'luna-send -n 1 -f luna://com.webos.service.panelcontroller/setVACActive \'{"OnOff": true}\''
-        self.send_command(self.ser_tv, 's')
-        res = self.send_command(self.ser_tv, cmd_on)
-        self.send_command(self.ser_tv, 'exit')
-        logging.debug(f"VAC ON 명령 응답: {res}")
-
-        # 5) ON 상태 측정
-        self._measure_for_mode(
-            mode_label="ON",
-            on_finished=self._after_on_measured
-        )
-
-    except Exception as e:
-        logging.exception(f"[_after_tv_readback] 실패: {e}")
-
-
-# =========================
-# 4) ON 측정 완료 → Diff & 스펙 판정 → 보정 호출
-# =========================
-def _after_on_measured(self, on_result):
-    try:
-        self._on_result = on_result
-
-        # 6) Diff 계산 & UI 반영
-        spec_ok = self._compute_diff_and_update_tables(self._off_result, self._on_result)
-
-        if spec_ok:
-            logging.info("스펙 만족! 보정 불필요.")
-            return
-
-        # 7) 자코비안 기반 보정 호출 (여기서 반복 루프 제어)
-        self._run_correction_and_remeasure()
-
-    except Exception as e:
-        logging.exception(f"[_after_on_measured] 실패: {e}")
-        
-        
-# =========================
-# A) OFF/ON 측정 공용 엔트리
-# =========================
-def _measure_for_mode(self, mode_label: str, on_finished):
-    """
-    OFF/ON 공용 측정 래퍼.
-    기존 자동계측 루프의 일부를 재사용하거나,
-    측정 스레드들을 간단히 묶어 결과 딕셔너리로 콜백.
-    """
-    logging.info(f"[Measure] {mode_label} 측정 시작")
-
-    # 테이블/차트 초기화(필요 시)
-    if mode_label == "OFF":
-        self._clear_measure_table_for_off()
+            logging.info("VAC OFF 전환 성공.")
     else:
-        self._clear_measure_table_for_on()
+        logging.debug("이미 VAC OFF 상태.")
+    return True
 
-    # 기존 측정 시퀀스 재사용: run_measurement_step 스타일을 재활용
-    # 여기선 간단화: 최종 결과를 콜백으로 넘겨주도록 래핑
-    self._run_measurement_sequence(
-        mode_label=mode_label,
-        on_done=on_finished
-    )
-
-
-def _run_measurement_sequence(self, mode_label: str, on_done):
+def measure_gamma_colorshift_once(self, label_prefix:str):
     """
-    여러분의 기존 run_measurement_step/MeasureThread 흐름을 감싼 헬퍼.
-    - Gamma(W/R/G/B x 0..255), ColorShift 모두 측정
-    - main/sub 동시 수집
-    - 그래프 갱신: self.ui.vac_chart_gamma_3(상/하), self.ui.vac_chart_colorShift_2
-    - 테이블 갱신:
-        * OFF: self.ui.vac_table_measure_results_main_2 col 1~3 (Lv,Cx,Cy)
-        * ON : self.ui.vac_table_measure_results_main_2 col 4~6 (Lv,Cx,Cy)
-    - 완료 시 on_done(result_dict) 호출
+    한 번 측정(감마 0~255, 4패턴; 컬러쉬프트 12패턴) 수행.
+    - 기존 run_measurement_step()의 스레드 흐름을 동기 래퍼로 호출했다고 가정
+    - 결과: dict 형태로 표준화 반환 (패턴별 Lv(256), Cx(256), Cy(256), 그리고 Macbeth Cx/Cy)
+    UI 업데이트(차트/테이블)는 질문에서 주신 기존 메서드들을 호출해줍니다.
     """
-    # NOTE: 실제 계측 스레드 클래스/콜백은 프로젝트 내 구현을 그대로 써주세요.
-    # 여기서는 "동등한 역할"의 틀만 제공합니다.
+    # 여기서는 여러분이 이미 가진 스레드/업데이트 함수를 그대로 사용한다고 가정하고,
+    # 간단한 blocking 래퍼만 제공합니다.
+    results_box = {"gamma": {}, "colorshift": {}}  # gamma: {pattern:{'Lv', 'Cx','Cy'}}, colorshift:{patch:{'Cx0','Cy0','Cx60','Cy60'}}
+    # ---- 여러분의 기존 트리거 사용 ----
+    # main & sub 모두 돌도록 기존 run_measurement_step를 한 라운드 트리거하는 helper를 쓰세요.
+    # 아래 두 줄은 예시용이며, 실제론 여러분의 메서드를 동기 래핑해서 결과를 모아야 합니다.
+    # 이 부분은 프로젝트의 스레드/시그널 구조에 강하게 의존하므로, 이미 쓰시던 것을 그대로 호출하세요.
+    # 결과만 아래 형태로 채우면, 후속 단계(자코비안/검증)는 그대로 동작합니다.
+    #
+    # results_box["gamma"]["W"] = {"Lv": np.array([...], np.float32), "Cx":..., "Cy":...}
+    # results_box["gamma"]["R"] = {...}
+    # ...
+    # results_box["colorshift"]["Darkskin"] = {"Cx0":..., "Cy0":..., "Cx60":..., "Cy60":...}
+    #
+    # --- 예시(빈 틀) ---
+    raise NotImplementedError("여기서 기존 측정 스레드 호출해 results_box를 채우세요.")
+    # return results_box
 
-    self._measure_acc = {
-        "mode": mode_label,
-        "gamma_main": [],  # 예: [(pattern, g, Lv, Cx, Cy), ...]
-        "gamma_sub":  [],  # 예: [(pattern, g, Lv, Cx, Cy), ...]
-        "colorshift_main": [],  # 예: [(patch, x, y), ...]
-        "colorshift_sub":  [],
-    }
-
-    # ▼▼ 기존 run_measurement_step 처럼 패턴/그레이 루프 돌리며
-    # MeasureThread 두 대(main/sub) 결과를 모아서 아래 helper로 넘겨주세요.
-    # 여기서는 “측정 결과 처리 콜백”만 보여줍니다.
-
-    def _on_one_gamma_sample(role, pattern, g, xyz_tuple):
-        # xyz_tuple -> (x, y, Lv, cct, duv) 가정
-        x, y, lv, cct, duv = xyz_tuple
-        if role == 'main':
-            self._measure_acc["gamma_main"].append((pattern, g, lv, x, y))
-            # 그래프(상단) 업데이트
-            self._update_gamma_chart(pattern, g, lv, role='main')
-            # 테이블 업데이트
-            if mode_label == "OFF":
-                self._append_main_table_row(lv, x, y, cols=(0,1,2))  # 1~3열
-            else:
-                self._append_main_table_row(lv, x, y, cols=(3,4,5))  # 4~6열
+def build_deltaY_from_two_measurements(off_meas: dict, on_meas: dict, patterns_used=('W',)):
+    """
+    ΔY 타깃 생성: (ref=OFF) - (pred=ON)
+    components: Gamma, Cx, Cy (패턴은 W만 사용 권장)
+    반환 dict: {'Gamma': (256,), 'Cx':(256,), 'Cy':(256,)}
+    """
+    d = {}
+    for comp in ("Gamma","Cx","Cy"):
+        # W만 사용(다른 패턴 확장 가능)
+        p = patterns_used[0]
+        if comp == "Gamma":
+            # Gamma는 Lv로부터 계산
+            gamma_off = compute_gamma_from_lv(off_meas["gamma"][p]["Lv"])
+            gamma_on  = compute_gamma_from_lv(on_meas["gamma"][p]["Lv"])
+            diff = np.nan_to_num(gamma_off - gamma_on, nan=0.0)
         else:
-            self._measure_acc["gamma_sub"].append((pattern, g, lv, x, y))
-            # 그래프(하단) 업데이트
-            self._update_gamma_chart(pattern, g, lv, role='sub')
+            v_off = np.asarray(off_meas["gamma"][p][comp], dtype=np.float32)
+            v_on  = np.asarray(on_meas["gamma"][p][comp],  dtype=np.float32)
+            diff = np.nan_to_num(v_off - v_on, nan=0.0)
+        d[comp] = diff.astype(np.float32)
+    return d
 
-    def _on_one_colorshift_sample(role, patch_name, xy_tuple):
-        x, y = xy_tuple
-        if role == 'main':
-            self._measure_acc["colorshift_main"].append((patch_name, x, y))
-        else:
-            self._measure_acc["colorshift_sub"].append((patch_name, x, y))
-        # 공용 ColorShift 차트 업데이트
-        self._update_colorshift_chart(patch_name, x, y, role=role)
-
-    def _on_all_done():
-        # 결과 집계 형태를 on_done에 넘김
-        result = self._finalize_measurement_result(self._measure_acc)
-        on_done(result)
-
-    # 실제 측정 루프 시작 (여러분의 기존 스레드/큐를 사용)
-    self._kickoff_measure_threads(
-        on_gamma_sample=_on_one_gamma_sample,
-        on_colorshift_sample=_on_one_colorshift_sample,
-        on_done=_on_all_done
-    )
-
-
-# =========================
-# B) TV Read/Write 스레드 래퍼
-# =========================
-def _write_vac_to_tv(self, vac_data_json: str, on_written):
+def apply_delta_high_256_to_4096_and_write(self, cur_lut_4096: dict, delta_high_256: dict):
     """
-    기존 WriteVACdataThread를 이용해 JSON을 TV에 write
+    ΔHigh(256)을 4096으로 보간해서 LUT High 갱신 → TV에 적용 + 검증 읽기 + UI 업데이트
+    cur_lut_4096: {'R_Low','R_High','G_Low','G_High','B_Low','B_High'} (각 4096,)
     """
-    self.write_random_VAC_thread = WriteVACdataThread(
-        parent=self,
-        ser_tv=self.ser_tv,
-        vacdataName="TARGET_FROM_DB",
-        vacdata_loaded=vac_data_json
+    # 1) 256→4096 보간
+    for ch in ("R_High","G_High","B_High"):
+        d256 = delta_high_256[ch]
+        d4096 = resample_curve_linear(d256, 4096)
+        cur_lut_4096[ch] = (cur_lut_4096[ch] + d4096).astype(np.float32)
+        clamp01_inplace(cur_lut_4096[ch])
+        enforce_monotone_inplace(cur_lut_4096[ch])
+
+    # 2) TV에 write (여러분의 WriteVACdataThread 사용)
+    def _start_write():
+        self.write_random_VAC_thread = WriteVACdataThread(
+            parent=self,
+            ser_tv=self.ser_tv,
+            vacdataName=self.vacdataName,
+            vacdata_loaded={
+                "R_Low":  cur_lut_4096["R_Low"].tolist(),
+                "R_High": cur_lut_4096["R_High"].tolist(),
+                "G_Low":  cur_lut_4096["G_Low"].tolist(),
+                "G_High": cur_lut_4096["G_High"].tolist(),
+                "B_Low":  cur_lut_4096["B_Low"].tolist(),
+                "B_High": cur_lut_4096["B_High"].tolist(),
+            }
+        )
+        self.write_random_VAC_thread.write_finished.connect(lambda ok, msg: None)  # 시그널 연결은 wait에서 함
+        self.write_random_VAC_thread.start()
+
+    ok, data = wait_thread_result(
+        start_thread_fn=_start_write,
+        on_success_signal=self.write_random_VAC_thread.write_finished
     )
-    self.write_random_VAC_thread.write_finished.connect(
-        lambda ok, msg: on_written(ok, msg)
-    )
-    self.write_random_VAC_thread.start()
-
-
-def _read_vac_from_tv(self, on_read):
-    """
-    기존 ReadVACdataThread를 이용해 TV 현재 LUT read-back
-    """
-    self.read_random_VAC_thread = ReadVACdataThread(
-        parent=self,
-        ser_tv=self.ser_tv,
-        vacdataName="CURRENT"
-    )
-    self.read_random_VAC_thread.data_read.connect(
-        lambda vac_dict: on_read(vac_dict)
-    )
-    self.read_random_VAC_thread.error_occurred.connect(
-        lambda msg: (logging.error(f"[VAC Read] 실패: {msg}"))
-    )
-    self.read_random_VAC_thread.start()
-
-
-# =========================
-# C) DB 조회(PanelMaker/FrameRate → VAC_Info_PK → VAC_Data)
-# =========================
-def _fetch_target_vac_from_db(self):
-    panel_name = self.ui.vac_cmb_PanelMaker.currentText()
-    frame_rate = self.ui.vac_cmb_FrameRate.currentText()
-    conn_params = self.conn_params  # 여러분 앱의 DB 접속정보
-    DBName = self.DBName
-
-    db = pymysql.connect(**conn_params)
-    try:
-        cur = db.cursor()
-
-        # Application status에서 PK 조회
-        q1 = f"""
-            SELECT VAC_Info_PK 
-            FROM {DBName}.W_VAC_Application_Status
-            WHERE Panel_Maker=%s AND Frame_Rate=%s
-            LIMIT 1
-        """
-        cur.execute(q1, (panel_name, frame_rate))
-        row = cur.fetchone()
-        if not row:
-            logging.warning("W_VAC_Application_Status에 매칭 행 없음")
-            return None, None
-        vac_pk = int(row[0])
-
-        # 해당 PK의 VAC_Data 조회
-        q2 = f"""
-            SELECT VAC_Data
-            FROM {DBName}.W_VAC_Info
-            WHERE PK=%s
-            LIMIT 1
-        """
-        cur.execute(q2, (vac_pk,))
-        row2 = cur.fetchone()
-        if not row2:
-            logging.warning("W_VAC_Info에서 VAC_Data 조회 실패")
-            return None, None
-
-        vac_data_json = row2[0]
-        return vac_pk, vac_data_json
-    finally:
-        db.close()
-
-
-# =========================
-# D) Diff 계산 & 스펙 판정 & 테이블 반영
-# =========================
-def _compute_diff_and_update_tables(self, off_result, on_result) -> bool:
-    """
-    스펙:
-      |Γ_pred − Γ_ref| ≤ 0.05
-      |ΔCx|, |ΔCy|    ≤ 0.003
-    여기서는 Γ는 'Lv 기반 Γ'를 이미 구해왔다고 가정하거나,
-    필요시 오프라인 참조 Γ(ref)와 ON의 Γ를 계산해서 비교하도록 연결하세요.
-    우선 Cx/Cy Diff를 명시적으로 테이블 9~10열에 기록.
-    """
-    # 예시: 동일 순서로 저장됐다고 가정하고 pairwise diff
-    # (실제 앱에서는 (pattern, gray) 키로 join해서 안전하게 매칭하세요)
-    off_main = off_result.get("gamma_main", [])
-    on_main  = on_result.get("gamma_main", [])
-
-    # 안전장치
-    n = min(len(off_main), len(on_main))
-    if n == 0:
-        logging.warning("Diff 계산 대상이 없습니다.")
+    if not ok:
+        logging.error(f"[LUT Write] 실패: {data}")
         return False
 
-    # 테이블 갱신을 위해 현재 row 인덱스를 기억
-    # (실제 구현에선 insert시 저장해둔 row index를 같이 들고 다니는 게 가장 안전)
-    for i in range(n):
-        p_off, g_off, lv_off, cx_off, cy_off = off_main[i]
-        p_on,  g_on,  lv_on,  cx_on,  cy_on  = on_main[i]
+    # 3) Read로 검증 + UI 업데이트 (self.ui.vac_graph_rgbLUT_4, self.ui.vac_table_rbgLUT_4)
+    def _start_read():
+        self.read_random_VAC_thread = ReadVACdataThread(parent=self, ser_tv=self.ser_tv, vacdataName=self.vacdataName)
+        self.read_random_VAC_thread.data_read.connect(lambda payload: None)
+        self.read_random_VAC_thread.error_occurred.connect(lambda msg: None)
+        self.read_random_VAC_thread.start()
 
-        # 안전 매칭 검사
-        if (p_off != p_on) or (g_off != g_on):
-            logging.debug(f"키 불일치: OFF=({p_off},{g_off}) vs ON=({p_on},{g_on})")
-            continue
-
-        dCx = float(cx_on - cx_off)
-        dCy = float(cy_on - cy_off)
-
-        # 테이블: 9~10열에 diff
-        row = i  # 간단화(여러분 앱에서는 행 인덱스 매핑을 정확히 사용)
-        _set_tbl = self.ui.vac_table_measure_results_main_2.setItem
-        _set_tbl(row, 8,  QTableWidgetItem(f"{dCx:.6f}"))  # 9열 (0-index=8)
-        _set_tbl(row, 9,  QTableWidgetItem(f"{dCy:.6f}"))  # 10열 (0-index=9)
-
-    # 간단 스펙 체크(최대 절대값)
-    dCx_all = [float(on_main[i][3] - off_main[i][3]) for i in range(n)]
-    dCy_all = [float(on_main[i][4] - off_main[i][4]) for i in range(n)]
-
-    cx_ok = (np.max(np.abs(dCx_all)) <= 0.003) if dCx_all else False
-    cy_ok = (np.max(np.abs(dCy_all)) <= 0.003) if dCy_all else False
-
-    # Γ 스펙(0.05)은 여러분의 Γ 계산 루틴/참조값에 연결해주세요.
-    gamma_ok = True  # 자리표시자
-
-    spec_ok = (cx_ok and cy_ok and gamma_ok)
-    logging.info(f"[SPEC] Cx:{cx_ok} Cy:{cy_ok} Gamma:{gamma_ok} → Overall:{spec_ok}")
-    return spec_ok
-
-
-# =========================
-# E) 자코비안 보정 훅
-# =========================
-def _run_correction_and_remeasure(self):
-    """
-    OFF vs ON Diff → 자코비안 보정 → LUT 업데이트 → Read-back → ON 재측정 → 반복/종료
-    여기서는 보정 함수만 호출하고, 그 결과 LUT를 TV에 적용하는 루프를 형식만 둡니다.
-    """
-    try:
-        # 1) 자코비안 보정 (여기에 여러분이 만든 pkl로드/보정 함수를 연결하세요)
-        #    예: new_high = run_jacobian_correction(off=self._off_result, on=self._on_result, ...)
-        #    반환: lut_dict = {"R_Low":..., "R_High":..., ...} (Low는 원본 유지, High만 변경)
-        lut_dict = self.run_jacobian_correction(self._off_result, self._on_result)
-
-        # 2) TV 적용 → Read-back 확인
-        self._write_vac_to_tv(
-            vac_data_json=json.dumps(lut_dict),
-            on_written=lambda ok, msg: (
-                self._read_vac_from_tv(on_read=lambda _: self._measure_for_mode("ON", self._after_on_measured))
-                if ok else logging.warning(f"[Correction Write] 실패: {msg}")
+    ok2, lut_read = wait_thread_result(
+        start_thread_fn=_start_read,
+        on_success_signal=self.read_random_VAC_thread.data_read,
+        on_error_signal=self.read_random_VAC_thread.error_occurred
+    )
+    if not ok2:
+        logging.warning(f"[LUT Read] 실패 또는 미일치: {lut_read}")
+    else:
+        # 차트/테이블 업데이트 (여러분의 기존 함수)
+        try:
+            channels = ['R_Low','R_High','G_Low','G_High','B_Low','B_High']
+            rgb_df = pd.DataFrame({ch: lut_read.get(ch.replace("_","channel"), []) for ch in channels})
+            self.update_rgbchannel_chart(
+                rgb_df,
+                self.graph['vac_laboratory']['data_acquisition_system']['input']['ax'],
+                self.graph['vac_laboratory']['data_acquisition_system']['input']['canvas']
             )
-        )
-        # 이후 self._after_on_measured에서 스펙 만족/반복 탈출 관리
+            self.update_rgbchannel_table(rgb_df, self.ui.vac_table_rbgLUT_4)
+        except Exception as e:
+            logging.warning(f"[LUT UI 업데이트] {e}")
+    return True
 
-    except Exception as e:
-        logging.exception(f"[_run_correction_and_remeasure] 실패: {e}")
-        
-def _update_gamma_chart(self, pattern, gray, lv, role='main'):
-    """ 여러분의 self.update_measure_results_to_graph 호출로 대체해도 됩니다. """
+def meets_spec(off_meas: dict, on_meas: dict, thr_gamma=0.05, thr_c=0.003) -> bool:
+    """
+    스펙 판정:
+      max |Gamma_on - Gamma_off| ≤ thr_gamma
+      max |Cx_on - Cx_off| ≤ thr_c
+      max |Cy_on - Cy_off| ≤ thr_c
+    (W 패턴 기준)
+    """
+    p = 'W'
+    g_off = compute_gamma_from_lv(off_meas["gamma"][p]["Lv"])
+    g_on  = compute_gamma_from_lv(on_meas["gamma"][p]["Lv"])
+    dG = np.nan_to_num(np.abs(g_on - g_off), nan=0.0).max()
+
+    dCx = np.abs(np.asarray(on_meas["gamma"][p]["Cx"]) - np.asarray(off_meas["gamma"][p]["Cx"])).max()
+    dCy = np.abs(np.asarray(on_meas["gamma"][p]["Cy"]) - np.asarray(off_meas["gamma"][p]["Cy"])).max()
+
+    logging.info(f"[Spec] max|ΔGamma|={dG:.4f}, max|ΔCx|={dCx:.4f}, max|ΔCy|={dCy:.4f}")
+    return (dG <= thr_gamma) and (dCx <= thr_c) and (dCy <= thr_c)
+
+# =============== 메인 엔트리: 버튼 이벤트 연결용 ===============
+
+def start_VAC_optimization(self):
+    """
+    전체 플로우:
+      1) VAC OFF 보장 → 측정(OFF baseline) + UI 업데이트
+      2) DB에서 모델/주사율 매칭 VAC Data 가져와 TV에 적용(ON) → 측정(ON 현재) + UI 업데이트
+      3) 스펙 확인 → 통과면 종료
+      4) 미통과면 자코비안 기반 보정(256기준) → 4096 보간 반영 → TV 적용 → 재측정 → 스펙 재확인
+      5) (필요 시 반복 2~3회만)
+    """
     try:
-        self.update_measure_results_to_graph(gray, lv, role=role, pattern=pattern)
+        # (0) 자코비안 로드
+        jac_path = os.path.join(self.scripts_dir, "jacobian_Y0_high.pkl")
+        artifacts = joblib.load(jac_path)
+
+        A_Gamma = build_A_from_artifacts(artifacts, "Gamma")  # (256, 3K)
+        A_Cx    = build_A_from_artifacts(artifacts, "Cx")
+        A_Cy    = build_A_from_artifacts(artifacts, "Cy")
+
+        # (1) VAC OFF 보장 + 측정
+        self.vac_btn_startOptimization.setEnabled(False)
+        vac_off_if_needed(self)
+
+        logging.info("[STEP1] VAC OFF 상태 측정 시작")
+        off_meas = measure_gamma_colorshift_once(self, label_prefix="[OFF]")  # <-- 여러분 측정 래퍼 구현 필요
+
+        # (2) DB에서 모델/주사율 매칭 VAC Data → TV 적용 → 읽기 → UI 업데이트
+        logging.info("[STEP2] DB에서 적용 VAC 데이터 가져와 TV 적용")
+        panel_txt = self.ui.vac_cmb_PanelMaker.currentText().strip()
+        fps_txt   = self.ui.vac_cmb_FrameRate.currentText().strip()
+
+        # DB 조회 (사용자 함수로 구현돼 있다고 가정)
+        vac_pk, vac_payload_4096 = self.lookup_vac_data_from_db(panel_txt, fps_txt)  # (pk, dict of arrays len=4096)
+        if vac_payload_4096 is None:
+            logging.warning("매칭되는 VAC 데이터가 없어 기본 LUT 유지 후 진행합니다.")
+            cur_lut_4096 = self.read_current_tv_lut_4096()  # 사용자 제공
+        else:
+            # TV에 write + read + UI
+            cur_lut_4096 = vac_payload_4096.copy()
+            ok_write = apply_delta_high_256_to_4096_and_write(self, cur_lut_4096, 
+                          {"R_High": np.zeros(256, np.float32),
+                           "G_High": np.zeros(256, np.float32),
+                           "B_High": np.zeros(256, np.float32)})
+            if not ok_write:
+                logging.warning("초기 VAC 적용 실패. 현재 TV LUT를 읽어서 사용합니다.")
+                cur_lut_4096 = self.read_current_tv_lut_4096()
+
+        # (3) VAC ON 측정
+        logging.info("[STEP3] VAC ON 상태 측정 시작")
+        on_meas = measure_gamma_colorshift_once(self, label_prefix="[ON]")   # <-- 여러분 측정 래퍼 구현 필요
+
+        # (4) 스펙 판정
+        if meets_spec(off_meas, on_meas, thr_gamma=0.05, thr_c=0.003):
+            logging.info("✅ 스펙 만족. 최적화 종료.")
+            return
+
+        # (5) 자코비안 보정 루프(최대 2~3회 권장)
+        for it in range(3):
+            logging.info(f"[STEP4] 자코비안 보정 {it+1}/3")
+
+            # ΔY 구성 (OFF - ON) — W 패턴 기준
+            deltaY = build_deltaY_from_two_measurements(off_meas, on_meas, patterns_used=('W',))
+
+            # 연립: comp별로 Δh 구해 평균/가중 결합 (여기선 동일 가중 평균)
+            dH_list = []
+            for A, comp in ((A_Gamma, "Gamma"), (A_Cx, "Cx"), (A_Cy, "Cy")):
+                dY = deltaY[comp]  # (256,)
+                delta_h = solve_delta_h(A, dY, ridge_lambda=2e-3, max_step=0.05)  # 안전한 범위
+                dH_256 = delta_h_to_delta_high256(delta_h, artifacts)  # dict of 3x(256,)
+                dH_list.append(dH_256)
+
+            # 평균결합
+            dH_mean = {
+                "R_High": np.mean([d["R_High"] for d in dH_list], axis=0).astype(np.float32),
+                "G_High": np.mean([d["G_High"] for d in dH_list], axis=0).astype(np.float32),
+                "B_High": np.mean([d["B_High"] for d in dH_list], axis=0).astype(np.float32),
+            }
+
+            # 적용(4096 보간 → LUT High 업데이트 → TV write/read/UI)
+            ok = apply_delta_high_256_to_4096_and_write(self, cur_lut_4096, dH_mean)
+            if not ok:
+                logging.warning("보정 LUT 적용 실패. 루프 중단.")
+                break
+
+            # 재측정
+            on_meas = measure_gamma_colorshift_once(self, label_prefix=f"[ON after JAC {it+1}]")
+
+            # 스펙 재판정
+            if meets_spec(off_meas, on_meas, thr_gamma=0.05, thr_c=0.003):
+                logging.info("✅ 보정 후 스펙 만족. 종료합니다.")
+                break
+        else:
+            logging.info("ℹ️ 최대 보정 회수 도달. 현재 상태로 종료합니다.")
+
+    except NotImplementedError as e:
+        logging.error(f"[구현 필요] {e}")
     except Exception as e:
-        logging.debug(f"_update_gamma_chart warn: {e}")
-
-def _update_colorshift_chart(self, patch_name, x, y, role='main'):
-    """ ColorShift 공용 차트 갱신: self.ui.vac_chart_colorShift_2 """
-    try:
-        # 여러분의 colorshift 차트 업데이트 함수 호출
-        # 예: self.update_colorshift_chart(self.ui.vac_chart_colorShift_2, patch_name, x, y, role)
-        pass
-    except Exception as e:
-        logging.debug(f"_update_colorshift_chart warn: {e}")
-
-def _append_main_table_row(self, lv, cx, cy, cols=(0,1,2)):
-    """
-    self.ui.vac_table_measure_results_main_2 에 한 줄 추가/갱신
-    cols: (Lv, Cx, Cy)를 기록할 0-index 열 번호 튜플
-    """
-    tbl = self.ui.vac_table_measure_results_main_2
-    row = tbl.rowCount()
-    tbl.insertRow(row)
-    tbl.setItem(row, cols[0], QTableWidgetItem(f"{float(lv):.6f}"))
-    tbl.setItem(row, cols[1], QTableWidgetItem(f"{float(cx):.6f}"))
-    tbl.setItem(row, cols[2], QTableWidgetItem(f"{float(cy):.6f}"))
-
-def _clear_measure_table_for_off(self):
-    self.ui.vac_table_measure_results_main_2.setRowCount(0)
-
-def _clear_measure_table_for_on(self):
-    # ON 결과는 같은 표의 4~6열, Diff는 9~10열에 기록하므로
-    # 보존하려면 행 삭제 없이 추가 열만 채우는 방식도 가능. 우선은 유지.
-    pass
-
-def _finalize_measurement_result(self, acc_dict):
-    """
-    측정 누적(acc_dict)을 최종 결과 포맷으로 정리
-    필요시 (pattern, gray) 키로 정렬/정규화
-    """
-    # 여기서는 그대로 반환
-    return acc_dict
+        logging.exception(e)
+    finally:
+        self.vac_btn_startOptimization.setEnabled(True)
