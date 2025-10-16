@@ -73,8 +73,10 @@
     def _run_off_baseline_then_on(self):
         # 감마 라인 준비(“VAC OFF (Ref.)”)
         gamma_lines_off = {
-            'main': {p: self.vac_optimization_gamma_chart.add_series(axis_index=0, label="VAC OFF (Ref.)") for p in ('white','red','green','blue')},
-            'sub':  {p: self.vac_optimization_gamma_chart.add_series(axis_index=1, label="VAC OFF (Ref.)") for p in ('white','red','green','blue')},
+            'main': {p: self.vac_optimization_gamma_chart.add_series(axis_index=0, label=f"VAC OFF (Ref.) - {p}")
+                     for p in ('white','red','green','blue')},
+            'sub':  {p: self.vac_optimization_gamma_chart.add_series(axis_index=1, label=f"VAC OFF (Ref.) - {p}")
+                     for p in ('white','red','green','blue')},
         }
         profile_off = SessionProfile(
             legend_text="VAC OFF (Ref.)",
@@ -377,7 +379,7 @@
             QTimer.singleShot(s['cs_settle_ms'], lambda pn=pname: self._trigger_colorshift_pair(pn))
 
         else:  # done
-            self._finalize_session(self)
+            self._finalize_session()
 
     def _trigger_gamma_pair(self, pattern, gray):
         s = self._sess
@@ -385,19 +387,21 @@
 
         def handle(role, res):
             s['_gamma'][role] = res
-            if 'main' in s['_gamma'] and 'sub' in s['_gamma']:
-                self._consume_gamma_pair(self, pattern, gray, s['_gamma'])
+            got_main = 'main' in s['_gamma']
+            got_sub = ('sub') in s ['_gamma'] or (self.sub_instrument_cls is None)
+            if got_main and got_sub:
+                self._consume_gamma_pair(pattern, gray, s['_gamma'])
                 s['g_idx'] += 1
                 QTimer.singleShot(30, lambda: self._session_step())
 
         if self.main_instrument_cls:
             self.main_measure_thread = MeasureThread(self.main_instrument_cls, 'main')
-            self.main_measure_thread.measure_completed.connect(lambda r: handle('main', r))
+            self.main_measure_thread.measure_completed.connect(handle)
             self.main_measure_thread.start()
 
         if self.sub_instrument_cls:
             self.sub_measure_thread = MeasureThread(self.sub_instrument_cls, 'sub')
-            self.sub_measure_thread.measure_completed.connect(lambda r: handle('sub', r))
+            self.sub_measure_thread.measure_completed.connect(handle)
             self.sub_measure_thread.start()
 
     def _consume_gamma_pair(self, pattern, gray, results):
@@ -407,6 +411,9 @@
         lines = s['gamma_lines']
 
         for role in ('main', 'sub'):
+            if role not in results or results[role] is None:
+                store['gamma'][role][pattern][gray] = (np.nan, np.nan, np.nan)
+                continue
             x, y, lv, cct, duv = results[role]
             store['gamma'][role][pattern][gray] = (float(lv), float(x), float(y))
             # Lv vs gray
@@ -440,8 +447,10 @@
 
         def handle(role, res):
             s['_cs'][role] = res
-            if 'main' in s['_cs'] and 'sub' in s['_cs']:
-                self._consume_colorshift_pair(self, patch_name, s['_cs'])
+            got_main = 'main' in s['_cs']
+            got_sub = ('sub') in s ['_cs'] or (self.sub_instrument_cls is None)
+            if got_main and got_sub:
+                self._consume_colorshift_pair(patch_name, s['_cs'])
                 s['cs_idx'] += 1
                 QTimer.singleShot(80, lambda: self._session_step())
 
@@ -461,6 +470,9 @@
         profile: SessionProfile = s['profile']
 
         for role in ('main', 'sub'):
+            if role not in results or results[role] is None:
+                store['colorshift'][role].append((np.nan, np.nan, np.nan, np.nan))
+                continue
             x, y, lv, cct, duv = results[role]
             u_p, v_p = cf.convert_xyz_to_uvprime(float(x), float(y))
             store['colorshift'][role].append((float(x), float(y), float(u_p), float(v_p)))
@@ -636,11 +648,11 @@
         try:
             # (0) 자코비안 로드
             artifacts = self._load_jacobian_artifacts()
+            self._jac_artifacts = artifacts
             print("======================= A 행렬 shape 확인 =======================")
             self.A_Gamma = self._build_A_from_artifacts(artifacts, "Gamma")
             self.A_Cx    = self._build_A_from_artifacts(artifacts, "Cx")
             self.A_Cy    = self._build_A_from_artifacts(artifacts, "Cy")
-            self._jac_artifacts = artifacts
 
         except FileNotFoundError as e:
             logging.error(f"[VAC Optimization] Jacobian file not found: {e}")
