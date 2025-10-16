@@ -1,435 +1,680 @@
-# -*- coding: utf-8 -*-
-import time, json, logging
-import numpy as np
-import pandas as pd
-import joblib
+    def _load_jacobian_artifacts(self):
+        """
+        jacobian_Y0_high.pkl 파일을 불러와서 artifacts 딕셔너리로 반환
+        """
+        jac_path = cf.get_normalized_path(__file__, '.', 'models', 'jacobian_Y0_high.pkl')
+        if not os.path.exists(jac_path):
+            logging.error(f"[Jacobian] 파일을 찾을 수 없습니다: {jac_path}")
+            raise FileNotFoundError(f"Jacobian model not found: {jac_path}")
 
-from PySide2.QtCore import QObject, Signal, Slot, QEventLoop, QTimer
-# 위젯은 기존 UI 멤버(self.ui....) 그대로 사용
+        artifacts = joblib.load(jac_path)
+        logging.info(f"[Jacobian] 모델 로드 완료: {jac_path}")
+        print("======================= artifacts 구조 확인 =======================")
+        logging.debug(f"Artifacts keys: {artifacts.keys()}")
+        logging.debug(f"Components: {artifacts['components'].keys()}")
+        return artifacts
+    
+    def _build_A_from_artifacts(self, artifacts, comp: str):
+        """
+        저장된 자코비안 pkl로부터 A 행렬 (ΔY ≈ A·ΔH) 복원
+        """
+        def stack_basis_all_grays(knots: np.ndarray, L=256) -> np.ndarray:
+            """
+            모든 그레이(0..255)에 대한 φ(g) K차원 가중치 행렬 (L x K)
+            """
+            def linear_interp_weights(g: int, knots: np.ndarray) -> np.ndarray:
+                """
+                그레이 g(0..255)에 대해, K개 knot에 대한 선형보간 '모자(hat)' 가중치 벡터 φ(g) 반환.
+                - 양 끝은 1개, 중간은 2개 노드만 비영(희소)
+                """
+                K = len(knots)
+                w = np.zeros(K, dtype=np.float32)
+                # 왼쪽/오른쪽 경계
+                if g <= knots[0]:
+                    w[0] = 1.0
+                    return w
+                if g >= knots[-1]:
+                    w[-1] = 1.0
+                    return w
+                # 내부: 인접한 두 knot 사이
+                i = np.searchsorted(knots, g) - 1
+                g0, g1 = knots[i], knots[i+1]
+                t = (g - g0) / max(1, (g1 - g0))
+                w[i]   = 1.0 - t
+                w[i+1] = t
+                return w
+            
+            rows = [linear_interp_weights(g, knots) for g in range(L)]
+            return np.vstack(rows).astype(np.float32)
 
-# =============== 유틸: 수치/보간/자코비안 ===============
+        knots = np.asarray(artifacts["knots"], dtype=np.int32)
+        comp_obj = artifacts["components"][comp]
+        coef = np.asarray(comp_obj["coef"], dtype=np.float32)
 
-def compute_gamma_from_lv(nor_lv: np.ndarray, eps=1e-12) -> np.ndarray:
-    """
-    nor_lv[g] (0~1 정규화된 Lv)로부터 감마 계산 (g=1..254 유효)
-    Γ(g) = log(nor_lv[g]) / log(g/255)
-    g=0,255 또는 nor_lv<=0 은 NaN
-    """
-    L = len(nor_lv)
-    g = np.arange(L, dtype=np.float32)
-    gray_norm = np.clip(g / 255.0, eps, 1.0)  # 0→eps
-    gamma = np.full(L, np.nan, np.float32)
+        s = comp_obj["feature_slices"]
+        s_high_R = slice(s["high_R"][0], s["high_R"][1])
+        s_high_G = slice(s["high_G"][0], s["high_G"][1])
+        s_high_B = slice(s["high_B"][0], s["high_B"][1])
 
-    mask = (g > 0) & (g < 255) & (nor_lv > eps)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        gamma[mask] = np.log(nor_lv[mask]) / np.log(gray_norm[mask])
-    return gamma
+        beta_R = coef[s_high_R]
+        beta_G = coef[s_high_G]
+        beta_B = coef[s_high_B]
 
-def linear_interp_weights_1d(x, x0, x1):
-    # 0..1 선형 보간 가중치
-    if x1 == x0: 
-        return 1.0, 0.0
-    t = (x - x0) / float(x1 - x0)
-    return (1.0 - t), t
+        Phi = stack_basis_all_grays(knots, L=256)
 
-def resample_curve_linear(src: np.ndarray, dst_len: int) -> np.ndarray:
-    """
-    src: 길이 N (예: 256) → dst_len (예: 4096) 선형보간
-    """
-    N = len(src)
-    if dst_len == N:
-        return src.copy()
-    out = np.empty(dst_len, np.float32)
-    for i in range(dst_len):
-        x = (i / (dst_len - 1.0)) * (N - 1.0)
-        i0 = int(np.floor(x))
-        i1 = min(N - 1, i0 + 1)
-        w0, w1 = linear_interp_weights_1d(x, i0, i1)
-        out[i] = src[i0] * w0 + src[i1] * w1
-    return out
+        A_R = Phi * beta_R.reshape(1, -1)
+        A_G = Phi * beta_G.reshape(1, -1)
+        A_B = Phi * beta_B.reshape(1, -1)
 
-def enforce_monotone_inplace(arr: np.ndarray):
-    np.maximum.accumulate(arr, out=arr)
-
-def clamp01_inplace(arr: np.ndarray):
-    np.clip(arr, 0.0, 1.0, out=arr)
-
-def stack_basis_all_grays(knots_idx: np.ndarray, L=256) -> np.ndarray:
-    """
-    knot 인덱스(0..255) 기반 모자(hat) 기저행렬 Φ (LxK)
-    """
-    K = len(knots_idx)
-    Phi = np.zeros((L, K), np.float32)
-    for g in range(L):
-        # 경계
-        if g <= knots_idx[0]:
-            Phi[g, 0] = 1.0
-            continue
-        if g >= knots_idx[-1]:
-            Phi[g, -1] = 1.0
-            continue
-        i = np.searchsorted(knots_idx, g) - 1
-        g0, g1 = knots_idx[i], knots_idx[i+1]
-        denom = max(1, (g1 - g0))
-        t = (g - g0) / denom
-        Phi[g, i]   = 1.0 - t
-        Phi[g, i+1] = t
-    return Phi
-
-def build_A_from_artifacts(artifacts: dict, comp: str) -> np.ndarray:
-    """
-    ΔY ≈ A Δh, 여기서 Δh = [Δh_R(K), Δh_G(K), Δh_B(K)] (총 3K)
-    A = [Φ * diag(β_R) | Φ * diag(β_G) | Φ * diag(β_B)]
-    """
-    knots = np.asarray(artifacts["knots"], dtype=np.int32)
-    Phi = stack_basis_all_grays(knots, L=256)  # (256, K)
-
-    comp_obj = artifacts["components"][comp]
-    coef = np.asarray(comp_obj["coef"], dtype=np.float32)
-    s = comp_obj["feature_slices"]
-    sR = slice(s["high_R"][0], s["high_R"][1])
-    sG = slice(s["high_G"][0], s["high_G"][1])
-    sB = slice(s["high_B"][0], s["high_B"][1])
-
-    beta_R = coef[sR]  # (K,)
-    beta_G = coef[sG]
-    beta_B = coef[sB]
-
-    A_R = Phi * beta_R.reshape(1, -1)
-    A_G = Phi * beta_G.reshape(1, -1)
-    A_B = Phi * beta_B.reshape(1, -1)
-    A = np.hstack([A_R, A_G, A_B]).astype(np.float32)  # (256, 3K)
-    return A
-
-def solve_delta_h(A: np.ndarray, dY: np.ndarray, ridge_lambda=1e-3, max_step=0.05):
-    """
-    Ridge 해: Δh = (A^T A + λI)^-1 A^T dY
-    채널별(K,R/G/B) 묶음 반환: Δh_R, Δh_G, Δh_B (각 K,)
-    max_step: knot 변화량 제한(안정화)
-    """
-    # 정방형 해
-    AT = A.T
-    ATA = AT @ A
-    b = AT @ dY
-    # (ATA + λI) x = b
-    K3 = ATA.shape[0]
-    ATA.flat[::K3+1] += ridge_lambda
-    delta_h = np.linalg.solve(ATA, b).astype(np.float32)
-
-    # 안정화: 과도 변화 clamp
-    delta_h = np.clip(delta_h, -max_step, max_step)
-    return delta_h
-
-def delta_h_to_delta_high256(delta_h: np.ndarray, artifacts: dict) -> dict:
-    """
-    Δh(3K,) → 각 채널 ΔHigh(256,) 생성
-    """
-    knots = np.asarray(artifacts["knots"], dtype=np.int32)
-    Phi = stack_basis_all_grays(knots, L=256)  # (256, K)
-    K = len(knots)
-
-    dR = Phi @ delta_h[:K]
-    dG = Phi @ delta_h[K:2*K]
-    dB = Phi @ delta_h[2*K:3*K]
-
-    return {"R_High": dR.astype(np.float32),
-            "G_High": dG.astype(np.float32),
-            "B_High": dB.astype(np.float32)}
-
-# =============== 유틸: QThread 동기화 래퍼 ===============
-
-def wait_thread_result(start_thread_fn, on_success_signal, on_error_signal=None, timeout_ms=600000):
-    """
-    QThread 기반 비동기 → 동기처럼 기다리기
-    start_thread_fn(): thread.start()를 내부에서 호출
-    on_success_signal: Signal(object or tuple)
-    on_error_signal: (optional) Signal(str)
-    timeout_ms: 타임아웃
-    return: (ok, payload_or_msg)
-    """
-    loop = QEventLoop()
-    payload_box = {"ok": False, "data": None}
-
-    def _on_ok(*args):
-        payload_box["ok"] = True
-        payload_box["data"] = args[0] if len(args) == 1 else args
-        loop.quit()
-
-    def _on_err(msg):
-        payload_box["ok"] = False
-        payload_box["data"] = msg
-        loop.quit()
-
-    on_success_signal.connect(_on_ok)
-    if on_error_signal is not None:
-        on_error_signal.connect(_on_err)
-
-    start_thread_fn()
-    QTimer.singleShot(timeout_ms, loop.quit)
-    loop.exec_()
-
-    # disconnect는 생략(짧은 루틴)
-    return payload_box["ok"], payload_box["data"]
-
-# =============== 메인 플로우 메서드들 ===============
-
-def vac_luna_send(self, cmd: str) -> str:
-    self.send_command(self.ser_tv, 's')
-    res = self.send_command(self.ser_tv, cmd)
-    self.send_command(self.ser_tv, 'exit')
-    return res
-
-def vac_off_if_needed(self) -> bool:
-    st = self.check_VAC_status()  # {'supported':..., 'activated':..., 'vacdata':...}
-    if not st.get("supported", False):
-        logging.info("VAC 미지원 모델. OFF 측정만 진행합니다.")
-        return True
-    if st.get("activated", False):
-        logging.debug("VAC 활성 상태 감지 → VAC OFF 시도")
-        cmd = 'luna-send -n 1 -f luna://com.webos.service.panelcontroller/setVACActive \'{"OnOff":false}\''
-        res = vac_luna_send(self, cmd)
-        logging.debug(f"[VAC OFF] 응답: {res}")
-        st2 = self.check_VAC_status()
-        if st2.get("activated", False):
-            logging.warning("VAC OFF 실패로 보입니다. 그래도 측정은 진행합니다.")
-        else:
-            logging.info("VAC OFF 전환 성공.")
-    else:
-        logging.debug("이미 VAC OFF 상태.")
-    return True
-
-def measure_gamma_colorshift_once(self, label_prefix:str):
-    """
-    한 번 측정(감마 0~255, 4패턴; 컬러쉬프트 12패턴) 수행.
-    - 기존 run_measurement_step()의 스레드 흐름을 동기 래퍼로 호출했다고 가정
-    - 결과: dict 형태로 표준화 반환 (패턴별 Lv(256), Cx(256), Cy(256), 그리고 Macbeth Cx/Cy)
-    UI 업데이트(차트/테이블)는 질문에서 주신 기존 메서드들을 호출해줍니다.
-    """
-    # 여기서는 여러분이 이미 가진 스레드/업데이트 함수를 그대로 사용한다고 가정하고,
-    # 간단한 blocking 래퍼만 제공합니다.
-    results_box = {"gamma": {}, "colorshift": {}}  # gamma: {pattern:{'Lv', 'Cx','Cy'}}, colorshift:{patch:{'Cx0','Cy0','Cx60','Cy60'}}
-    # ---- 여러분의 기존 트리거 사용 ----
-    # main & sub 모두 돌도록 기존 run_measurement_step를 한 라운드 트리거하는 helper를 쓰세요.
-    # 아래 두 줄은 예시용이며, 실제론 여러분의 메서드를 동기 래핑해서 결과를 모아야 합니다.
-    # 이 부분은 프로젝트의 스레드/시그널 구조에 강하게 의존하므로, 이미 쓰시던 것을 그대로 호출하세요.
-    # 결과만 아래 형태로 채우면, 후속 단계(자코비안/검증)는 그대로 동작합니다.
-    #
-    # results_box["gamma"]["W"] = {"Lv": np.array([...], np.float32), "Cx":..., "Cy":...}
-    # results_box["gamma"]["R"] = {...}
-    # ...
-    # results_box["colorshift"]["Darkskin"] = {"Cx0":..., "Cy0":..., "Cx60":..., "Cy60":...}
-    #
-    # --- 예시(빈 틀) ---
-    raise NotImplementedError("여기서 기존 측정 스레드 호출해 results_box를 채우세요.")
-    # return results_box
-
-def build_deltaY_from_two_measurements(off_meas: dict, on_meas: dict, patterns_used=('W',)):
-    """
-    ΔY 타깃 생성: (ref=OFF) - (pred=ON)
-    components: Gamma, Cx, Cy (패턴은 W만 사용 권장)
-    반환 dict: {'Gamma': (256,), 'Cx':(256,), 'Cy':(256,)}
-    """
-    d = {}
-    for comp in ("Gamma","Cx","Cy"):
-        # W만 사용(다른 패턴 확장 가능)
-        p = patterns_used[0]
-        if comp == "Gamma":
-            # Gamma는 Lv로부터 계산
-            gamma_off = compute_gamma_from_lv(off_meas["gamma"][p]["Lv"])
-            gamma_on  = compute_gamma_from_lv(on_meas["gamma"][p]["Lv"])
-            diff = np.nan_to_num(gamma_off - gamma_on, nan=0.0)
-        else:
-            v_off = np.asarray(off_meas["gamma"][p][comp], dtype=np.float32)
-            v_on  = np.asarray(on_meas["gamma"][p][comp],  dtype=np.float32)
-            diff = np.nan_to_num(v_off - v_on, nan=0.0)
-        d[comp] = diff.astype(np.float32)
-    return d
-
-def apply_delta_high_256_to_4096_and_write(self, cur_lut_4096: dict, delta_high_256: dict):
-    """
-    ΔHigh(256)을 4096으로 보간해서 LUT High 갱신 → TV에 적용 + 검증 읽기 + UI 업데이트
-    cur_lut_4096: {'R_Low','R_High','G_Low','G_High','B_Low','B_High'} (각 4096,)
-    """
-    # 1) 256→4096 보간
-    for ch in ("R_High","G_High","B_High"):
-        d256 = delta_high_256[ch]
-        d4096 = resample_curve_linear(d256, 4096)
-        cur_lut_4096[ch] = (cur_lut_4096[ch] + d4096).astype(np.float32)
-        clamp01_inplace(cur_lut_4096[ch])
-        enforce_monotone_inplace(cur_lut_4096[ch])
-
-    # 2) TV에 write (여러분의 WriteVACdataThread 사용)
-    def _start_write():
-        self.write_random_VAC_thread = WriteVACdataThread(
-            parent=self,
-            ser_tv=self.ser_tv,
-            vacdataName=self.vacdataName,
-            vacdata_loaded={
-                "R_Low":  cur_lut_4096["R_Low"].tolist(),
-                "R_High": cur_lut_4096["R_High"].tolist(),
-                "G_Low":  cur_lut_4096["G_Low"].tolist(),
-                "G_High": cur_lut_4096["G_High"].tolist(),
-                "B_Low":  cur_lut_4096["B_Low"].tolist(),
-                "B_High": cur_lut_4096["B_High"].tolist(),
-            }
+        A = np.hstack([A_R, A_G, A_B]).astype(np.float32)
+        logging.info(f"[Jacobian] {comp} A 행렬 shape: {A.shape}") # (256, 3K)
+        return A
+    
+    def _run_off_baseline_then_on(self):
+        # 감마 라인 준비(“VAC OFF (Ref.)”)
+        gamma_lines_off = {
+            'main': {p: self.vac_optimization_gamma_chart.add_series(axis_index=0, label="VAC OFF (Ref.)") for p in ('white','red','green','blue')},
+            'sub':  {p: self.vac_optimization_gamma_chart.add_series(axis_index=1, label="VAC OFF (Ref.)") for p in ('white','red','green','blue')},
+        }
+        profile_off = SessionProfile(
+            legend_text="VAC OFF (Ref.)",
+            cie_label="data_1",
+            table_cols={"lv":0, "cx":1, "cy":2, "gamma":3},
+            ref_store=None
         )
-        self.write_random_VAC_thread.write_finished.connect(lambda ok, msg: None)  # 시그널 연결은 wait에서 함
-        self.write_random_VAC_thread.start()
 
-    ok, data = wait_thread_result(
-        start_thread_fn=_start_write,
-        on_success_signal=self.write_random_VAC_thread.write_finished
-    )
-    if not ok:
-        logging.error(f"[LUT Write] 실패: {data}")
-        return False
+        def _after_off(store_off):
+            self._off_store = store_off
+            # (3) DB에서 모델/주사율에 맞는 VAC Data 적용 → 읽기 → LUT 차트 갱신
+            self._apply_vac_from_db_and_measure_on()
 
-    # 3) Read로 검증 + UI 업데이트 (self.ui.vac_graph_rgbLUT_4, self.ui.vac_table_rbgLUT_4)
-    def _start_read():
-        self.read_random_VAC_thread = ReadVACdataThread(parent=self, ser_tv=self.ser_tv, vacdataName=self.vacdataName)
-        self.read_random_VAC_thread.data_read.connect(lambda payload: None)
-        self.read_random_VAC_thread.error_occurred.connect(lambda msg: None)
-        self.read_random_VAC_thread.start()
+        self.start_viewing_angle_session(
+            profile=profile_off, gamma_lines=gamma_lines_off,
+            gray_levels=list(range(256)), patterns=('white','red','green','blue'),
+            colorshift_patterns=op.colorshift_patterns,
+            first_gray_delay_ms=3000, cs_settle_ms=1000,
+            on_done=_after_off
+        )
+        
+    def _apply_vac_from_db_and_measure_on(self):
+        # (A) DB에서 panel/frame_rate로 VAC_Data 가져오기
+        panel = self.ui.vac_cmb_PanelMaker.currentText().strip()
+        fr    = self.ui.vac_cmb_FrameRate.currentText().strip()
+        vac_pk, vac_version, vac_data = self._fetch_vac_by_model(panel, fr)
+        if vac_data is None:
+            logging.error("매칭되는 VAC Data가 없습니다.")
+            return
 
-    ok2, lut_read = wait_thread_result(
-        start_thread_fn=_start_read,
-        on_success_signal=self.read_random_VAC_thread.data_read,
-        on_error_signal=self.read_random_VAC_thread.error_occurred
-    )
-    if not ok2:
-        logging.warning(f"[LUT Read] 실패 또는 미일치: {lut_read}")
-    else:
-        # 차트/테이블 업데이트 (여러분의 기존 함수)
+        # (B) TV에 적용 → 읽기 (기존 Thread 재사용 또는 직접 RPC)
+        ok = self._write_vac_to_tv(vac_data)
+        if not ok:
+            logging.error("VAC Data 쓰기 실패")
+        read_back = self._read_vac_from_tv()
+        if read_back:
+            self._update_lut_chart_and_table(read_back)  # self.vac_optimization_lut_chart, self.ui.vac_table_rbgLUT_4
+
+        # (C) VAC ON 측정
+        gamma_lines_on = {
+            'main': {p: self.vac_optimization_gamma_chart.add_series(axis_index=0, label="VAC ON") for p in ('white','red','green','blue')},
+            'sub':  {p: self.vac_optimization_gamma_chart.add_series(axis_index=1, label="VAC ON") for p in ('white','red','green','blue')},
+        }
+        profile_on = SessionProfile(
+            legend_text="VAC ON",
+            cie_label="data_2",
+            table_cols={"lv":4, "cx":5, "cy":6, "gamma":7, "d_cx":8, "d_cy":9, "d_gamma":10},
+            ref_store=self._off_store
+        )
+
+        def _after_on(store_on):
+            self._on_store = store_on
+            if self._check_spec_pass(self._off_store, self._on_store):
+                logging.info("스펙 통과 — 종료")
+                return
+            # (D) 보정 반복 시작
+            self._run_correction_iteration(iter_idx=1)
+
+        self.start_viewing_angle_session(
+            profile=profile_on, gamma_lines=gamma_lines_on,
+            gray_levels=list(range(256)), patterns=('white','red','green','blue'),
+            colorshift_patterns=op.colorshift_patterns,
+            first_gray_delay_ms=3000, cs_settle_ms=1000,
+            on_done=_after_on
+        )
+        
+    def _run_correction_iteration(self, iter_idx, max_iters=2, lambda_ridge=1e-3):
+        logging.info(f"[CORR] iteration {iter_idx} start")
+
+        # 1) 현재 TV LUT 읽기
+        lut_cur = self._read_vac_from_tv()
+        if lut_cur is None:
+            logging.error("현재 LUT 읽기 실패")
+            return
+
+        # 2) 4096→256 다운샘플 (High만 수정, Low 고정)
+        high_256 = {ch: self._down4096_to_256(lut_cur[ch]) for ch in ['R_High','G_High','B_High']}
+        low_256  = {ch: self._down4096_to_256(lut_cur[ch]) for ch in ['R_Low','G_Low','B_Low']}
+
+        # 3) Δ 목표(white/main 기준): OFF vs ON 차이를 256 길이로 구성
+        #    Gamma: 1..254 유효, Cx/Cy: 0..255
+        d_targets = self._build_delta_targets_from_stores(self._off_store, self._on_store)
+        # d_targets: {"Gamma":(256,), "Cx":(256,), "Cy":(256,)}
+
+        # 4) 자코비안 A (Gamma/Cx/Cy 각각 256 x (3K))
+        A_G = self._build_A_from_artifacts(self._jac_artifacts, "Gamma")  # (256, 3K)
+        A_Cx = self._build_A_from_artifacts(self._jac_artifacts, "Cx")
+        A_Cy = self._build_A_from_artifacts(self._jac_artifacts, "Cy")
+
+        # 5) 결합 선형계: [wG*A_G; wC*A_Cx; wC*A_Cy] Δh = - [wG*ΔGamma; wC*ΔCx; wC*ΔCy]
+        wG, wC = 1.0, 1.0
+        A_cat = np.vstack([wG*A_G, wC*A_Cx, wC*A_Cy]).astype(np.float32)
+        b_cat = -np.concatenate([wG*d_targets["Gamma"], wC*d_targets["Cx"], wC*d_targets["Cy"]]).astype(np.float32)
+
+        # 유효치 마스크(특히 gamma의 NaN)
+        mask = np.isfinite(b_cat)
+        A_use = A_cat[mask, :]
+        b_use = b_cat[mask]
+
+        # 6) 리지 해(Δh) 구하기 (3K-dim: [Rknots, Gknots, Bknots])
+        #    (A^T A + λI) Δh = A^T b
+        ATA = A_use.T @ A_use
+        rhs = A_use.T @ b_use
+        ATA[np.diag_indices_from(ATA)] += lambda_ridge
+        delta_h = np.linalg.solve(ATA, rhs).astype(np.float32)
+
+        # 7) Δcurve = Phi * Δh_channel 로 256-포인트 보정곡선 만들고 High에 적용
+        K = len(self._jac_artifacts["knots"])
+        dh_R = delta_h[0:K]; dh_G = delta_h[K:2*K]; dh_B = delta_h[2*K:3*K]
+        Phi  = self._stack_basis(self._jac_artifacts["knots"])  # (256,K)
+        corr_R = Phi @ dh_R; corr_G = Phi @ dh_G; corr_B = Phi @ dh_B
+
+        high_256_new = {
+            "R_High": (high_256["R_High"] + corr_R).astype(np.float32),
+            "G_High": (high_256["G_High"] + corr_G).astype(np.float32),
+            "B_High": (high_256["B_High"] + corr_B).astype(np.float32),
+        }
+
+        # 8) 경계/단조/클램프 → 12bit 업샘플
+        for ch in high_256_new:
+            self._enforce_monotone(high_256_new[ch])
+            high_256_new[ch] = np.clip(high_256_new[ch], 0, 4095)
+
+        lut_new = {}
+        # Low는 고정
+        for ch in ['R_Low','G_Low','B_Low']:
+            lut_new[ch] = lut_cur[ch].copy()
+        # High는 보정 결과로 교체(4096 업샘플)
+        for ch in ['R_High','G_High','B_High']:
+            lut_new[ch] = self._up256_to_4096(high_256_new[ch])
+
+        # 9) TV에 적용 → 읽기 → LUT 차트 갱신
+        ok = self._write_vac_to_tv(lut_new)
+        if not ok:
+            logging.error("보정 LUT 쓰기 실패")
+        read_back = self._read_vac_from_tv()
+        if read_back:
+            self._update_lut_chart_and_table(read_back)
+
+        # 10) 재측정 (CORR i)
+        label = f"CORR{iter_idx}"
+        gamma_lines_corr = {
+            'main': {p: self.vac_optimization_gamma_chart.add_series(axis_index=0, label=label) for p in ('white','red','green','blue')},
+            'sub':  {p: self.vac_optimization_gamma_chart.add_series(axis_index=1, label=label) for p in ('white','red','green','blue')},
+        }
+        profile_corr = SessionProfile(
+            legend_text=label,
+            cie_label=f"data_{iter_idx+2}",
+            table_cols={"lv":4, "cx":5, "cy":6, "gamma":7, "d_cx":8, "d_cy":9, "d_gamma":10},
+            ref_store=self._off_store
+        )
+
+    def _after_corr(store_corr):
+        self._on_store = store_corr  # 최신을 갱신
+        if self._check_spec_pass(self._off_store, self._on_store):
+            logging.info("스펙 통과 — 종료")
+            return
+        if iter_idx >= max_iters:
+            logging.info("최대 보정 횟수 도달 — 종료")
+            return
+        self._run_correction_iteration(iter_idx+1, max_iters=max_iters)
+
+        self.start_viewing_angle_session(
+            profile=profile_corr, gamma_lines=gamma_lines_corr,
+            gray_levels=list(range(256)), patterns=('white','red','green','blue'),
+            colorshift_patterns=op.colorshift_patterns,
+            first_gray_delay_ms=3000, cs_settle_ms=1000,
+            on_done=_after_corr
+        )
+    
+    def _check_spec_pass(self, off_store, on_store, thr_gamma=0.05, thr_c=0.003):
+    # white/main만 기준
+        def _extract_white(series_store):
+            lv = np.zeros(256); cx = np.zeros(256); cy = np.zeros(256)
+            for g in range(256):
+                tup = series_store['gamma']['main']['white'].get(g, None)
+                if tup: lv[g], cx[g], cy[g] = tup
+                else:   lv[g]=np.nan; cx[g]=np.nan; cy[g]=np.nan
+            return lv, cx, cy
+
+        lv_ref, cx_ref, cy_ref = _extract_white(off_store)
+        lv_on , cx_on , cy_on  = _extract_white(on_store)
+
+        G_ref = self._compute_gamma_series(lv_ref)
+        G_on  = self._compute_gamma_series(lv_on)
+
+        dG  = np.abs(G_on - G_ref)
+        dCx = np.abs(cx_on - cx_ref)
+        dCy = np.abs(cy_on - cy_ref)
+
+        max_dG  = np.nanmax(dG)
+        max_dCx = np.nanmax(dCx)
+        max_dCy = np.nanmax(dCy)
+
+        logging.info(f"[SPEC] max|ΔGamma|={max_dG:.6f} (≤{thr_gamma}), max|ΔCx|={max_dCx:.6f}, max|ΔCy|={max_dCy:.6f} (≤{thr_c})")
+        return (max_dG <= thr_gamma) and (max_dCx <= thr_c) and (max_dCy <= thr_c)
+
+    def _build_delta_targets_from_stores(self, off_store, on_store):
+        # Δ = (ON - OFF). white/main
+        lv_ref, cx_ref, cy_ref = np.zeros(256), np.zeros(256), np.zeros(256)
+        lv_on , cx_on , cy_on  = np.zeros(256), np.zeros(256), np.zeros(256)
+        for g in range(256):
+            tR = off_store['gamma']['main']['white'].get(g, None)
+            tO = on_store['gamma']['main']['white'].get(g, None)
+            if tR: lv_ref[g], cx_ref[g], cy_ref[g] = tR
+            else:  lv_ref[g]=np.nan; cx_ref[g]=np.nan; cy_ref[g]=np.nan
+            if tO: lv_on[g], cx_on[g], cy_on[g] = tO
+            else:  lv_on[g]=np.nan; cx_on[g]=np.nan; cy_on[g]=np.nan
+
+        G_ref = self._compute_gamma_series(lv_ref)
+        G_on  = self._compute_gamma_series(lv_on)
+        d = {
+            "Gamma": (G_on - G_ref),
+            "Cx":    (cx_on - cx_ref),
+            "Cy":    (cy_on - cy_ref),
+        }
+        # NaN → 0 (선형계 마스킹에서도 걸러지니 안정성↑)
+        for k in d:
+            d[k] = np.nan_to_num(d[k], nan=0.0).astype(np.float32)
+        return d
+    
+    def start_viewing_angle_session(
+        self,
+        profile: SessionProfile,
+        gamma_lines: dict,
+        gray_levels=None,
+        patterns=('white','red','green','blue'),
+        colorshift_patterns=None,
+        first_gray_delay_ms=3000,
+        cs_settle_ms=1000,
+        on_done=None,
+    ):
+        if gray_levels is None:
+            # gray_levels = list(range(256))
+            gray_levels = op.gray_levels
+        if colorshift_patterns is None:
+            colorshift_patterns = op.colorshift_patterns  # 기존 상수 사용
+
+        store = {
+            'gamma': {'main': {p:{} for p in patterns}, 'sub': {p:{} for p in patterns}},
+            'colorshift': {'main': [], 'sub': []}
+        }
+
+        self._sess = {
+            'phase': 'gamma',
+            'p_idx': 0,
+            'g_idx': 0,
+            'cs_idx': 0,
+            'patterns': list(patterns),
+            'gray_levels': list(gray_levels),
+            'cs_patterns': colorshift_patterns,
+            'store': store,
+            'profile': profile,
+            'gamma_lines': gamma_lines,
+            'first_gray_delay_ms': first_gray_delay_ms,
+            'cs_settle_ms': cs_settle_ms,
+            'on_done': on_done
+        }
+        self._session_step()
+
+    def _session_step(self):
+        s = self._sess
+        if s['phase'] == 'gamma':
+            if s['p_idx'] >= len(s['patterns']):
+                s['phase'] = 'colorshift'
+                s['cs_idx'] = 0
+                QTimer.singleShot(60, lambda: self._session_step())
+                return
+
+            if s['g_idx'] >= len(s['gray_levels']):
+                s['g_idx'] = 0
+                s['p_idx'] += 1
+                QTimer.singleShot(40, lambda: self._session_step())
+                return
+
+            pattern = s['patterns'][s['p_idx']]
+            gray = s['gray_levels'][s['g_idx']]
+
+            if pattern == 'white':
+                rgb_value = f"{gray},{gray},{gray}"
+            elif pattern == 'red':
+                rgb_value = f"{gray},0,0"
+            elif pattern == 'green':
+                rgb_value = f"0,{gray},0"
+            else:
+                rgb_value = f"0,0,{gray}"
+            self.changeColor(rgb_value)
+
+            delay = s['first_gray_delay_ms'] if s['g_idx'] == 0 else 0
+            QTimer.singleShot(delay, lambda p=pattern, g=gray: self._trigger_gamma_pair(p, g))
+
+        elif s['phase'] == 'colorshift':
+            if s['cs_idx'] >= len(s['cs_patterns']):
+                s['phase'] = 'done'
+                QTimer.singleShot(0, lambda: self._session_step())
+                return
+
+            pname, r, g, b = s['cs_patterns'][s['cs_idx']]
+            self.changeColor(f"{r},{g},{b}")
+            QTimer.singleShot(s['cs_settle_ms'], lambda pn=pname: self._trigger_colorshift_pair(pn))
+
+        else:  # done
+            self._finalize_session(self)
+
+    def _trigger_gamma_pair(self, pattern, gray):
+        s = self._sess
+        s['_gamma'] = {}
+
+        def handle(role, res):
+            s['_gamma'][role] = res
+            if 'main' in s['_gamma'] and 'sub' in s['_gamma']:
+                self._consume_gamma_pair(self, pattern, gray, s['_gamma'])
+                s['g_idx'] += 1
+                QTimer.singleShot(30, lambda: self._session_step())
+
+        if self.main_instrument_cls:
+            self.main_measure_thread = MeasureThread(self.main_instrument_cls, 'main')
+            self.main_measure_thread.measure_completed.connect(lambda r: handle('main', r))
+            self.main_measure_thread.start()
+
+        if self.sub_instrument_cls:
+            self.sub_measure_thread = MeasureThread(self.sub_instrument_cls, 'sub')
+            self.sub_measure_thread.measure_completed.connect(lambda r: handle('sub', r))
+            self.sub_measure_thread.start()
+
+    def _consume_gamma_pair(self, pattern, gray, results):
+        s = self._sess
+        store = s['store']
+        profile: SessionProfile = s['profile']
+        lines = s['gamma_lines']
+
+        for role in ('main', 'sub'):
+            x, y, lv, cct, duv = results[role]
+            store['gamma'][role][pattern][gray] = (float(lv), float(x), float(y))
+            # Lv vs gray
+            line = lines[role][pattern]
+            xs = list(line.get_xdata()); ys = list(line.get_ydata())
+            xs.append(gray); ys.append(float(lv))
+            line.set_data(xs, ys)
+
+        # white/main만 테이블 기록
+        if pattern == 'white':
+            lv_m, cx_m, cy_m = store['gamma']['main'][pattern][gray]
+            table = self.ui.vac_table_measure_results_main_2
+            cols = profile.table_cols
+            self._set_item(table, gray, cols['lv'], f"{lv_m:.6f}")
+            self._set_item(table, gray, cols['cx'], f"{cx_m:.6f}")
+            self._set_item(table, gray, cols['cy'], f"{cy_m:.6f}")
+
+            if profile.ref_store is not None:
+                ref = profile.ref_store['gamma']['main']['white'].get(gray, None)
+                if ref is not None and 'd_cx' in cols and 'd_cy' in cols:
+                    lv_r, cx_r, cy_r = ref
+                    self._set_item(table, gray, cols['d_cx'], f"{(cx_m - cx_r):.6f}")
+                    self._set_item(table, gray, cols['d_cy'], f"{(cy_m - cy_r):.6f}")
+
+        self.vac_optimization_gamma_chart.autoscale()
+        self.vac_optimization_gamma_chart.draw()
+
+    def _trigger_colorshift_pair(self, patch_name):
+        s = self._sess
+        s['_cs'] = {}
+
+        def handle(role, res):
+            s['_cs'][role] = res
+            if 'main' in s['_cs'] and 'sub' in s['_cs']:
+                self._consume_colorshift_pair(self, patch_name, s['_cs'])
+                s['cs_idx'] += 1
+                QTimer.singleShot(80, lambda: self._session_step())
+
+        if self.main_instrument_cls:
+            self.main_measure_thread = MeasureThread(self.main_instrument_cls, 'main')
+            self.main_measure_thread.measure_completed.connect(lambda r: handle('main', r))
+            self.main_measure_thread.start()
+
+        if self.sub_instrument_cls:
+            self.sub_measure_thread = MeasureThread(self.sub_instrument_cls, 'sub')
+            self.sub_measure_thread.measure_completed.connect(lambda r: handle('sub', r))
+            self.sub_measure_thread.start()
+
+    def _consume_colorshift_pair(self, patch_name, results):
+        s = self._sess
+        store = s['store']
+        profile: SessionProfile = s['profile']
+
+        for role in ('main', 'sub'):
+            x, y, lv, cct, duv = results[role]
+            u_p, v_p = cf.convert_xyz_to_uvprime(float(x), float(y))
+            store['colorshift'][role].append((float(x), float(y), float(u_p), float(v_p)))
+            angle = 0 if role == 'main' else 60
+            self.vac_optimization_colorshift_chart.update(
+                u_p, v_p, data_label=profile.cie_label, view_angle=angle, vac_status=profile.legend_text
+            )
+
+    def _finalize_session(self):
+        s = self._sess
+        profile: SessionProfile = s['profile']
+        table = self.ui.vac_table_measure_results_main_2
+        cols = profile.table_cols
+
+        # white/main 감마 계산
+        lv_series = np.zeros(256, dtype=np.float64)
+        for g in range(256):
+            tup = s['store']['gamma']['main']['white'].get(g, None)
+            lv_series[g] = float(tup[0]) if tup else np.nan
+        gamma_vec = self._compute_gamma_series(lv_series)
+        for g in range(256):
+            if np.isfinite(gamma_vec[g]):
+                self._set_item(table, g, cols['gamma'], f"{gamma_vec[g]:.6f}")
+
+        # ΔGamma (ON/보정 시)
+        if profile.ref_store is not None and 'd_gamma' in cols:
+            ref_lv = np.zeros(256, dtype=np.float64)
+            for g in range(256):
+                tup = profile.ref_store['gamma']['main']['white'].get(g, None)
+                ref_lv[g] = float(tup[0]) if tup else np.nan
+            ref_gamma = self._compute_gamma_series(ref_lv)
+            dG = gamma_vec - ref_gamma
+            for g in range(256):
+                if np.isfinite(dG[g]):
+                    self._set_item(table, g, cols['d_gamma'], f"{dG[g]:.6f}")
+
+        if callable(s['on_done']):
+            try:
+                s['on_done'](s['store'])
+            except Exception as e:
+                logging.exception(e)
+                
+    def _ensure_row_count(self, table, row_idx):
+        if table.rowCount() <= row_idx:
+            table.setRowCount(row_idx + 1)
+
+    def _set_item(self, table, row, col, value):
+        self._ensure_row_count(table, row)
+        table.setItem(row, col, QTableWidgetItem("" if value is None else str(value)))
+
+    def _compute_gamma_series(self, lv_vec_256):
+        lv = np.asarray(lv_vec_256, dtype=np.float64)
+        gamma = np.full(256, np.nan, dtype=np.float64)
+        lv0 = lv[0]
+        denom = np.max(lv[1:] - lv0)
+        if not np.isfinite(denom) or denom <= 0:
+            return gamma
+        nor = (lv - lv0) / denom
+        gray = np.arange(256, dtype=np.float64)
+        gray_norm = gray / 255.0
+        valid = (gray >= 1) & (gray <= 254) & (nor > 0) & np.isfinite(nor)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            gamma[valid] = np.log(nor[valid]) / np.log(gray_norm[valid])
+        return gamma
+    
+    def _stack_basis(self, knots, L=256):
+        knots = np.asarray(knots, dtype=np.int32)
+        
+        def _phi(g):
+            # 선형 모자 함수
+            K = len(knots)
+            w = np.zeros(K, dtype=np.float32)
+            if g <= knots[0]:
+                w[0]=1.; return w
+            if g >= knots[-1]:
+                w[-1]=1.; return w
+            i = np.searchsorted(knots, g) - 1
+            g0, g1 = knots[i], knots[i+1]
+            t = (g - g0) / max(1, (g1 - g0))
+            w[i] = 1-t; w[i+1] = t
+            return w
+        return np.vstack([_phi(g) for g in range(L)])
+
+    def _down4096_to_256(self, arr4096):
+        arr4096 = np.asarray(arr4096, dtype=np.float32)
+        idx = np.round(np.linspace(0, 4095, 256)).astype(int)
+        return arr4096[idx]
+
+    def _up256_to_4096(self, arr256):
+        arr256 = np.asarray(arr256, dtype=np.float32)
+        x_small = np.linspace(0, 1, 256)
+        x_big   = np.linspace(0, 1, 4096)
+        return np.interp(x_big, x_small, arr256).astype(np.float32)
+
+    def _enforce_monotone(self, arr):
+        # 제자리 누적 최대치
+        for i in range(1, len(arr)):
+            if arr[i] < arr[i-1]:
+                arr[i] = arr[i-1]
+        return arr
+        
+    def _fetch_vac_by_model(self, panel_maker, frame_rate):
+        """
+        DB: W_VAC_Application_Status에서 Panel_Maker/Frame_Rate 매칭 → VAC_Info_PK 얻고
+            W_VAC_Info.PK=VAC_Info_PK → VAC_Data 읽어서 반환
+        반환: (pk, vac_version, vac_data_dict)  또는 (None,None,None)
+        """
         try:
-            channels = ['R_Low','R_High','G_Low','G_High','B_Low','B_High']
-            rgb_df = pd.DataFrame({ch: lut_read.get(ch.replace("_","channel"), []) for ch in channels})
+            # TODO: 실제 DB 조회 코드로 교체
+            pk = ...; vac_version = ...; vac_data = ...  # dict with keys: R_Low,R_High,G_Low, ...
+            return pk, vac_version, vac_data
+        except Exception as e:
+            logging.exception(e)
+            return None, None, None
+
+    def _write_vac_to_tv(self, vac_data):
+        """
+        이미 쓰시던 WriteVACdataThread/명령 기반으로 연결.
+        vac_data(dict): { 'R_Low':[4096], 'R_High':[4096], ... }
+        """
+        try:
+            # TODO: 실제 쓰기
+            return True
+        except Exception as e:
+            logging.exception(e)
+            return False
+
+    def _read_vac_from_tv(self):
+        """
+        기존 ReadVACdataThread 결과와 동일 구조로 반환
+        return dict or None
+        """
+        try:
+            # TODO: 실제 읽기
+            # 예시 keys: {'R_Low':[4096], 'R_High':[4096], 'G_Low':...}
+            return ...
+        except Exception as e:
+            logging.exception(e)
+            return None
+
+    def _update_lut_chart_and_table(self, lut_dict):
+        """
+        self.vac_optimization_lut_chart (x:0~4095) 갱신 + self.ui.vac_table_rbgLUT_4에 숫자 뿌리기
+        이미 사용중인 update_rgbchannel_chart/update_rgbchannel_table 재사용해도 됩니다.
+        """
+        try:
+            import pandas as pd
+            df = pd.DataFrame({
+                "R_Low":  lut_dict["R_Low"],  "R_High": lut_dict["R_High"],
+                "G_Low":  lut_dict["G_Low"],  "G_High": lut_dict["G_High"],
+                "B_Low":  lut_dict["B_Low"],  "B_High": lut_dict["B_High"],
+            })
+            # 예: 기존 메서드 재사용
             self.update_rgbchannel_chart(
-                rgb_df,
+                df,
                 self.graph['vac_laboratory']['data_acquisition_system']['input']['ax'],
                 self.graph['vac_laboratory']['data_acquisition_system']['input']['canvas']
             )
-            self.update_rgbchannel_table(rgb_df, self.ui.vac_table_rbgLUT_4)
+            self.update_rgbchannel_table(df, self.ui.vac_table_rbgLUT_4)
         except Exception as e:
-            logging.warning(f"[LUT UI 업데이트] {e}")
-    return True
+            logging.exception(e)
 
-def meets_spec(off_meas: dict, on_meas: dict, thr_gamma=0.05, thr_c=0.003) -> bool:
-    """
-    스펙 판정:
-      max |Gamma_on - Gamma_off| ≤ thr_gamma
-      max |Cx_on - Cx_off| ≤ thr_c
-      max |Cy_on - Cy_off| ≤ thr_c
-    (W 패턴 기준)
-    """
-    p = 'W'
-    g_off = compute_gamma_from_lv(off_meas["gamma"][p]["Lv"])
-    g_on  = compute_gamma_from_lv(on_meas["gamma"][p]["Lv"])
-    dG = np.nan_to_num(np.abs(g_on - g_off), nan=0.0).max()
+    def start_VAC_optimization(self):
+        """
+        =============== 메인 엔트리: 버튼 이벤트 연결용 ===============
+        전체 플로우:
+        1) VAC OFF 보장 → 측정(OFF baseline) + UI 업데이트
+        2) DB에서 모델/주사율 매칭 VAC Data 가져와 TV에 적용(ON) → 측정(ON 현재) + UI 업데이트
+        3) 스펙 확인 → 통과면 종료
+        4) 미통과면 자코비안 기반 보정(256기준) → 4096 보간 반영 → TV 적용 → 재측정 → 스펙 재확인
+        5) (필요 시 반복 2~3회만)
+        """
+        try:
+            # (0) 자코비안 로드
+            artifacts = self._load_jacobian_artifacts()
+            print("======================= A 행렬 shape 확인 =======================")
+            self.A_Gamma = self._build_A_from_artifacts(artifacts, "Gamma")
+            self.A_Cx    = self._build_A_from_artifacts(artifacts, "Cx")
+            self.A_Cy    = self._build_A_from_artifacts(artifacts, "Cy")
+            self._jac_artifacts = artifacts
 
-    dCx = np.abs(np.asarray(on_meas["gamma"][p]["Cx"]) - np.asarray(off_meas["gamma"][p]["Cx"])).max()
-    dCy = np.abs(np.asarray(on_meas["gamma"][p]["Cy"]) - np.asarray(off_meas["gamma"][p]["Cy"])).max()
+        except FileNotFoundError as e:
+            logging.error(f"[VAC Optimization] Jacobian file not found: {e}")
+            print("❌ 자코비안 파일을 찾을 수 없습니다. 경로를 다시 확인해주세요.")
 
-    logging.info(f"[Spec] max|ΔGamma|={dG:.4f}, max|ΔCx|={dCx:.4f}, max|ΔCy|={dCy:.4f}")
-    return (dG <= thr_gamma) and (dCx <= thr_c) and (dCy <= thr_c)
+        except KeyError as e:
+            logging.error(f"[VAC Optimization] Missing key in artifacts: {e}")
+            print(f"❌ artifacts 딕셔너리에 '{e}' 키가 없습니다. 자코비안 파일 구조를 확인해주세요.")
 
-# =============== 메인 엔트리: 버튼 이벤트 연결용 ===============
-
-def start_VAC_optimization(self):
-    """
-    전체 플로우:
-      1) VAC OFF 보장 → 측정(OFF baseline) + UI 업데이트
-      2) DB에서 모델/주사율 매칭 VAC Data 가져와 TV에 적용(ON) → 측정(ON 현재) + UI 업데이트
-      3) 스펙 확인 → 통과면 종료
-      4) 미통과면 자코비안 기반 보정(256기준) → 4096 보간 반영 → TV 적용 → 재측정 → 스펙 재확인
-      5) (필요 시 반복 2~3회만)
-    """
-    try:
-        # (0) 자코비안 로드
-        jac_path = os.path.join(self.scripts_dir, "jacobian_Y0_high.pkl")
-        artifacts = joblib.load(jac_path)
-
-        A_Gamma = build_A_from_artifacts(artifacts, "Gamma")  # (256, 3K)
-        A_Cx    = build_A_from_artifacts(artifacts, "Cx")
-        A_Cy    = build_A_from_artifacts(artifacts, "Cy")
+        except Exception as e:
+            logging.exception("[VAC Optimization] Unexpected error occurred")
+            print(f"❌ 예기치 못한 오류가 발생했습니다: {e}")
 
         # (1) VAC OFF 보장 + 측정
-        self.vac_btn_startOptimization.setEnabled(False)
-        vac_off_if_needed(self)
-
-        logging.info("[STEP1] VAC OFF 상태 측정 시작")
-        off_meas = measure_gamma_colorshift_once(self, label_prefix="[OFF]")  # <-- 여러분 측정 래퍼 구현 필요
-
-        # (2) DB에서 모델/주사율 매칭 VAC Data → TV 적용 → 읽기 → UI 업데이트
-        logging.info("[STEP2] DB에서 적용 VAC 데이터 가져와 TV 적용")
-        panel_txt = self.ui.vac_cmb_PanelMaker.currentText().strip()
-        fps_txt   = self.ui.vac_cmb_FrameRate.currentText().strip()
-
-        # DB 조회 (사용자 함수로 구현돼 있다고 가정)
-        vac_pk, vac_payload_4096 = self.lookup_vac_data_from_db(panel_txt, fps_txt)  # (pk, dict of arrays len=4096)
-        if vac_payload_4096 is None:
-            logging.warning("매칭되는 VAC 데이터가 없어 기본 LUT 유지 후 진행합니다.")
-            cur_lut_4096 = self.read_current_tv_lut_4096()  # 사용자 제공
+        # 결과 저장용 버퍼 초기화 (OFF / ON 구분)
+        self._off_store = {'gamma': {'main': {'white':{},'red':{},'green':{},'blue':{}}, 'sub': {'white':{},'red':{},'green':{},'blue':{}}},
+                        'colorshift': {'main': [], 'sub': []}}
+        self._on_store  = {'gamma': {'main': {'white':{},'red':{},'green':{},'blue':{}}, 'sub': {'white':{},'red':{},'green':{},'blue':{}}},
+                        'colorshift': {'main': [], 'sub': []}}
+        # TV VAC OFF 하기
+        st = self.check_VAC_status()
+        if st.get("activated", False):
+            logging.debug("VAC 활성 상태 → OFF로 전환 시도")
+            self.send_command(self.ser_tv, 's')
+            cmd = 'luna-send -n 1 -f luna://com.webos.service.panelcontroller/setVACActive \'{"OnOff":false}\''
+            self.send_command(self.ser_tv, cmd)
+            self.send_command(self.ser_tv, 'exit')
+            st2 = self.check_VAC_status()
+            if st2.get("activated", False):
+                logging.warning("VAC OFF 실패로 보입니다. 그래도 측정 진행")
+            else:
+                logging.info("VAC OFF 전환 성공.")
         else:
-            # TV에 write + read + UI
-            cur_lut_4096 = vac_payload_4096.copy()
-            ok_write = apply_delta_high_256_to_4096_and_write(self, cur_lut_4096, 
-                          {"R_High": np.zeros(256, np.float32),
-                           "G_High": np.zeros(256, np.float32),
-                           "B_High": np.zeros(256, np.float32)})
-            if not ok_write:
-                logging.warning("초기 VAC 적용 실패. 현재 TV LUT를 읽어서 사용합니다.")
-                cur_lut_4096 = self.read_current_tv_lut_4096()
-
-        # (3) VAC ON 측정
-        logging.info("[STEP3] VAC ON 상태 측정 시작")
-        on_meas = measure_gamma_colorshift_once(self, label_prefix="[ON]")   # <-- 여러분 측정 래퍼 구현 필요
-
-        # (4) 스펙 판정
-        if meets_spec(off_meas, on_meas, thr_gamma=0.05, thr_c=0.003):
-            logging.info("✅ 스펙 만족. 최적화 종료.")
-            return
-
-        # (5) 자코비안 보정 루프(최대 2~3회 권장)
-        for it in range(3):
-            logging.info(f"[STEP4] 자코비안 보정 {it+1}/3")
-
-            # ΔY 구성 (OFF - ON) — W 패턴 기준
-            deltaY = build_deltaY_from_two_measurements(off_meas, on_meas, patterns_used=('W',))
-
-            # 연립: comp별로 Δh 구해 평균/가중 결합 (여기선 동일 가중 평균)
-            dH_list = []
-            for A, comp in ((A_Gamma, "Gamma"), (A_Cx, "Cx"), (A_Cy, "Cy")):
-                dY = deltaY[comp]  # (256,)
-                delta_h = solve_delta_h(A, dY, ridge_lambda=2e-3, max_step=0.05)  # 안전한 범위
-                dH_256 = delta_h_to_delta_high256(delta_h, artifacts)  # dict of 3x(256,)
-                dH_list.append(dH_256)
-
-            # 평균결합
-            dH_mean = {
-                "R_High": np.mean([d["R_High"] for d in dH_list], axis=0).astype(np.float32),
-                "G_High": np.mean([d["G_High"] for d in dH_list], axis=0).astype(np.float32),
-                "B_High": np.mean([d["B_High"] for d in dH_list], axis=0).astype(np.float32),
-            }
-
-            # 적용(4096 보간 → LUT High 업데이트 → TV write/read/UI)
-            ok = apply_delta_high_256_to_4096_and_write(self, cur_lut_4096, dH_mean)
-            if not ok:
-                logging.warning("보정 LUT 적용 실패. 루프 중단.")
-                break
-
-            # 재측정
-            on_meas = measure_gamma_colorshift_once(self, label_prefix=f"[ON after JAC {it+1}]")
-
-            # 스펙 재판정
-            if meets_spec(off_meas, on_meas, thr_gamma=0.05, thr_c=0.003):
-                logging.info("✅ 보정 후 스펙 만족. 종료합니다.")
-                break
-        else:
-            logging.info("ℹ️ 최대 보정 회수 도달. 현재 상태로 종료합니다.")
-
-    except NotImplementedError as e:
-        logging.error(f"[구현 필요] {e}")
-    except Exception as e:
-        logging.exception(e)
-    finally:
-        self.vac_btn_startOptimization.setEnabled(True)
+            logging.debug("이미 VAC OFF 상태. OFF 레퍼런스 측정 진행")
+            
+        # (2) OFF 측정 세션 시작
+        self._run_off_baseline_then_on()
