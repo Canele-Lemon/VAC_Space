@@ -1,123 +1,90 @@
-    def _update_lut_chart_and_table(self, lut_dict):
-        """
-        self.vac_optimization_lut_chart (x:0~4095) 갱신 + self.ui.vac_table_rbgLUT_4에 숫자 뿌리기
-        이미 사용중인 update_rgbchannel_chart/update_rgbchannel_table 재사용해도 됩니다.
-        """
-        try:
-            df = pd.DataFrame({
-                "R_Low":  lut_dict["R_Low"],  "R_High": lut_dict["R_High"],
-                "G_Low":  lut_dict["G_Low"],  "G_High": lut_dict["G_High"],
-                "B_Low":  lut_dict["B_Low"],  "B_High": lut_dict["B_High"],
-            })
-            # 예: 기존 메서드 재사용
-            self.update_rgbchannel_chart(
-                df,
-                self.graph['vac_laboratory']['data_acquisition_system']['input']['ax'],
-                self.graph['vac_laboratory']['data_acquisition_system']['input']['canvas']
-            )
-            self.update_rgbchannel_table(df, self.ui.vac_table_rbgLUT_4)
-        except Exception as e:
-            logging.exception(e)
+def _update_lut_chart_and_table(self, lut_dict, *, downsample_step=8):
+    """
+    LUT(0..4095)을 차트/테이블에 반영.
+    - 차트: R/G/B × (Low/High) 6개 라인
+    - 테이블: 기존 update_rgbchannel_table 재사용
+    - downsample_step: 차트 표시용 다운샘플 간격 (성능/가독성 목적). 1이면 전체 4096pts 그립니다.
+    """
+    try:
+        import numpy as np
+        import pandas as pd
 
-에서 업데이트할 그래프는 다음과 같이 초기화했어요:
+        required = ["R_Low", "R_High", "G_Low", "G_High", "B_Low", "B_High"]
+        for k in required:
+            if k not in lut_dict:
+                raise KeyError(f"lut_dict missing key: {k}")
 
-        self.vac_optimization_lut_chart = XYChart(
-            target_widget=self.ui.vac_graph_rgbLUT_4,
-            x_label='Gray Level (12-bit)',
-            y_label='Input Level',
-            x_range=(0, 4095),
-            y_range=(0, 4095),
-            x_tick=512,
-            y_tick=512,
-            title=None,
-            title_color='#595959',
-            legend=False
-        )
+        # ---- 1) 테이블 데이터프레임 준비 (4096 그대로) ----
+        df = pd.DataFrame({
+            "R_Low":  np.asarray(lut_dict["R_Low"],  dtype=np.float32),
+            "R_High": np.asarray(lut_dict["R_High"], dtype=np.float32),
+            "G_Low":  np.asarray(lut_dict["G_Low"],  dtype=np.float32),
+            "G_High": np.asarray(lut_dict["G_High"], dtype=np.float32),
+            "B_Low":  np.asarray(lut_dict["B_Low"],  dtype=np.float32),
+            "B_High": np.asarray(lut_dict["B_High"], dtype=np.float32),
+        })
 
-참고로 XYChart 클래스는 다음과 같아요
-class XYChart:
-    def __init__(self, target_widget, x_label='X', y_label='Y',
-                 x_range=(0, 100), y_range=(0, 100), x_tick=10, y_tick=10,
-                 title=None, title_color='#333333', legend=True,
-                 multi_axes=False, num_axes=2, layout='vertical', share_x=True):
-        
-        self.multi_axes = multi_axes
-        self.lines = {}
-        self.data = {}
-        
-        if self.multi_axes:
-            if layout == 'vertical':
-                self.fig, axes = plt.subplots(num_axes, 1, sharex=share_x)
-            else:
-                self.fig, axes = plt.subplots(1, num_axes, sharex=share_x)   
+        # 길이가 4096이 아닐 경우, 4096으로 보정(선형보간)
+        def _ensure_4096(arr):
+            arr = np.asarray(arr, dtype=np.float32)
+            if arr.size == 4096:
+                return arr
+            if arr.size < 2:
+                # 너무 짧으면 0으로 채움
+                out = np.zeros(4096, dtype=np.float32)
+                if arr.size == 1:
+                    out[:] = arr[0]
+                return out
+            x_src = np.linspace(0, 1, arr.size)
+            x_dst = np.linspace(0, 1, 4096)
+            return np.interp(x_dst, x_src, arr).astype(np.float32)
 
-            self.axes = list(axes) if isinstance(axes, (list, tuple, np.ndarray)) else [axes]
-            self.ax = self.axes[0]  # 기본 축
-        else:
-            self.fig, self.ax = plt.subplots()
-            self.axes = [self.ax]
+        for col in df.columns:
+            df[col] = _ensure_4096(df[col].values)
 
-        self.canvas = FigureCanvas(self.fig)
-        target_widget.addWidget(self.canvas)
+        # ---- 2) 차트 업데이트 ----
+        chart = self.vac_optimization_lut_chart  # XYChart 인스턴스
+        # 라인 메타: (열이름, 표시라벨, 색, 라인스타일)
+        series_meta = [
+            ("R_Low",  "R Low",  "red",   "--"),
+            ("R_High", "R High", "red",   "-"),
+            ("G_Low",  "G Low",  "green", "--"),
+            ("G_High", "G High", "green", "-"),
+            ("B_Low",  "B Low",  "blue",  "--"),
+            ("B_High", "B High", "blue",  "-"),
+        ]
 
-        # 스타일 초기화
-        self._init_style(title, title_color, x_label, y_label, x_range, y_range, x_tick, y_tick)
+        # 표시용 다운샘플(성능/가독성). 1이면 4096점 그대로 그림
+        step = max(1, int(downsample_step))
+        xs_plot = np.arange(0, 4096, step, dtype=int)
 
-        if legend:
-            for ax in self.axes:
-                cs.MatFormat_Legend(ax, position='upper left', fontsize=8)
+        for col, label, color, ls in series_meta:
+            ys = df[col].values
+            ys_plot = ys[::step]
 
-        self.canvas.draw()
+            # 라인이 없으면 생성
+            if label not in chart.lines:
+                chart.add_line(key=label, color=color, linestyle=ls, axis_index=0, label=label)
 
-    def _init_style(self, title, title_color, x_label, y_label, x_range, y_range, x_tick, y_tick):
-        cs.MatFormat_ChartArea(self.fig, left=0.20, right=0.92, top=0.90, bottom=0.15)
-        for i, ax in enumerate(self.axes):
-            cs.MatFormat_FigArea(ax)
-            if i == 0:
-                cs.MatFormat_ChartTitle(ax, title=title, color=title_color)
-            
-            # X축 라벨은 마지막 축에만 표시
-            if i == len(self.axes) - 1:
-                cs.MatFormat_AxisTitle(ax, axis_title=x_label, axis='x')
-            else:
+            # 내부 버퍼 갱신
+            chart.data[label]['x'] = xs_plot.tolist()
+            chart.data[label]['y'] = ys_plot.astype(float).tolist()
 
-                ax.set_xticklabels([])  # 상단 축의 X축 눈금 라벨 제거
-                ax.set_xlabel('')       # X축 제목 제거
-                
+            # 라인 데이터 교체
+            line = chart.lines[label]
+            line.set_data(chart.data[label]['x'], chart.data[label]['y'])
 
-            cs.MatFormat_AxisTitle(ax, axis_title=y_label, axis='y')
-            cs.MatFormat_Axis(ax, min_val=x_range[0], max_val=x_range[1], tick_interval=x_tick, axis='x')
-            cs.MatFormat_Axis(ax, min_val=y_range[0], max_val=y_range[1], tick_interval=y_tick, axis='y')
-            cs.MatFormat_Gridline(ax)
+        # 축 리밋/뷰 갱신 + 리드로우
+        for ax in chart.axes:
+            ax.relim()
+            ax.autoscale_view()
+        chart.canvas.draw()
 
-    def add_line(self, key, color='blue', linestyle='-', marker=None, label=None, axis_index=0):
-        if axis_index >= len(self.axes):
-            print(f"[XYChart] Invalid axis index: {axis_index}")
-            return
+        # ---- 3) 테이블 업데이트 ----
+        #   * 기존 메서드 그대로 활용 (여기가 여러분 UI 규격을 가장 잘 맞춤)
+        self.update_rgbchannel_table(df, self.ui.vac_table_rbgLUT_4)
 
-        axis = self.axes[axis_index]
-        line, = axis.plot([], [], color=color, linestyle=linestyle, marker=marker, label=label or key)
-        self.lines[key] = line
-        self.data[key] = {'x': [], 'y': []}
-
-    def update(self, key, x, y):
-        if key not in self.lines:
-            print(f"[XYChart] Line '{key}' not found.")
-            return
-
-        self.data[key]['x'].append(x)
-        self.data[key]['y'].append(y)
-        self.lines[key].set_data(self.data[key]['x'], self.data[key]['y'])
-
-        axis = self.lines[key].axes
-        axis.relim()
-        axis.autoscale_view()
-        axis.legend(fontsize=9)
-        self.canvas.draw()
-
-    def set_label(self, key, label):
-        if key in self.lines:
-            self.lines[key].set_label(label)
-            self.lines[key].axes.legend(fontsize=9)
-
-_update_lut_chart_and_table 메서드를 어떻게 수정하면 될까요?
+    except KeyError as e:
+        logging.error(f"[LUT Chart] KeyError: {e}")
+    except Exception as e:
+        logging.exception(e)
