@@ -1,90 +1,61 @@
-def _update_lut_chart_and_table(self, lut_dict, *, downsample_step=8):
+# ... _run_correction_iteration 내부에서 4096 LUT 만들고 나서:
+
+# 1) TV 키로 새 LUT dict 구성 (Low는 캐시에서 그대로, High만 보정치 반영 예시)
+new_lut_tvkeys = {
+    "RchannelLow":  np.asarray(self._vac_dict_cache["RchannelLow"], dtype=np.float32),
+    "GchannelLow":  np.asarray(self._vac_dict_cache["GchannelLow"], dtype=np.float32),
+    "BchannelLow":  np.asarray(self._vac_dict_cache["BchannelLow"], dtype=np.float32),
+    "RchannelHigh": self._up256_to_4096(high_256_new["R_High"]),  # 보정 결과
+    "GchannelHigh": self._up256_to_4096(high_256_new["G_High"]),
+    "BchannelHigh": self._up256_to_4096(high_256_new["B_High"]),
+}
+
+# 2) 제어필드 유지 + 6채널 교체 → TV에 쓸 JSON 생성
+vac_write_json = self.build_vacparam_std_format(new_lut_tvkeys)
+
+# 3) TV에 적용 (기존 쓰기 QThread 사용)
+self._write_vac_to_tv(vac_write_json, on_finished=_after_write)
+
+import copy
+import json
+import numpy as np
+
+def build_vacparam_std_format(self, new_lut_tvkeys: dict) -> str:
     """
-    LUT(0..4095)을 차트/테이블에 반영.
-    - 차트: R/G/B × (Low/High) 6개 라인
-    - 테이블: 기존 update_rgbchannel_table 재사용
-    - downsample_step: 차트 표시용 다운샘플 간격 (성능/가독성 목적). 1이면 전체 4096pts 그립니다.
+    self._vac_dict_cache(원본 TV JSON dict)를 베이스로, 전달된 6채널 LUT만 교체하여
+    TV가 바로 읽을 수 있는 JSON 문자열을 반환.
+    
+    new_lut_tvkeys 예:
+      {
+        "RchannelLow":  [4096개 int],
+        "RchannelHigh": [4096개 int],
+        "GchannelLow":  ...,
+        "GchannelHigh": ...,
+        "BchannelLow":  ...,
+        "BchannelHigh": ...
+      }
     """
-    try:
-        import numpy as np
-        import pandas as pd
+    if not hasattr(self, "_vac_dict_cache") or not isinstance(self._vac_dict_cache, dict):
+        raise RuntimeError("VAC 캐시(_vac_dict_cache)가 비어있습니다. TV에서 VAC JSON을 먼저 읽어와 주세요.")
 
-        required = ["R_Low", "R_High", "G_Low", "G_High", "B_Low", "B_High"]
-        for k in required:
-            if k not in lut_dict:
-                raise KeyError(f"lut_dict missing key: {k}")
+    out = copy.deepcopy(self._vac_dict_cache)
 
-        # ---- 1) 테이블 데이터프레임 준비 (4096 그대로) ----
-        df = pd.DataFrame({
-            "R_Low":  np.asarray(lut_dict["R_Low"],  dtype=np.float32),
-            "R_High": np.asarray(lut_dict["R_High"], dtype=np.float32),
-            "G_Low":  np.asarray(lut_dict["G_Low"],  dtype=np.float32),
-            "G_High": np.asarray(lut_dict["G_High"], dtype=np.float32),
-            "B_Low":  np.asarray(lut_dict["B_Low"],  dtype=np.float32),
-            "B_High": np.asarray(lut_dict["B_High"], dtype=np.float32),
-        })
+    channel_keys = (
+        "RchannelLow", "RchannelHigh",
+        "GchannelLow", "GchannelHigh",
+        "BchannelLow", "BchannelHigh",
+    )
 
-        # 길이가 4096이 아닐 경우, 4096으로 보정(선형보간)
-        def _ensure_4096(arr):
-            arr = np.asarray(arr, dtype=np.float32)
-            if arr.size == 4096:
-                return arr
-            if arr.size < 2:
-                # 너무 짧으면 0으로 채움
-                out = np.zeros(4096, dtype=np.float32)
-                if arr.size == 1:
-                    out[:] = arr[0]
-                return out
-            x_src = np.linspace(0, 1, arr.size)
-            x_dst = np.linspace(0, 1, 4096)
-            return np.interp(x_dst, x_src, arr).astype(np.float32)
+    for k in channel_keys:
+        if k not in new_lut_tvkeys:
+            # 전달 안 된 키는 기존 값 유지
+            continue
+        arr = np.asarray(new_lut_tvkeys[k])
+        if arr.shape != (4096,):
+            raise ValueError(f"{k}: 길이는 4096이어야 합니다. (현재 {arr.shape})")
+        # 정수 범위/형변환 보정 (0~4095 보장)
+        arr = np.clip(np.round(arr).astype(np.int32), 0, 4095)
+        out[k] = arr.tolist()
 
-        for col in df.columns:
-            df[col] = _ensure_4096(df[col].values)
-
-        # ---- 2) 차트 업데이트 ----
-        chart = self.vac_optimization_lut_chart  # XYChart 인스턴스
-        # 라인 메타: (열이름, 표시라벨, 색, 라인스타일)
-        series_meta = [
-            ("R_Low",  "R Low",  "red",   "--"),
-            ("R_High", "R High", "red",   "-"),
-            ("G_Low",  "G Low",  "green", "--"),
-            ("G_High", "G High", "green", "-"),
-            ("B_Low",  "B Low",  "blue",  "--"),
-            ("B_High", "B High", "blue",  "-"),
-        ]
-
-        # 표시용 다운샘플(성능/가독성). 1이면 4096점 그대로 그림
-        step = max(1, int(downsample_step))
-        xs_plot = np.arange(0, 4096, step, dtype=int)
-
-        for col, label, color, ls in series_meta:
-            ys = df[col].values
-            ys_plot = ys[::step]
-
-            # 라인이 없으면 생성
-            if label not in chart.lines:
-                chart.add_line(key=label, color=color, linestyle=ls, axis_index=0, label=label)
-
-            # 내부 버퍼 갱신
-            chart.data[label]['x'] = xs_plot.tolist()
-            chart.data[label]['y'] = ys_plot.astype(float).tolist()
-
-            # 라인 데이터 교체
-            line = chart.lines[label]
-            line.set_data(chart.data[label]['x'], chart.data[label]['y'])
-
-        # 축 리밋/뷰 갱신 + 리드로우
-        for ax in chart.axes:
-            ax.relim()
-            ax.autoscale_view()
-        chart.canvas.draw()
-
-        # ---- 3) 테이블 업데이트 ----
-        #   * 기존 메서드 그대로 활용 (여기가 여러분 UI 규격을 가장 잘 맞춤)
-        self.update_rgbchannel_table(df, self.ui.vac_table_rbgLUT_4)
-
-    except KeyError as e:
-        logging.error(f"[LUT Chart] KeyError: {e}")
-    except Exception as e:
-        logging.exception(e)
+    # 제어필드는 out에 이미 보존됨
+    return json.dumps(out, separators=(',', ':'))
