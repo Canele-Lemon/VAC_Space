@@ -1,63 +1,85 @@
-# ... 보정 계산 끝나고 high_256_new 만들었다고 가정
-new_lut_tvkeys = {
-    "RchannelLow":  self._vac_dict_cache["RchannelLow"],
-    "GchannelLow":  self._vac_dict_cache["GchannelLow"],
-    "BchannelLow":  self._vac_dict_cache["BchannelLow"],
-    "RchannelHigh": self._up256_to_4096(high_256_new["R_High"]),
-    "GchannelHigh": self._up256_to_4096(high_256_new["G_High"]),
-    "BchannelHigh": self._up256_to_4096(high_256_new["B_High"]),
-}
+1.
 
-# 캐시 원본을 인자로 넣어 JSON 생성 (캐시는 아직 건드리지 않음)
-vac_write_json = self.build_vacparam_std_format(self._vac_dict_cache, new_lut_tvkeys)
+class GammaChart:
+    def __init__(self, target_widget, multi_axes=False, num_axes=1):
+        # XYChart 인스턴스 생성
+        self.chart = XYChart(
+            target_widget=target_widget,
+            x_label='Gray Level',
+            y_label='Luminance (nit)',
+            x_range=(0, 255),
+            y_range=(0, 1),
+            x_tick=64,
+            y_tick=0.25,
+            title='Gamma Measurement',
+            multi_axes=multi_axes,
+            num_axes=num_axes,
+            layout='vertical',
+            share_x=True
+        )
+        self._init_lines()
 
-def _after_write(ok, msg):
-    logging.info(f"[VAC Write] {msg}")
-    if not ok:
-        return
-    # 쓰기 성공 → 재읽기
-    self._read_vac_from_tv(_after_read_back)
+    def _init_lines(self):
+        # 측정 조건별 선 추가
+        colors = {
+            'W': 'gray',
+            'R': 'red',
+            'G': 'green',
+            'B': 'blue'
+        }
 
-def _after_read_back(vac_dict_after):
-    if not vac_dict_after:
-        logging.error("보정 후 VAC 재읽기 실패")
-        return
-    # ✅ 여기서 캐시 갱신 (성공 케이스에만)
-    self._vac_dict_cache = vac_dict_after
-    # 차트용 변환 후 표시
-    lut_dict_plot = {k.replace("channel","_"): v
-                     for k, v in vac_dict_after.items() if "channel" in k}
-    self._update_lut_chart_and_table(lut_dict_plot)
-    # 다음 측정 세션 시작 등...
+        # 기본적으로 첫 번째 축에 선 추가
+        for angle in [0, 60]:
+            for data_label in ['data_1', 'data_2']:
+                for color_key, color_val in colors.items():
+                    key = f'{angle}deg_{color_key}_{data_label}'
+                    axis_index = 0  # 첫 번째 축
+                    self.chart.add_line(key, color=color_val, linestyle='--' if angle == 0 else '-', label=key, axis_index=axis_index)
 
-# TV에 적용
-self._write_vac_to_tv(vac_write_json, on_finished=_after_write)
+        # DQA용 선은 두 번째 축에 추가 (있다면)
+        for data_label in ['data_1', 'data_2']:
+            key = f'60deg_dqa_{data_label}'
+            dot_color = 'lightgray' if data_label == 'data_1' else 'darkgray'
+            axis_index = 1 if len(self.chart.axes) > 1 else 0
+            self.chart.add_line(key, color=dot_color, marker='*', linestyle='None', label=key, axis_index=axis_index)
+
+    def add_series(self, axis_index=0, label=None, color=None, linestyle='-'):
+        key = f"{label or 'series'}_{axis_index}_{len(self.chart.lines)}"
+        self.chart.add_line(key, color=color or 'black', linestyle=linestyle, label=label, axis_index=axis_index)
+        return self.chart.lines[key]
+
+    def autoscale(self):
+        # XYChart가 relim/autoscale_view를 update에서 하긴 하지만, 외부에서 강제 호출용
+        for ax in self.chart.axes:
+            ax.relim(); ax.autoscale_view()
+        self.canvas.draw_idle() if hasattr(self, 'canvas') else self.chart.canvas.draw_idle()
+
+    def draw(self):
+        self.chart.canvas.draw_idle()
+        
+    def update_from_measurement(self, color, lv, viewangle, data_label, vac_status):
+        try:
+            lv = float(lv)
+        except ValueError:
+            print(f"[GammaChart] Invalid luminance value: {lv}")
+            return
+
+        if color == 'DQA':
+            key = f'60deg_dqa_{data_label}'
+            x_data = [0, 128, 200, 255][:len(self.chart.data[key]['y']) + 1]
+        else:
+            key = f'{viewangle}deg_{color}_{data_label}'
+            from modules import op  # gray_levels 사용
+            x_data = op.gray_levels[:len(self.chart.data[key]['y']) + 1]
+
+        if key in self.chart.data and len(x_data) == len(self.chart.data[key]['y']) + 1:
+            self.chart.update(key, x_data[-1], lv)
+            label = f'Data #{data_label[-1]} {viewangle}° {"(DQA) " if color == "DQA" else ""}{vac_status}'
+            self.chart.set_label(key, label)
+
+CammaChart 클래스에는 다음과 같이 add_series가 있는데 잘 작성되었나요?
 
 
-import copy, json, numpy as np
+2. op.gray_levels_256은 정의되어있으니 걱정하지 않으셔도 됩니다.
 
-def build_vacparam_std_format(self, base_vac_dict: dict, new_lut_tvkeys: dict) -> str:
-    """
-    base_vac_dict: TV에서 읽은 원본 JSON(dict) - 제어필드 포함, TV 키명 그대로
-    new_lut_tvkeys: 교체할 6채널만 (TV 키명 그대로)
-      { "RchannelLow": [...4096], "RchannelHigh": [...],
-        "GchannelLow": [...],    "GchannelHigh": [...],
-        "BchannelLow": [...],    "BchannelHigh": [...] }
-    """
-    if not isinstance(base_vac_dict, dict):
-        raise ValueError("base_vac_dict must be dict (TV 원본 JSON)")
-
-    out = copy.deepcopy(base_vac_dict)
-
-    for k in (
-        "RchannelLow","RchannelHigh",
-        "GchannelLow","GchannelHigh",
-        "BchannelLow","BchannelHigh",
-    ):
-        if k in new_lut_tvkeys:
-            arr = np.asarray(new_lut_tvkeys[k])
-            if arr.shape != (4096,):
-                raise ValueError(f"{k}: 길이는 4096이어야 합니다. (현재 {arr.shape})")
-            out[k] = np.clip(np.round(arr).astype(np.int32), 0, 4095).tolist()
-
-    return json.dumps(out, separators=(',', ':'))
+3. build_vacparam_std_format을 통해 실제 tv에 적용되는 json 포맷으로 변환되는게 맞겠지요,,? 실제 json 포멧에는 다 tab으로 문자 밎 숫자가 띄어쓰기 되어 있어요.
