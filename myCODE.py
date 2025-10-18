@@ -1,241 +1,105 @@
-def build_vacparam_std_format(self, vac_cache_std: dict, lut_std: dict) -> str:
-    """
-    vac_cache_std : TV에서 읽어온 '원래 키' JSON dict (제어필드 포함)  ex) DRV_valc_..., RchannelLow...
-    lut_std       : {'R_Low','R_High','G_Low','G_High','B_Low','B_High'}  각각 4096 길이
-    return        : TV에 쓰기용 JSON 문자열 (원래 키 유지)
-    """
+# 필요한 모듈 (파일 상단 어딘가에)
+import os, json, numpy as np, tempfile, logging, platform, subprocess
+from collections import OrderedDict
+from PySide2.QtWidgets import QFileDialog, QMessageBox
+
+def _dev_zero_lut_from_file(self):
+    """원본 VAC JSON을 골라 6개 LUT 키만 0으로 덮어쓴 JSON을 임시파일로 저장하고 자동으로 엽니다."""
+    # 1) 원본 JSON 선택
+    fname, _ = QFileDialog.getOpenFileName(
+        self, "원본 VAC JSON 선택", "", "JSON Files (*.json);;All Files (*)"
+    )
+    if not fname:
+        return
+
     try:
-        # 0) LUT 길이 확인
-        req = ["R_Low","R_High","G_Low","G_High","B_Low","B_High"]
-        for k in req:
-            if k not in lut_std or len(lut_std[k]) != 4096:
-                raise ValueError(f"[build_vacparam_std_format] invalid {k} length={len(lut_std.get(k, []))}")
+        # 2) 순서 보존 로드
+        with open(fname, "r", encoding="utf-8") as f:
+            raw_txt = f.read()
+        vac_dict = json.loads(raw_txt, object_pairs_hook=OrderedDict)
 
-        # 1) 제어필드 유지 + LUT만 교체
-        out = dict(vac_cache_std)  # shallow copy
+        # 3) LUT 6키를 모두 0으로 구성 (4096 포인트)
+        zeros = np.zeros(4096, dtype=np.int32)
+        new_lut = {
+            "RchannelLow":  zeros,
+            "RchannelHigh": zeros,
+            "GchannelLow":  zeros,
+            "GchannelHigh": zeros,
+            "BchannelLow":  zeros,
+            "BchannelHigh": zeros,
+        }
 
-        # 원래 JSON 키로 매핑 (channel 이름 유지)
-        out["RchannelLow"]  = list(map(int, lut_std["R_Low"]))
-        out["RchannelHigh"] = list(map(int, lut_std["R_High"]))
-        out["GchannelLow"]  = list(map(int, lut_std["G_Low"]))
-        out["GchannelHigh"] = list(map(int, lut_std["G_High"]))
-        out["BchannelLow"]  = list(map(int, lut_std["B_Low"]))
-        out["BchannelHigh"] = list(map(int, lut_std["B_High"]))
+        # 4) 최종 JSON 문자열 생성 (키 순서 보존 + 탭 들여쓰기)
+        #    ※ build_vacparam_std_format 시그니처가 (base, new_lut)만 받는다면 pretty/use_tabs 인자를 빼세요.
+        try:
+            out_json = self.build_vacparam_std_format(
+                base_vac_dict=vac_dict,
+                new_lut_tvkeys=new_lut,
+                pretty=True,
+                use_tabs=True
+            )
+        except TypeError:
+            # pretty/use_tabs 매개변수가 없다면 기본 호출로 처리
+            out_json = self.build_vacparam_std_format(
+                base_vac_dict=vac_dict,
+                new_lut_tvkeys=new_lut
+            )
 
-        # 2) JSON 직렬화 (최소 공백, 한 줄)
-        return json.dumps(out, separators=(",", ":"))
+        # (선택) 캐시도 동일 내용으로 갱신
+        self._vac_dict_cache = json.loads(out_json, object_pairs_hook=OrderedDict)
+
+        # 5) 임시파일로 저장
+        fd, tmp_path = tempfile.mkstemp(prefix="VAC_zero_", suffix=".json")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(out_json)
+
+        # 6) 플랫폼별 기본 앱으로 자동 열기
+        try:
+            sysname = platform.system()
+            if sysname == "Windows":
+                os.startfile(tmp_path)
+            elif sysname == "Darwin":  # macOS
+                subprocess.call(["open", tmp_path])
+            else:  # Linux
+                subprocess.call(["xdg-open", tmp_path])
+        except Exception as e:
+            logging.warning(f"임시파일 자동 열기 실패: {e}")
+
+        QMessageBox.information(self, "완료", f"Zero-LUT JSON 임시파일 생성 및 열기 완료:\n{tmp_path}")
+
     except Exception as e:
         logging.exception(e)
-        return None
+        QMessageBox.critical(self, "오류", f"처리 중 오류: {e}")
         
         
-def _apply_vac_from_db_and_measure_on(self):
-    # (A) VAC ON 보장 (혹시 OFF라면 시도, 실패 시 종료)
-    st = self.check_VAC_status()
-    if not st.get("activated", False):
-        logging.info("[VAC] 현재 OFF → ON 전환 시도")
-        if not self._set_vac_active(True):
-            logging.error("[VAC] ON 전환 실패 — 최적화 종료")
-            return
+from collections import OrderedDict
 
-    # (B) DB에서 Panel_Maker + Frame_Rate 조합 VAC_Data 가져오기
-    panel = self.ui.vac_cmb_PanelMaker.currentText().strip()
-    fr    = self.ui.vac_cmb_FrameRate.currentText().strip()
-    vac_pk, vac_version, vac_data = self._fetch_vac_by_model(panel, fr)
-    if vac_data is None:
-        logging.error(f"[VAC] {panel}+{fr} 매칭 VAC Data 없음 — 종료")
-        return
+def build_vacparam_std_format(self, base_vac_dict: dict, new_lut_tvkeys: dict,
+                              pretty: bool = False, use_tabs: bool = True) -> str:
+    """
+    base_vac_dict: TV에서 읽은 '원본 키' 그대로의 dict(제어필드 포함, 키 순서 중요)
+    new_lut_tvkeys: 교체할 6채널만 TV 원본 키명으로 제공
+      {"RchannelLow":[4096], "RchannelHigh":[4096],
+       "GchannelLow":[4096], "GchannelHigh":[4096],
+       "BchannelLow":[4096], "BchannelHigh":[4096]}
+    """
+    if not isinstance(base_vac_dict, dict):
+        raise ValueError("base_vac_dict must be dict")
 
-    # (C) TV에 VAC 쓰기 → 읽기 → LUT/테이블 갱신 → ON 측정 세션 시작
-    def _after_write(ok, msg):
-        logging.info(f"[VAC Write] {msg}")
-        if not ok:
-            logging.error("[VAC] 쓰기 실패 — 종료")
-            return
-        self._read_vac_from_tv(lambda vac_dict: _after_read(vac_dict))  # 완료 콜백
+    # ✅ 순서 보존을 위해 OrderedDict로 얕은 복사
+    out = OrderedDict(base_vac_dict)
 
-    def _after_read(vac_dict):
-        if not vac_dict:
-            logging.error("[VAC] 읽기 실패 — 종료")
-            return
+    for k in ("RchannelLow","RchannelHigh","GchannelLow","GchannelHigh","BchannelLow","BchannelHigh"):
+        if k in new_lut_tvkeys:
+            arr = np.asarray(new_lut_tvkeys[k])
+            if arr.shape != (4096,):
+                raise ValueError(f"{k}: 길이는 4096이어야 합니다. (현재 {arr.shape})")
+            out[k] = np.clip(np.round(arr).astype(np.int32), 0, 4095).tolist()
 
-        # 1) TV 원본 JSON 그 상태 그대로 캐시(제어필드 포함)
-        self._vac_cache_std = vac_dict
+    if not pretty:
+        return json.dumps(out, ensure_ascii=False, separators=(',', ':'))
 
-        # 2) 차트/테이블 갱신용 키로 변환(이 화면에서만 쓸 임시 dict)
-        #    "RchannelLow" → "R_Low" 처럼 키 이름만 치환해서 넘김
-        vac_lut_dict = {}
-        for k, v in vac_dict.items():
-            if k.endswith("channelLow"):
-                vac_lut_dict[k[0] + "_Low"] = v   # 'RchannelLow' -> 'R_Low'
-            elif k.endswith("channelHigh"):
-                vac_lut_dict[k[0] + "_High"] = v  # 'GchannelHigh' -> 'G_High'
-        self._update_lut_chart_and_table(vac_lut_dict)
-
-        # 3) VAC ON 측정 세션
-        gamma_lines_on = {
-            'main': {p: self.vac_optimization_gamma_chart.add_series(axis_index=0, label=f"VAC ON - {p}")
-                     for p in ('white', 'red', 'green', 'blue')},
-            'sub':  {p: self.vac_optimization_gamma_chart.add_series(axis_index=1, label=f"VAC ON - {p}")
-                     for p in ('white', 'red', 'green', 'blue')},
-        }
-        profile_on = SessionProfile(
-            legend_text="VAC ON",
-            cie_label="data_2",
-            table_cols={"lv":4, "cx":5, "cy":6, "gamma":7, "d_cx":8, "d_cy":9, "d_gamma":10},
-            ref_store=self._off_store
-        )
-
-        def _after_on(store_on):
-            self._on_store = store_on
-            if self._check_spec_pass(self._off_store, self._on_store):
-                logging.info("✅ 스펙 통과 — 종료")
-                return
-            # (D) 반복 보정 시작
-            self._run_correction_iteration(iter_idx=1)
-
-        self.start_viewing_angle_session(
-            profile=profile_on, gamma_lines=gamma_lines_on,
-            gray_levels=getattr(op, "gray_levels_256", list(range(256))),
-            patterns=('white','red','green','blue'),
-            colorshift_patterns=op.colorshift_patterns,
-            first_gray_delay_ms=3000, cs_settle_ms=1000,
-            on_done=_after_on
-        )
-
-    # (D) 쓰기 시작
-    self._write_vac_to_tv(vac_data, on_finished=_after_write)
-    
-def _run_correction_iteration(self, iter_idx, max_iters=2, lambda_ridge=1e-3):
-    logging.info(f"[CORR] iteration {iter_idx} start")
-
-    # 1) 현재 TV LUT : 캐시에서 꺼냄(원래키)
-    if not hasattr(self, "_vac_cache_std") or not self._vac_cache_std:
-        logging.error("[CORR] VAC 캐시 없음 — 직전 읽기가 필요합니다.")
-        return
-    vac_src = self._vac_cache_std
-
-    # 2) 4096→256 다운샘플 (High만 수정, Low 고정)
-    #    원래 키 → 표준 LUT 키로 꺼내 계산
-    lut_cur_std = {
-        "R_Low":  np.asarray(vac_src["RchannelLow"],  dtype=np.float32),
-        "R_High": np.asarray(vac_src["RchannelHigh"], dtype=np.float32),
-        "G_Low":  np.asarray(vac_src["GchannelLow"],  dtype=np.float32),
-        "G_High": np.asarray(vac_src["GchannelHigh"], dtype=np.float32),
-        "B_Low":  np.asarray(vac_src["BchannelLow"],  dtype=np.float32),
-        "B_High": np.asarray(vac_src["BchannelHigh"], dtype=np.float32),
-    }
-
-    high_256 = {ch: self._down4096_to_256(lut_cur_std[ch]) for ch in ['R_High','G_High','B_High']}
-    # low_256 = {ch: self._down4096_to_256(lut_cur_std[ch]) for ch in ['R_Low','G_Low','B_Low']}  # 계산엔 필요없지만 참고용
-
-    # 3) Δ 목표(white/main 기준)
-    d_targets = self._build_delta_targets_from_stores(self._off_store, self._on_store)
-
-    # 4) 결합 선형계 : [wG*Aγ; wC*A_Cx; wC*A_Cy] Δh = - [wG*Δγ; wC*ΔCx; wC*ΔCy]
-    wG, wC = 1.0, 1.0
-    A_cat = np.vstack([wG*self.A_Gamma, wC*self.A_Cx, wC*self.A_Cy]).astype(np.float32)
-    b_cat = -np.concatenate([wG*d_targets["Gamma"], wC*d_targets["Cx"], wC*d_targets["Cy"]]).astype(np.float32)
-
-    mask = np.isfinite(b_cat)
-    A_use = A_cat[mask, :]
-    b_use = b_cat[mask]
-
-    ATA = A_use.T @ A_use
-    rhs = A_use.T @ b_use
-    ATA[np.diag_indices_from(ATA)] += lambda_ridge
-    delta_h = np.linalg.solve(ATA, rhs).astype(np.float32)
-
-    # 5) Δcurve = Phi * Δh_channel → High 256 보정
-    K    = len(self._jac_artifacts["knots"])
-    dh_R = delta_h[0:K]; dh_G = delta_h[K:2*K]; dh_B = delta_h[2*K:3*K]
-    Phi  = self._stack_basis(self._jac_artifacts["knots"])  # (256,K)
-    corr_R = Phi @ dh_R; corr_G = Phi @ dh_G; corr_B = Phi @ dh_B
-
-    high_256_new = {
-        "R_High": (high_256["R_High"] + corr_R).astype(np.float32),
-        "G_High": (high_256["G_High"] + corr_G).astype(np.float32),
-        "B_High": (high_256["B_High"] + corr_B).astype(np.float32),
-    }
-
-    # 6) 단조/클립 → 12bit 업샘플
-    for ch in high_256_new:
-        self._enforce_monotone(high_256_new[ch])
-        high_256_new[ch] = np.clip(high_256_new[ch], 0, 4095)
-
-    lut_new_std = {
-        "R_Low":  lut_cur_std["R_Low"].copy(),  # Low는 유지
-        "G_Low":  lut_cur_std["G_Low"].copy(),
-        "B_Low":  lut_cur_std["B_Low"].copy(),
-        "R_High": self._up256_to_4096(high_256_new["R_High"]),
-        "G_High": self._up256_to_4096(high_256_new["G_High"]),
-        "B_High": self._up256_to_4096(high_256_new["B_High"]),
-    }
-
-    # 7) TV 쓰기용 JSON 구성(제어필드는 캐시 유지)
-    vac_json_write = self.build_vacparam_std_format(self._vac_cache_std, lut_new_std)
-    if not vac_json_write:
-        logging.error("[CORR] VAC JSON build 실패 — 종료")
-        return
-
-    # 8) TV에 적용 → 읽기 → 차트 갱신
-    def _after_write(ok, msg):
-        logging.info(f"[CORR Write] {msg}")
-        if not ok:
-            logging.error("[CORR] 쓰기 실패 — 종료")
-            return
-        self._read_vac_from_tv(lambda vac_dict: _after_read(vac_dict))
-
-    def _after_read(vac_dict):
-        if not vac_dict:
-            logging.error("[CORR] 읽기 실패 — 종료")
-            return
-
-        # 최신 캐시로 교체
-        self._vac_cache_std = vac_dict
-
-        # 차트용 키 변환해서 갱신
-        vac_lut_dict = {}
-        for k, v in vac_dict.items():
-            if k.endswith("channelLow"):
-                vac_lut_dict[k[0] + "_Low"] = v
-            elif k.endswith("channelHigh"):
-                vac_lut_dict[k[0] + "_High"] = v
-        self._update_lut_chart_and_table(vac_lut_dict)
-
-        # 9) 재측정 (CORR i)
-        label = f"VAC ON (CORR{iter_idx})"
-        gamma_lines_corr = {
-            'main': {p: self.vac_optimization_gamma_chart.add_series(axis_index=0, label=f"{label} - {p}")
-                     for p in ('white','red','green','blue')},
-            'sub':  {p: self.vac_optimization_gamma_chart.add_series(axis_index=1, label=f"{label} - {p}")
-                     for p in ('white','red','green','blue')},
-        }
-        profile_corr = SessionProfile(
-            legend_text=label,
-            cie_label=f"data_{iter_idx+2}",
-            table_cols={"lv":4, "cx":5, "cy":6, "gamma":7, "d_cx":8, "d_cy":9, "d_gamma":10},
-            ref_store=self._off_store
-        )
-
-        def _after_corr(store_corr):
-            self._on_store = store_corr  # 최신으로 갱신
-            if self._check_spec_pass(self._off_store, self._on_store):
-                logging.info("✅ 스펙 통과 — 종료")
-                return
-            if iter_idx >= max_iters:
-                logging.info("ℹ️ 최대 보정 횟수 도달 — 종료")
-                return
-            # 다음 라운드
-            self._run_correction_iteration(iter_idx+1, max_iters=max_iters)
-
-        self.start_viewing_angle_session(
-            profile=profile_corr, gamma_lines=gamma_lines_corr,
-            gray_levels=getattr(op, "gray_levels_256", list(range(256))),
-            patterns=('white','red','green','blue'),
-            colorshift_patterns=op.colorshift_patterns,
-            first_gray_delay_ms=3000, cs_settle_ms=1000,
-            on_done=_after_corr
-        )
-
-    self._write_vac_to_tv(vac_json_write, on_finished=_after_write)
+    txt = json.dumps(out, ensure_ascii=False, indent=2)
+    if use_tabs:
+        txt = txt.replace("\n  ", "\n\t")
+    return txt
