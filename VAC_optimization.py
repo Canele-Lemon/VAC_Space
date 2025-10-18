@@ -70,6 +70,25 @@
         logging.info(f"[Jacobian] {comp} A 행렬 shape: {A.shape}") # (256, 3K)
         return A
     
+    def _set_vac_active(self, enable: bool) -> bool:
+        try:
+            self.send_command(self.ser_tv, 's')
+            cmd = (
+                f"luna-send -n 1 -f "
+                f"luna://com.webos.service.panelcontroller/setVACActive '{{\"OnOff\":{str(enable).lower()}}}'"
+            )
+            self.send_command(self.ser_tv, cmd)
+            self.send_command(self.ser_tv, 'exit')
+            time.sleep(0.5)
+            st = self.check_VAC_status()
+            return bool(st.get("activated", False)) == enable
+        except Exception as e:
+            logging.error(f"VAC {'ON' if enable else 'OFF'} 전환 실패: {e}")
+            return False
+        
+    def build_vacparam_std_format(lut):
+        
+    
     def _run_off_baseline_then_on(self):
         # 감마 라인 준비(“VAC OFF (Ref.)”)
         gamma_lines_off = {
@@ -87,6 +106,23 @@
 
         def _after_off(store_off):
             self._off_store = store_off
+            st = self.check_VAC_status()
+            if not st.get("activated, False"):
+                logging.info("현재 VAC OFF 상태입니다. VAC ON 전환 시도합니다...")
+                try:
+                    self.send_command(self.ser_tv, 's')
+                    cmd = 'luna-send -n 1 -f luna://com.webos.service.panelcontroller/setVACActive \'{"OnOff":True}\''
+                    self.send_command(self.ser_tv, cmd)
+                    self.send_command(self.ser_tv, 'exit')
+                except Exception as e:
+                    logging.error(f"VAC ON 전환 중 오류 발생: {e}")
+                st2 = self.check_VAC_status()
+                if st2.get("activated", False):
+                    logging.info("VAC ON 전환 성공")
+                else:
+                    logging.warning("VAC ON 전환 실패로 보입니다. 그래도 VAC 데이터 적용 진행")
+            else:
+                logging.debug("이미 VAC ON 상태. VAC 데이터 적용으로 바로 진행")
             # (3) DB에서 모델/주사율에 맞는 VAC Data 적용 → 읽기 → LUT 차트 갱신
             self._apply_vac_from_db_and_measure_on()
 
@@ -104,53 +140,59 @@
         fr    = self.ui.vac_cmb_FrameRate.currentText().strip()
         vac_pk, vac_version, vac_data = self._fetch_vac_by_model(panel, fr)
         if vac_data is None:
-            logging.error("매칭되는 VAC Data가 없습니다.")
+            logging.error(f"{panel}+{fr} 조합으로 매칭되는 VAC Data가 없습니다.")
             return
-
-        # (B) TV에 적용 → 읽기 (기존 Thread 재사용 또는 직접 RPC)
-        ok = self._write_vac_to_tv(vac_data)
-        if not ok:
-            logging.error("VAC Data 쓰기 실패")
-        read_back = self._read_vac_from_tv()
-        if read_back:
-            self._update_lut_chart_and_table(read_back)  # self.vac_optimization_lut_chart, self.ui.vac_table_rbgLUT_4
-
-        # (C) VAC ON 측정
-        gamma_lines_on = {
-            'main': {p: self.vac_optimization_gamma_chart.add_series(axis_index=0, label="VAC ON") for p in ('white','red','green','blue')},
-            'sub':  {p: self.vac_optimization_gamma_chart.add_series(axis_index=1, label="VAC ON") for p in ('white','red','green','blue')},
-        }
-        profile_on = SessionProfile(
-            legend_text="VAC ON",
-            cie_label="data_2",
-            table_cols={"lv":4, "cx":5, "cy":6, "gamma":7, "d_cx":8, "d_cy":9, "d_gamma":10},
-            ref_store=self._off_store
-        )
-
+        
+        def _after_write(ok, msg):
+            logging.info(f"[VAC Write] {msg}")
+            if not ok:
+                return
+            self._read_vac_from_tv(lambda vac: _after_read(vac))
+        
+        def _after_read(vac_dict):
+            if vac_dict:
+                self._lut_cache_tv = vac_dict
+                self._update_lut_chart_and_table(vac_dict)
+            # VAC ON 측정 시작
+            gamma_lines_on = {
+            'main': {p: self.vac_optimization_gamma_chart.add_series(axis_index=0, label="VAC ON") 
+                     for p in ('white','red','green','blue')},
+            'sub':  {p: self.vac_optimization_gamma_chart.add_series(axis_index=1, label="VAC ON") 
+                     for p in ('white','red','green','blue')},
+            }
+            profile_on = SessionProfile(
+                legend_text="VAC ON",
+                cie_label="data_2",
+                table_cols={"lv":4, "cx":5, "cy":6, "gamma":7, "d_cx":8, "d_cy":9, "d_gamma":10},
+                ref_store=self._off_store
+            )
+            self.start_viewing_angle_session(
+                profile=profile_on, gamma_lines=gamma_lines_on,
+                gray_levels=op.gray_levels, patterns=('white','red','green','blue'),
+                colorshift_patterns=op.colorshift_patterns,
+                first_gray_delay_ms=3000, cs_settle_ms=1000,
+                on_done=_after_on
+            )
+            
         def _after_on(store_on):
             self._on_store = store_on
             if self._check_spec_pass(self._off_store, self._on_store):
-                logging.info("스펙 통과 — 종료")
+                logging.info("축하합니다! 스펙 통과 — 종료")
                 return
             # (D) 보정 반복 시작
             self._run_correction_iteration(iter_idx=1)
-
-        self.start_viewing_angle_session(
-            profile=profile_on, gamma_lines=gamma_lines_on,
-            gray_levels=list(range(256)), patterns=('white','red','green','blue'),
-            colorshift_patterns=op.colorshift_patterns,
-            first_gray_delay_ms=3000, cs_settle_ms=1000,
-            on_done=_after_on
-        )
+                        
+        # (B) VAC Data TV에 적용 → 읽기
+        self._write_vac_to_tv(vac_data, on_finished=_after_write)
         
     def _run_correction_iteration(self, iter_idx, max_iters=2, lambda_ridge=1e-3):
         logging.info(f"[CORR] iteration {iter_idx} start")
 
-        # 1) 현재 TV LUT 읽기
-        lut_cur = self._read_vac_from_tv()
-        if lut_cur is None:
-            logging.error("현재 LUT 읽기 실패")
+        # 1) 현재 TV LUT 읽기 → 캐시 우선
+        if self._lut_cache_tv is None:
+            logging.warning("[CORR] LUT 캐시 없음 → 직전 읽기 결과가 필요합니다.")
             return
+        lut_cur = self._lut_cache_tv
 
         # 2) 4096→256 다운샘플 (High만 수정, Low 고정)
         high_256 = {ch: self._down4096_to_256(lut_cur[ch]) for ch in ['R_High','G_High','B_High']}
@@ -161,14 +203,9 @@
         d_targets = self._build_delta_targets_from_stores(self._off_store, self._on_store)
         # d_targets: {"Gamma":(256,), "Cx":(256,), "Cy":(256,)}
 
-        # 4) 자코비안 A (Gamma/Cx/Cy 각각 256 x (3K))
-        A_G = self._build_A_from_artifacts(self._jac_artifacts, "Gamma")  # (256, 3K)
-        A_Cx = self._build_A_from_artifacts(self._jac_artifacts, "Cx")
-        A_Cy = self._build_A_from_artifacts(self._jac_artifacts, "Cy")
-
-        # 5) 결합 선형계: [wG*A_G; wC*A_Cx; wC*A_Cy] Δh = - [wG*ΔGamma; wC*ΔCx; wC*ΔCy]
+        # 4) 결합 선형계: [wG*A_Gamma; wC*A_Cx; wC*A_Cy] Δh = - [wG*ΔGamma; wC*ΔCx; wC*ΔCy]
         wG, wC = 1.0, 1.0
-        A_cat = np.vstack([wG*A_G, wC*A_Cx, wC*A_Cy]).astype(np.float32)
+        A_cat = np.vstack([wG*self.A_Gamma, wC*self.A_Cx, wC*self.A_Cy]).astype(np.float32)
         b_cat = -np.concatenate([wG*d_targets["Gamma"], wC*d_targets["Cx"], wC*d_targets["Cy"]]).astype(np.float32)
 
         # 유효치 마스크(특히 gamma의 NaN)
@@ -176,15 +213,15 @@
         A_use = A_cat[mask, :]
         b_use = b_cat[mask]
 
-        # 6) 리지 해(Δh) 구하기 (3K-dim: [Rknots, Gknots, Bknots])
+        # 5) 리지 해(Δh) 구하기 (3K-dim: [Rknots, Gknots, Bknots])
         #    (A^T A + λI) Δh = A^T b
         ATA = A_use.T @ A_use
         rhs = A_use.T @ b_use
         ATA[np.diag_indices_from(ATA)] += lambda_ridge
         delta_h = np.linalg.solve(ATA, rhs).astype(np.float32)
 
-        # 7) Δcurve = Phi * Δh_channel 로 256-포인트 보정곡선 만들고 High에 적용
-        K = len(self._jac_artifacts["knots"])
+        # 6) Δcurve = Phi * Δh_channel 로 256-포인트 보정곡선 만들고 High에 적용
+        K    = len(self._jac_artifacts["knots"])
         dh_R = delta_h[0:K]; dh_G = delta_h[K:2*K]; dh_B = delta_h[2*K:3*K]
         Phi  = self._stack_basis(self._jac_artifacts["knots"])  # (256,K)
         corr_R = Phi @ dh_R; corr_G = Phi @ dh_G; corr_B = Phi @ dh_B
@@ -195,21 +232,25 @@
             "B_High": (high_256["B_High"] + corr_B).astype(np.float32),
         }
 
-        # 8) 경계/단조/클램프 → 12bit 업샘플
+        # 7) High 경계/단조/클램프 → 12bit 업샘플 & Low는 유지하여 "표준 dict 구성"
         for ch in high_256_new:
             self._enforce_monotone(high_256_new[ch])
             high_256_new[ch] = np.clip(high_256_new[ch], 0, 4095)
 
-        lut_new = {}
-        # Low는 고정
+        lut_new_std = {}
+        # Low는 처음값 유지
         for ch in ['R_Low','G_Low','B_Low']:
-            lut_new[ch] = lut_cur[ch].copy()
-        # High는 보정 결과로 교체(4096 업샘플)
+            lut_new_std[ch] = np.array(lut_cur[ch], dtype=np.float32).copy()
+        # High는 보정 결과로 교체
         for ch in ['R_High','G_High','B_High']:
-            lut_new[ch] = self._up256_to_4096(high_256_new[ch])
-
+            lut_new_std[ch] = self._up256_to_4096(high_256_new[ch])
+            
+        vac_data_new = self.build_vacparam_std_format(lut_new_std)
+        
+            
+            
         # 9) TV에 적용 → 읽기 → LUT 차트 갱신
-        ok = self._write_vac_to_tv(lut_new)
+        ok = self._write_vac_to_tv(vac_data_new)
         if not ok:
             logging.error("보정 LUT 쓰기 실패")
         read_back = self._read_vac_from_tv()
@@ -229,23 +270,23 @@
             ref_store=self._off_store
         )
 
-    def _after_corr(store_corr):
-        self._on_store = store_corr  # 최신을 갱신
-        if self._check_spec_pass(self._off_store, self._on_store):
-            logging.info("스펙 통과 — 종료")
-            return
-        if iter_idx >= max_iters:
-            logging.info("최대 보정 횟수 도달 — 종료")
-            return
-        self._run_correction_iteration(iter_idx+1, max_iters=max_iters)
+        def _after_corr(store_corr):
+            self._on_store = store_corr  # 최신을 갱신
+            if self._check_spec_pass(self._off_store, self._on_store):
+                logging.info("스펙 통과 — 종료")
+                return
+            if iter_idx >= max_iters:
+                logging.info("최대 보정 횟수 도달 — 종료")
+                return
+            self._run_correction_iteration(iter_idx+1, max_iters=max_iters)
 
-        self.start_viewing_angle_session(
-            profile=profile_corr, gamma_lines=gamma_lines_corr,
-            gray_levels=list(range(256)), patterns=('white','red','green','blue'),
-            colorshift_patterns=op.colorshift_patterns,
-            first_gray_delay_ms=3000, cs_settle_ms=1000,
-            on_done=_after_corr
-        )
+            self.start_viewing_angle_session(
+                profile=profile_corr, gamma_lines=gamma_lines_corr,
+                gray_levels=list(range(256)), patterns=('white','red','green','blue'),
+                colorshift_patterns=op.colorshift_patterns,
+                first_gray_delay_ms=3000, cs_settle_ms=1000,
+                on_done=_after_corr
+            )
     
     def _check_spec_pass(self, off_store, on_store, thr_gamma=0.05, thr_c=0.003):
     # white/main만 기준
@@ -298,8 +339,7 @@
             d[k] = np.nan_to_num(d[k], nan=0.0).astype(np.float32)
         return d
     
-    def start_viewing_angle_session(
-        self,
+    def start_viewing_angle_session(self,
         profile: SessionProfile,
         gamma_lines: dict,
         gray_levels=None,
@@ -313,7 +353,7 @@
             # gray_levels = list(range(256))
             gray_levels = op.gray_levels
         if colorshift_patterns is None:
-            colorshift_patterns = op.colorshift_patterns  # 기존 상수 사용
+            colorshift_patterns = op.colorshift_patterns
 
         store = {
             'gamma': {'main': {p:{} for p in patterns}, 'sub': {p:{} for p in patterns}},
@@ -388,7 +428,7 @@
         def handle(role, res):
             s['_gamma'][role] = res
             got_main = 'main' in s['_gamma']
-            got_sub = ('sub') in s ['_gamma'] or (self.sub_instrument_cls is None)
+            got_sub = ('sub') in s['_gamma'] or (self.sub_instrument_cls is None)
             if got_main and got_sub:
                 self._consume_gamma_pair(pattern, gray, s['_gamma'])
                 s['g_idx'] += 1
@@ -448,7 +488,7 @@
         def handle(role, res):
             s['_cs'][role] = res
             got_main = 'main' in s['_cs']
-            got_sub = ('sub') in s ['_cs'] or (self.sub_instrument_cls is None)
+            got_sub = ('sub') in s['_cs'] or (self.sub_instrument_cls is None)
             if got_main and got_sub:
                 self._consume_colorshift_pair(patch_name, s['_cs'])
                 s['cs_idx'] += 1
@@ -456,12 +496,12 @@
 
         if self.main_instrument_cls:
             self.main_measure_thread = MeasureThread(self.main_instrument_cls, 'main')
-            self.main_measure_thread.measure_completed.connect(lambda r: handle('main', r))
+            self.main_measure_thread.measure_completed.connect(handle)
             self.main_measure_thread.start()
 
         if self.sub_instrument_cls:
             self.sub_measure_thread = MeasureThread(self.sub_instrument_cls, 'sub')
-            self.sub_measure_thread.measure_completed.connect(lambda r: handle('sub', r))
+            self.sub_measure_thread.measure_completed.connect(handle)
             self.sub_measure_thread.start()
 
     def _consume_colorshift_pair(self, patch_name, results):
@@ -578,40 +618,62 @@
         """
         DB: W_VAC_Application_Status에서 Panel_Maker/Frame_Rate 매칭 → VAC_Info_PK 얻고
             W_VAC_Info.PK=VAC_Info_PK → VAC_Data 읽어서 반환
-        반환: (pk, vac_version, vac_data_dict)  또는 (None,None,None)
+        반환: (pk, vac_version, vac_data)  또는 (None, None, None)
         """
         try:
-            # TODO: 실제 DB 조회 코드로 교체
-            pk = ...; vac_version = ...; vac_data = ...  # dict with keys: R_Low,R_High,G_Low, ...
-            return pk, vac_version, vac_data
+            db_conn= pymysql.connect(**config.conn_params)
+            cursor = db_conn.cursor()
+
+            cursor.execute("""
+                SELECT `VAC_Info_PK`
+                FROM `W_VAC_Application_Status` 
+                WHERE Panel_Maker = %s AND Frame_Rate = %s
+            """, (panel_maker, frame_rate))
+
+            result = cursor.fetchone()
+
+            if not result:
+                logging.error("No VAC_Info_PK found for given Panel Maker/Frame Rate")
+                return None, None, None
+            
+            vac_info_pk = result[0]          
+            logging.debug(f"VAC_Info_PK = {vac_info_pk}")
+
+            cursor.execute("""
+                SELECT `VAC_Version`, `VAC_Data`
+                FROM `W_VAC_Info`
+                WHERE `PK` = %s
+            """, (vac_info_pk,))
+
+            vac_row = cursor.fetchone()
+
+            if not vac_row:
+                logging.error(f"No VAC information found for PK={vac_info_pk}")
+                return None, None, None
+
+            vac_version = vac_row[0]
+            vac_data = vac_row[1]
+            
+            return vac_info_pk, vac_version, vac_data
+        
         except Exception as e:
             logging.exception(e)
             return None, None, None
+        
+        finally:
+            db_conn.close()
 
-    def _write_vac_to_tv(self, vac_data):
-        """
-        이미 쓰시던 WriteVACdataThread/명령 기반으로 연결.
-        vac_data(dict): { 'R_Low':[4096], 'R_High':[4096], ... }
-        """
-        try:
-            # TODO: 실제 쓰기
-            return True
-        except Exception as e:
-            logging.exception(e)
-            return False
+    def _write_vac_to_tv(self, vac_data, on_finished):
+        t = WriteVACdataThread(parent=self, ser_tv=self.ser_tv,
+                                vacdataName=self.vacdataName, vacdata_loaded=vac_data)
+        t.write_finished.connect(lambda ok, msg: on_finished(ok, msg))
+        t.start()
 
-    def _read_vac_from_tv(self):
-        """
-        기존 ReadVACdataThread 결과와 동일 구조로 반환
-        return dict or None
-        """
-        try:
-            # TODO: 실제 읽기
-            # 예시 keys: {'R_Low':[4096], 'R_High':[4096], 'G_Low':...}
-            return ...
-        except Exception as e:
-            logging.exception(e)
-            return None
+    def _read_vac_from_tv(self, on_finished):
+        t = ReadVACdataThread(parent=self, ser_tv=self.ser_tv, vacdataName=self.vacdataName)
+        t.data_read.connect(lambda data: on_finished(data))
+        t.error_occurred.connect(lambda err: (logging.error(err), on_finished(None)))
+        t.start()
 
     def _update_lut_chart_and_table(self, lut_dict):
         """
@@ -638,11 +700,15 @@
     def start_VAC_optimization(self):
         """
         =============== 메인 엔트리: 버튼 이벤트 연결용 ===============
-        전체 플로우:
-        1) VAC OFF 보장 → 측정(OFF baseline) + UI 업데이트
-        2) DB에서 모델/주사율 매칭 VAC Data 가져와 TV에 적용(ON) → 측정(ON 현재) + UI 업데이트
+        전체 Flow:
+        1) TV setting > VAC OFF → 측정(OFF baseline) + UI 업데이트
+            - 
+
+        2) TV setting > VAC OFF → DB에서 모델/주사율 매칭 VAC Data 가져와 TV에 writing → 측정(ON 현재) + UI 업데이트
+
         3) 스펙 확인 → 통과면 종료
-        4) 미통과면 자코비안 기반 보정(256기준) → 4096 보간 반영 → TV 적용 → 재측정 → 스펙 재확인
+        
+        4) 미통과면 자코비안 기반 보정(256기준) → 4096 보간 반영 → 예측모델 검증 → OK면 → TV 적용 → 재측정 → 스펙 재확인
         5) (필요 시 반복 2~3회만)
         """
         try:
@@ -650,7 +716,7 @@
             artifacts = self._load_jacobian_artifacts()
             self._jac_artifacts = artifacts
             print("======================= A 행렬 shape 확인 =======================")
-            self.A_Gamma = self._build_A_from_artifacts(artifacts, "Gamma")
+            self.A_Gamma = self._build_A_from_artifacts(artifacts, "Gamma")   # (256, 3K)
             self.A_Cx    = self._build_A_from_artifacts(artifacts, "Cx")
             self.A_Cy    = self._build_A_from_artifacts(artifacts, "Cy")
 
