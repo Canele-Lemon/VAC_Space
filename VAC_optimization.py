@@ -1,46 +1,342 @@
-1. self.vac_optimization_gamma_chart: main 계측기 (inst1)과 sub 계측기 (inst2)로 측정한 정면/측면의 gray level에 따른 휘도 데이터가 업데이트 되는 차트입니다.(위/아래) VAC OFF 데이터는 항상 ref로 남아있으며 VAC ON, 즉 lut 보정 후 측정 데이터는 기존 VAC ON line을 reset하고 새로 업데이트됩니다.
-2. self.vac_optimization_cie1976_chart: main 계측기 (inst1)과 sub 계측기 (inst2)로 측정한 정면/측면의 맥베스 패턴에 따른 uv prime 좌표가 업데이트 되는 차트입니다. VAC OFF 데이터는 항상 ref로 남아있으며 VAC ON, 즉 lut 보정 후 측정 데이터는 기존 VAC ON point를 reset하고 새로 업데이트됩니다.
-3. self.vac_optimization_lut_chart: tv에 writing되는 lut 차트입니다. 처음 db fetch를 통해 받아온 lut를 그릴 때, lut 보정 후 보정된 lut를 보여줄 때마다 원래 그려져 있던 line이 reset되고 새로 업데이트됩니다.
-각 그래프 그리는 클래스를 수정해도 되니깐 좀 더 적절하게 수정해주세요. 지금 너무 복잡해서 코드가 이해가 안됩니다.
-start_VAC_optimization에 필요한 것들만 업데이트될 수 있는 방향으로 수정하되기를 원합니다.
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+import matplotlib.pyplot as plt
+import modules.chart_style as cs
+
+class GammaChart:
+    """
+    두 축(0° main / 60° sub), OFF는 참조로 유지, ON은 런마다 reset_on().
+    CIE1976 차트와 동일한 서식(cs.MatFormat_*) 사용.
+    """
+    _PAT_COLORS = {'white':'gray', 'red':'red', 'green':'green', 'blue':'blue'}
+
+    def __init__(self, target_widget, title='Gamma',
+                 left=0.10, right=0.95, top=0.95, bottom=0.10,
+                 x_tick=64, y_tick=None):
+        # 두 개 축 (세로), x 공유
+        self.fig, (self.ax_main, self.ax_sub) = plt.subplots(2, 1, sharex=True)
+        self.canvas = FigureCanvas(self.fig)
+        target_widget.addWidget(self.canvas)
+        self.fig.subplots_adjust(hspace=0.0)
+
+        # ── 공통 서식: CIE1976과 동일한 cs.* 사용 ──
+        cs.MatFormat_ChartArea(self.fig, left=left, right=right, top=top, bottom=bottom)
+        for i, (ax, atitle) in enumerate(((self.ax_main, 'Gamma'),
+                                          (self.ax_sub,  'Gamma'))):
+            cs.MatFormat_FigArea(ax)
+            # (1) 제목 표시: 위쪽 축만
+            if i == 0:
+                cs.MatFormat_ChartTitle(ax, title=atitle, color='#595959')
+            else:
+                cs.MatFormat_ChartTitle(ax, title=None)  # 아래쪽 제목 제거
+
+            # (2) x축 제목 및 눈금: 아래쪽 축만
+            if i == 1:
+                cs.MatFormat_AxisTitle(ax, axis_title='Gray Level', axis='x')
+                ax.tick_params(axis='x', which='both', labelbottom=True)  # 눈금 표시
+            else:
+                cs.MatFormat_AxisTitle(ax, axis_title='', axis='x')  # 숨김
+                ax.tick_params(axis='x', which='both', labelbottom=False)  # 눈금 숨김
+
+            # (3) y축 설정
+            cs.MatFormat_AxisTitle(ax, axis_title='Luminance (nit)', axis='y')
+            cs.MatFormat_Axis(ax, min_val=0, max_val=255, tick_interval=x_tick, axis='x')
+            cs.MatFormat_Axis(ax, min_val=0, max_val=1, tick_interval=0.25, axis='y')
+            cs.MatFormat_Gridline(ax, linestyle='--')
+
+        # ── 시리즈: OFF/ON × main/sub × 패턴 ──
+        self._lines = {}
+        self._data  = {}
+        for role, ax in (('main', self.ax_main), ('sub', self.ax_sub)):
+            for pat, col in self._PAT_COLORS.items():
+                # OFF(점선)
+                k_off = ('OFF', role, pat)
+                ln_off, = ax.plot([], [], linestyle='--', color=col, label=f'OFF {role} {pat}')
+                self._lines[k_off] = ln_off; self._data[k_off] = {'x':[], 'y':[]}
+                # ON(실선)
+                k_on = ('ON', role, pat)
+                ln_on, = ax.plot([], [], linestyle='-', color=col, label=f'ON {role} {pat}')
+                self._lines[k_on] = ln_on; self._data[k_on] = {'x':[], 'y':[]}
+
+        self._update_legends()
+        self.canvas.draw_idle()
+
+    def reset_on(self):
+        """ON 시리즈만 리셋."""
+        for key, ln in self._lines.items():
+            if key[0] == 'ON':
+                self._data[key]['x'].clear()
+                self._data[key]['y'].clear()
+                ln.set_data([], [])
+        self._autoscale()
+        self._update_legends()
+        self.canvas.draw_idle()
+
+    def add_point(self, *, state: str, role: str, pattern: str, gray: int, luminance: float):
+        key = (state, role, pattern)
+        if key not in self._lines:
+            return
+        self._data[key]['x'].append(int(gray))
+        self._data[key]['y'].append(float(luminance))
+        self._lines[key].set_data(self._data[key]['x'], self._data[key]['y'])
+        self._autoscale(lazy_role=role)
+        self.canvas.draw_idle()
+
+    # ── 내부 유틸 ──
+    def _autoscale(self, lazy_role=None):
+        roles = [lazy_role] if lazy_role in ('main', 'sub') else ('main', 'sub')
+        for role, ax in (('main', self.ax_main), ('sub', self.ax_sub)):
+            if role not in roles: continue
+            ys = []
+            for (state, r, pat), ln in self._lines.items():
+                if r==role and ln.get_xdata() and ln.get_ydata():
+                    ys.extend(ln.get_ydata())
+            if ys:
+                ymax = max(ys)
+                ax.set_ylim(0, max(1e-6, ymax)*1.05)
+
+    def _update_legends(self):
+        for ax in (self.ax_main, self.ax_sub):
+            handles, labels = [], []
+            for (state, role, pat), ln in self._lines.items():
+                if ln.axes is ax and ln.get_xdata() and ln.get_ydata():
+                    handles.append(ln); labels.append(ln.get_label())
+            if handles:
+                ax.legend(handles, labels, fontsize=8, loc='upper left')
+            else:
+                leg = ax.get_legend()
+                if leg: leg.remove()
+
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+import matplotlib.pyplot as plt
+import numpy as np
+import modules.chart_style as cs
+
+class LUTChart:
+    def __init__(self, target_widget, title='TV LUT (12-bit)',
+                 left=0.10, right=0.95, top=0.95, bottom=0.10,
+                 x_tick=512, y_tick=512):
+        self.fig, self.ax = plt.subplots()
+        self.canvas = FigureCanvas(self.fig)
+        target_widget.addWidget(self.canvas)
+
+        # ── CIE와 동일한 포맷 적용 ──
+        cs.MatFormat_ChartArea(self.fig, left=left, right=right, top=top, bottom=bottom)
+        cs.MatFormat_FigArea(self.ax)
+        cs.MatFormat_ChartTitle(self.ax, title=title, color='#595959')
+        cs.MatFormat_AxisTitle(self.ax, axis_title='Gray Level (12-bit)', axis='x')
+        cs.MatFormat_AxisTitle(self.ax, axis_title='Input Level', axis='y')
+        cs.MatFormat_Axis(self.ax, min_val=0, max_val=4095, tick_interval=x_tick, axis='x')
+        cs.MatFormat_Axis(self.ax, min_val=0, max_val=4095, tick_interval=y_tick, axis='y')
+        cs.MatFormat_Gridline(self.ax, linestyle='--')
+
+        self._lines = {}
+        self.canvas.draw_idle()
+
+    def reset_and_plot(self, lut_dict: dict):
+        """
+        lut_dict = {
+          "R_Low":[4096], "R_High":[4096],
+          "G_Low":[4096], "G_High":[4096],
+          "B_Low":[4096], "B_High":[4096],
+        }
+        """
+        # 기존 라인 제거
+        for ln in list(self._lines.values()):
+            try: ln.remove()
+            except Exception: pass
+        self._lines.clear()
+
+        xs = np.arange(4096)
+        styles = {
+            'R_Low':  dict(color='red',   ls='--', label='R Low'),
+            'R_High': dict(color='red',   ls='-',  label='R High'),
+            'G_Low':  dict(color='green', ls='--', label='G Low'),
+            'G_High': dict(color='green', ls='-',  label='G High'),
+            'B_Low':  dict(color='blue',  ls='--', label='B Low'),
+            'B_High': dict(color='blue',  ls='-',  label='B High'),
+        }
+        ymax = 0.0
+        for k, st in styles.items():
+            ys = np.asarray(lut_dict.get(k, []), dtype=float).ravel()
+            if ys.size != 4096:
+                print(f"[LUTChartVAC] {k} length invalid: {ys.size}")
+                continue
+            ln, = self.ax.plot(xs, ys, **st)
+            self._lines[k] = ln
+            if ys.size:
+                m = np.nanmax(ys)
+                if np.isfinite(m): ymax = max(ymax, float(m))
+
+        # 축/범례 갱신
+        self.ax.set_xlim(0, 4095)
+        self.ax.set_ylim(0, max(4095.0, ymax*1.05 if ymax>0 else 4095.0))
+        if self._lines:
+            self.ax.legend([ln for ln in self._lines.values()],
+                           [ln.get_label() for ln in self._lines.values()],
+                           fontsize=8, loc='upper left')
+        else:
+            leg = self.ax.get_legend()
+            if leg: leg.remove()
+
+        self.canvas.draw_idle()
+
+import os
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+import matplotlib.pyplot as plt
+
+import modules.chart_style as cs
+import src.utils.common_functions as cf
+import modules.optical_parameters as op
+
+class CIE1976Chart:
+    """
+    - 배경 이미지: resources/images/pictures/cie1976 (2).png
+    - 기준선: BT.709(점선), DCI(실선), CIE1976 등온선(가느다란 실선)
+    - 데이터 포인트: data_1(OFF, 참조) = 빨강, data_2(ON) = 초록
+        · 0deg: 원형(o, hollow)
+        · 60deg: 사각형(s, hollow)
+    - reset_on(): data_2_* 시리즈만 리셋 (참조 유지)
+    - update(u_p, v_p, data_label, view_angle, vac_status): 기존 시그니처 유지
+    """
+    def __init__(self, target_widget, title="Color Shift",
+                 left_margin=0.10, right_margin=0.95, top_margin=0.95, bottom_margin=0.10):
+        import os
+        self.fig, self.ax = plt.subplots()
+        self.canvas = FigureCanvas(self.fig)
+        target_widget.addWidget(self.canvas)
+
+        # ── 배경 이미지 로드 ──
+        try:
+            image_path = cf.get_normalized_path(
+                __file__, '..','..','..', 'resources/images/pictures', 'cie1976 (2).png'
+            )
+            if os.path.exists(image_path):
+                img = plt.imread(image_path, format='png')
+                # 기존 initialize 코드와 동일한 extent
+                self.ax.imshow(img, extent=[0, 0.70, 0, 0.60])
+            else:
+                print(f"[CIE1976] 배경 이미지 없음: {image_path}")
+        except Exception as e:
+            print(f"[CIE1976] 배경 이미지 로드 실패: {e}")
+
+        # ── 스타일/눈금 (기존과 동일 포맷터 사용) ──
+        cs.MatFormat_ChartArea(self.fig, left=left_margin, right=right_margin,
+                               top=top_margin, bottom=bottom_margin)
+        cs.MatFormat_FigArea(self.ax)
+        cs.MatFormat_ChartTitle(self.ax, title=title, color='#595959')
+        cs.MatFormat_AxisTitle(self.ax, axis_title='u`', axis='x')
+        cs.MatFormat_AxisTitle(self.ax, axis_title='v`', axis='y')
+        cs.MatFormat_Axis(self.ax, min_val=0, max_val=0.7, tick_interval=0.1, axis='x')
+        cs.MatFormat_Axis(self.ax, min_val=0, max_val=0.6, tick_interval=0.1, axis='y')
+        cs.MatFormat_Gridline(self.ax, linestyle='--')
+
+        # ── 기준선(레퍼런스) ──
+        try:
+            BT709_u, BT709_v = cf.convert2DlistToPlot(op.BT709_uvprime)
+            self.ax.plot(BT709_u, BT709_v, color='black', linestyle='--', linewidth=0.8, label="BT.709")
+        except Exception as e:
+            print(f"[CIE1976] BT.709 플롯 실패: {e}")
+
+        try:
+            DCI_u, DCI_v = cf.convert2DlistToPlot(op.DCI_uvprime)
+            self.ax.plot(DCI_u, DCI_v, color='black', linestyle='-', linewidth=0.8, label="DCI")
+        except Exception as e:
+            print(f"[CIE1976] DCI 플롯 실패: {e}")
+
+        try:
+            CIE1976_u = [item[1] for item in op.CIE1976_uvprime]
+            CIE1976_v = [item[2] for item in op.CIE1976_uvprime]
+            self.ax.plot(CIE1976_u, CIE1976_v, color='black', linestyle='-', linewidth=0.3)
+        except Exception as e:
+            print(f"[CIE1976] CIE1976 곡선 플롯 실패: {e}")
+
+        # ── 데이터 시리즈 (기존 initialize와 동일 스타일) ──
+        # data_1: OFF(참조) 빨강, data_2: ON 초록
+        self.lines = {
+            'data_1_0deg': self.ax.plot([], [], 'o', markerfacecolor='none', markeredgecolor='red')[0],
+            'data_1_60deg': self.ax.plot([], [], 's', markerfacecolor='none', markeredgecolor='red')[0],
+            'data_2_0deg': self.ax.plot([], [], 'o', markerfacecolor='none', markeredgecolor='green')[0],
+            'data_2_60deg': self.ax.plot([], [], 's', markerfacecolor='none', markeredgecolor='green')[0],
+        }
+        self.data = {k: {'u': [], 'v': []} for k in self.lines.keys()}
+
+        # 레전드: BT.709, DCI + (데이터 들어오면) 데이터 시리즈
+        self._update_legend()
+        self.canvas.draw()
+
+    # ───────────────────────────
+    # public API
+    # ───────────────────────────
+    def reset_on(self):
+        """ON(data_2_*)만 리셋 → OFF(참조)는 유지"""
+        for k in ('data_2_0deg', 'data_2_60deg'):
+            self.data[k]['u'].clear()
+            self.data[k]['v'].clear()
+            self.lines[k].set_data([], [])
+        self._update_legend()
+        self.canvas.draw_idle()
+
+    def update(self, u_p, v_p, data_label, view_angle, vac_status):
+        """
+        기존 호출부와 동일한 시그니처를 유지:
+        - data_label: 'data_1'(OFF 참조) | 'data_2'(ON/보정)
+        - view_angle: 0 | 60
+        - vac_status: 레전드용 상태 텍스트 (예: 'VAC OFF (Ref.)', 'VAC ON', 'CORR#1' 등)
+        """
+        try:
+            key = f'{data_label}_{int(view_angle)}deg'
+            if key not in self.lines:
+                print(f"[CIE1976] Unknown series key: {key}")
+                return
+
+            self.data[key]['u'].append(float(u_p))
+            self.data[key]['v'].append(float(v_p))
+            self.lines[key].set_data(self.data[key]['u'], self.data[key]['v'])
+            # 라벨 갱신(범례에서 보일 텍스트)
+            friendly = '0°' if int(view_angle) == 0 else '60°'
+            self.lines[key].set_label(f"{vac_status} - {data_label} {friendly}")
+
+            self._update_legend()
+            self.canvas.draw_idle()
+        except Exception as e:
+            print(e)
+
+    # ───────────────────────────
+    # internals
+    # ───────────────────────────
+    def _update_legend(self):
+        handles, labels = [], []
+
+        # 기준선(항상 표시)
+        for ln in self.ax.lines:
+            # CIE1976 곡선은 label None 처리했으니 제외됨
+            if ln.get_label() in ("BT.709", "DCI"):
+                handles.append(ln); labels.append(ln.get_label())
+
+        # 데이터 시리즈(데이터 들어온 것만)
+        for k in ('data_1_0deg','data_1_60deg','data_2_0deg','data_2_60deg'):
+            ln = self.lines.get(k)
+            if ln is not None and ln.get_xdata() and ln.get_ydata():
+                handles.append(ln); labels.append(ln.get_label())
+
+        if handles:
+            self.ax.legend(handles, labels, fontsize=9, loc='lower right')
+        else:
+            leg = self.ax.get_legend()
+            if leg: leg.remove()
 
 class Widget_vacspace(QWidget):
     def __init__(self, parent=None):
         super(Widget_vacspace, self).__init__(parent)
         self.ui = Ui_vacspaceForm()
         self.ui.setupUi(self)
-        
+
         self.ui.vac_btn_startOptimization.clicked.connect(self.start_VAC_optimization)
-
-        self._vac_dict_cache = None
-
         self._vac_dict_cache = None
         
-        self.vac_optimization_gamma_chart = GammaChart(
-            target_widget=self.ui.vac_chart_gamma_3,
-            multi_axes=True,
-            num_axes=2
-        )
-        
-        self.vac_optimization_cie1976_chart = CIE1976ChromaticityDiagram(self.ui.vac_chart_colorShift_2, 
-                                                                            "Color Shift",
-                                                                            left_margin=0.12, 
-                                                                            right_margin=0.95, 
-                                                                            top_margin=0.90, 
-                                                                            bottom_margin=0.15)
-
-        self.vac_optimization_lut_chart = XYChart(
-            target_widget=self.ui.vac_graph_rgbLUT_4,
-            x_label='Gray Level (12-bit)',
-            y_label='Input Level',
-            x_range=(0, 4095),
-            y_range=(0, 4095),
-            x_tick=512,
-            y_tick=512,
-            title=None,
-            title_color='#595959',
-            legend=False
-        )
+        self.vac_optimization_gamma_chart = GammaChart(self.ui.vac_chart_gamma_3)
+        self.vac_optimization_cie1976_chart = CIE1976Chart(self.ui.vac_chart_colorShift_2)
+        self.vac_optimization_lut_chart = LUTChart(target_widget=self.ui.vac_graph_rgbLUT_4)
 
         self.vac_optimization_chromaticity_chart = XYChart(
             target_widget=self.ui.vac_chart_chromaticityDiff,
@@ -74,6 +370,12 @@ class Widget_vacspace(QWidget):
             spec_line=0.04
         )
 
+        self.expanded = True
+        self.expand_VAC_Optimization_Result()
+        self.ui.vac_btn_JSONdownload.setEnabled(False)
+        
+        ###########################################################################################    
+    
     def _load_jacobian_artifacts(self):
         """
         jacobian_Y0_high.pkl 파일을 불러와서 artifacts 딕셔너리로 반환
@@ -356,13 +658,6 @@ class Widget_vacspace(QWidget):
         return "\n".join(lines)
     
     def _run_off_baseline_then_on(self):
-        # plot 라인 준비 (Legend: “VAC OFF (Ref.) - color”)
-        gamma_lines_off = {
-            'main': {p: self.vac_optimization_gamma_chart.add_series(axis_index=0, label=f"VAC OFF (Ref.) - {p}")
-                     for p in ('white','red','green','blue')},
-            'sub':  {p: self.vac_optimization_gamma_chart.add_series(axis_index=1, label=f"VAC OFF (Ref.) - {p}")
-                     for p in ('white','red','green','blue')},
-        }
         profile_off = SessionProfile(
             legend_text="VAC OFF (Ref.)",
             cie_label="data_1",
@@ -378,11 +673,10 @@ class Widget_vacspace(QWidget):
                 return
                 
             # 3. DB에서 모델/주사율에 맞는 VAC Data 적용 → 읽기 → LUT 차트 갱신
-            # self._apply_vac_from_db_and_measure_on()
+            self._apply_vac_from_db_and_measure_on()
 
         self.start_viewing_angle_session(
             profile=profile_off, 
-            gamma_lines=gamma_lines_off,
             gray_levels=op.gray_levels_256, 
             # gamma_patterns=('white','red','green','blue'),
             gamma_patterns=('white',),
@@ -392,64 +686,82 @@ class Widget_vacspace(QWidget):
         )
         
     def _apply_vac_from_db_and_measure_on(self):
-        # 3-a) DB에서 Panel_Maker + Frame_Rate 조합인 VAC_Data 가져오기
+        """
+        3-a) DB에서 Panel_Maker + Frame_Rate 조합인 VAC_Data 가져오기
+        3-b) TV에 쓰기 → TV에서 읽기
+            → LUT 차트 갱신(reset_and_plot)
+            → ON 시리즈 리셋(reset_on)
+            → ON 측정 세션 시작(start_viewing_angle_session)
+        """
+        # 3-a) DB에서 VAC JSON 로드
         panel = self.ui.vac_cmb_PanelMaker.currentText().strip()
         fr    = self.ui.vac_cmb_FrameRate.currentText().strip()
         vac_pk, vac_version, vac_data = self._fetch_vac_by_model(panel, fr)
         if vac_data is None:
             logging.error(f"{panel}+{fr} 조합으로 매칭되는 VAC Data가 없습니다 - 종료")
             return
-        
+
+        # TV 쓰기 완료 시 콜백
         def _after_write(ok, msg):
             logging.info(f"[VAC Write] {msg}")
             if not ok:
                 logging.error("VAC Writing 실패 - 종료")
                 return
-            self._read_vac_from_tv(lambda vac_dict: _after_read(vac_dict)) # _read_vac_from_tv 메서드 끝난 후 _after_read 함수 실행
-        
+            # 쓰기 성공 → TV에서 VAC 읽어오기
+            self._read_vac_from_tv(_after_read)
+
+        # TV에서 읽기 완료 시 콜백
         def _after_read(vac_dict):
             if not vac_dict:
                 logging.error("VAC 데이터 읽기 실패 - 종료")
                 return
-            
+
+            # 캐시 보관 (TV 원 키명 유지)
             self._vac_dict_cache = vac_dict
 
-            vac_lut_dict = {key.replace("channel", "_"): v
-                        for key, v in vac_dict.items()
-                        if "channel" in key}
-            self._update_lut_chart_and_table(vac_lut_dict)
-            
-            # VAC ON 측정 세션
-            gamma_lines_on = {
-                'main': {p: self.vac_optimization_gamma_chart.add_series(axis_index=0, label=f"VAC ON - {p}") 
-                        for p in ('white','red','green','blue')},
-                'sub':  {p: self.vac_optimization_gamma_chart.add_series(axis_index=1, label=f"VAC ON - {p}") 
-                        for p in ('white','red','green','blue')},
+            # LUT 차트는 "받을 때마다 전체 리셋 후 재그림"
+            # TV 키명을 표준 표시용으로 바꿔서 전달 (RchannelHigh -> R_High 등)
+            lut_plot = {
+                key.replace("channel", "_"): v
+                for key, v in vac_dict.items()
+                if "channel" in key
             }
+            # 새 LUT로 전체 리셋 후 플로팅
+            self.vac_optimization_lut_chart.reset_and_plot(lut_plot)
+
+            # ── ON 세션 시작 전: ON 시리즈 전부 리셋 ──
+            self.vac_optimization_gamma_chart.reset_on()
+            self.vac_optimization_cie1976_chart.reset_on()
+
+            # ON 세션 프로파일 (OFF를 참조로 Δ 계산)
             profile_on = SessionProfile(
                 legend_text="VAC ON",
                 cie_label="data_2",
                 table_cols={"lv":4, "cx":5, "cy":6, "gamma":7, "d_cx":8, "d_cy":9, "d_gamma":10},
                 ref_store=self._off_store
             )
-            
+
+            # ON 세션 종료 후: 스펙 체크 → 미통과면 보정 1회차 진입
             def _after_on(store_on):
                 self._on_store = store_on
                 if self._check_spec_pass(self._off_store, self._on_store):
                     logging.info("✅ 스펙 통과 — 종료")
                     return
-                # (D) 반복 보정 시작
+                # (D) 반복 보정 시작 (1회차)
                 self._run_correction_iteration(iter_idx=1)
 
+            # ── ON 측정 세션 시작 ──
+            # 간소화된 API: gamma_lines 인자 제거
             self.start_viewing_angle_session(
-                profile=profile_on, gamma_lines=gamma_lines_on,
+                profile=profile_on,
                 gray_levels=getattr(op, "gray_levels_256", list(range(256))),
-                patterns=('white','red','green','blue'),
+                gamma_patterns=('white','red','green','blue'),
                 colorshift_patterns=op.colorshift_patterns,
-                first_gray_delay_ms=3000, cs_settle_ms=1000,
+                first_gray_delay_ms=3000,
+                cs_settle_ms=1000,
                 on_done=_after_on
             )
-            
+
         # 3-b) VAC_Data TV에 writing
         self._write_vac_to_tv(vac_data, on_finished=_after_write)
         
@@ -603,7 +915,6 @@ class Widget_vacspace(QWidget):
     
     def start_viewing_angle_session(self,
         profile: SessionProfile,
-        gamma_lines: dict,
         gray_levels=None,
         gamma_patterns=('white','red','green','blue'),
         colorshift_patterns=None,
@@ -631,7 +942,6 @@ class Widget_vacspace(QWidget):
             'cs_patterns': colorshift_patterns,
             'store': store,
             'profile': profile,
-            'gamma_lines': gamma_lines,
             'first_gray_delay_ms': first_gray_delay_ms,
             'cs_settle_ms': cs_settle_ms,
             'on_done': on_done
@@ -706,83 +1016,71 @@ class Widget_vacspace(QWidget):
             self.sub_measure_thread.start()
 
     def _consume_gamma_pair(self, pattern, gray, results):
+        """
+        results: {
+        'main': (x, y, lv, cct, duv)  또는  None,
+        'sub' : (x, y, lv, cct, duv)  또는  None
+        }
+        """
         s = self._sess
         store = s['store']
         profile: SessionProfile = s['profile']
-        lines = s['gamma_lines']
 
+        # 현재 세션이 OFF 레퍼런스인지, ON/보정 런인지 상태 문자열 결정
+        state = 'OFF' if profile.legend_text.startswith('VAC OFF') else 'ON'
+
+        # 두 역할을 results 키로 직접 순회 (측정기 객체 비교 X)
         for role in ('main', 'sub'):
-            if role not in results or results[role] is None:
+            res = results.get(role, None)
+            if res is None:
+                # 측정 실패/결측인 경우
                 store['gamma'][role][pattern][gray] = (np.nan, np.nan, np.nan)
                 continue
-            x, y, lv, cct, duv = results[role]
-            store['gamma'][role][pattern][gray] = (float(lv), float(x), float(y))
-            # Lv vs gray
-            line = lines[role][pattern]
-            xs = list(line.get_xdata()); ys = list(line.get_ydata())
-            xs.append(gray); ys.append(float(lv))
-            line.set_data(xs, ys)
-            line.set_label((f"{role}° VAC OFF - {pattern}"))
 
+            x, y, lv, cct, duv = res
+            # 스토어 업데이트 (white 테이블/감마 계산 등에 사용)
+            store['gamma'][role][pattern][gray] = (float(lv), float(x), float(y))
+
+            # ▶▶ 차트 업데이트 (간소화 API)
+            # GammaChartVAC: add_point(state, role, pattern, gray, luminance)
+            self.vac_optimization_gamma_chart.add_point(
+                state=state,
+                role=role,               # 'main' 또는 'sub'
+                pattern=pattern,         # 'white'|'red'|'green'|'blue'
+                gray=int(gray),
+                luminance=float(lv)
+            )
+
+        # (아래 white/main 테이블 채우는 로직은 기존 그대로 유지)
         if pattern == 'white':
-            lv_m, cx_m, cy_m = store['gamma']['main'][pattern][gray]
+            # main 테이블
+            lv_m, cx_m, cy_m = store['gamma']['main']['white'].get(gray, (np.nan, np.nan, np.nan))
             table_inst1 = self.ui.vac_table_opt_mes_results_main
             cols = profile.table_cols
-            self._set_item(table_inst1, gray, cols['lv'], f"{lv_m:.6f}")
-            self._set_item(table_inst1, gray, cols['cx'], f"{cx_m:.6f}")
-            self._set_item(table_inst1, gray, cols['cy'], f"{cy_m:.6f}")
+            self._set_item(table_inst1, gray, cols['lv'], f"{lv_m:.6f}" if np.isfinite(lv_m) else "")
+            self._set_item(table_inst1, gray, cols['cx'], f"{cx_m:.6f}" if np.isfinite(cx_m) else "")
+            self._set_item(table_inst1, gray, cols['cy'], f"{cy_m:.6f}" if np.isfinite(cy_m) else "")
 
-            lv_s, cx_s, cy_s = store['gamma']['sub'][pattern][gray]
+            # sub 테이블
+            lv_s, cx_s, cy_s = store['gamma']['sub']['white'].get(gray, (np.nan, np.nan, np.nan))
             table_inst2 = self.ui.vac_table_opt_mes_results_sub
-            self._set_item(table_inst2, gray, cols['lv'], f"{lv_s:.6f}")
-            self._set_item(table_inst2, gray, cols['cx'], f"{cx_s:.6f}")
-            self._set_item(table_inst2, gray, cols['cy'], f"{cy_s:.6f}")
+            self._set_item(table_inst2, gray, cols['lv'], f"{lv_s:.6f}" if np.isfinite(lv_s) else "")
+            self._set_item(table_inst2, gray, cols['cx'], f"{cx_s:.6f}" if np.isfinite(cx_s) else "")
+            self._set_item(table_inst2, gray, cols['cy'], f"{cy_s:.6f}" if np.isfinite(cy_s) else "")
 
-            if profile.ref_store is not None:
+            # ΔCx/ΔCy (ON 세션에서만; ref_store가 있을 때)
+            if profile.ref_store is not None and 'd_cx' in cols and 'd_cy' in cols:
                 ref_main = profile.ref_store['gamma']['main']['white'].get(gray, None)
-                if ref_main is not None and 'd_cx' in cols and 'd_cy' in cols:
-                    lv_r, cx_r, cy_r = ref_main
-                    self._set_item(table_inst1, gray, cols['d_cx'], f"{(cx_m - cx_r):.6f}")
-                    self._set_item(table_inst1, gray, cols['d_cy'], f"{(cy_m - cy_r):.6f}")
+                if ref_main is not None:
+                    _, cx_r, cy_r = ref_main
+                    if np.isfinite(cx_m): self._set_item(table_inst1, gray, cols['d_cx'], f"{(cx_m - cx_r):.6f}")
+                    if np.isfinite(cy_m): self._set_item(table_inst1, gray, cols['d_cy'], f"{(cy_m - cy_r):.6f}")
 
                 ref_sub = profile.ref_store['gamma']['sub']['white'].get(gray, None)
-                if ref_sub is not None and 'd_cx' in cols and 'd_cy' in cols:
-                    lv_r_s, cx_r_s, cy_r_s = ref_sub
-                    self._set_item(table_inst2, gray, cols['d_cx'], f"{(cx_s - cx_r_s):.6f}")
-                    self._set_item(table_inst2, gray, cols['d_cy'], f"{(cy_s - cy_r_s):.6f}")
-
-        ax_main = self.vac_optimization_gamma_chart.chart.axes[0]
-        ax_sub = self.vac_optimization_gamma_chart.chart.axes[1]
-
-        all_y_main = []
-        all_y_sub = []
-
-        for p in s['patterns']:
-            line_main = lines['main'][p]
-            line_sub = lines['sub'][p]
-            all_y_main.extend(line_main.get_ydata())
-            all_y_sub.extend(line_sub.get_ydata())
-
-        if all_y_main:
-            y_max_main = max(all_y_main)
-            ax_main.set_ylim(0, y_max_main * 1.05)
-
-        if all_y_sub:
-            y_max_sub = max(all_y_sub)
-            ax_sub.set_ylim(0, y_max_sub * 1.05)
-
-        ax_main.relim()
-        ax_main.autoscale_view()
-        ax_main.yaxis.set_major_locator(ticker.MaxNLocator(nbins=5))
-
-        ax_sub.relim()
-        ax_sub.autoscale_view()
-        ax_sub.yaxis.set_major_locator(ticker.MaxNLocator(nbins=5))
-        
-        ax_main.legend(fontsize=7)
-        ax_sub.legend(fontsize=7)
-
-        self.vac_optimization_gamma_chart.draw()
+                if ref_sub is not None:
+                    _, cx_r_s, cy_r_s = ref_sub
+                    if np.isfinite(cx_s): self._set_item(table_inst2, gray, cols['d_cx'], f"{(cx_s - cx_r_s):.6f}")
+                    if np.isfinite(cy_s): self._set_item(table_inst2, gray, cols['d_cy'], f"{(cy_s - cy_r_s):.6f}")
 
     def _trigger_colorshift_pair(self, patch_name):
         s = self._sess
@@ -808,20 +1106,38 @@ class Widget_vacspace(QWidget):
             self.sub_measure_thread.start()
 
     def _consume_colorshift_pair(self, patch_name, results):
+        """
+        results: {
+        'main': (x, y, lv, cct, duv)  또는  None,
+        'sub' : (x, y, lv, cct, duv)  또는  None
+        }
+        """
         s = self._sess
         store = s['store']
         profile: SessionProfile = s['profile']
 
+        # 현재 세션 상태
+        state = 'OFF' if profile.legend_text.startswith('VAC OFF') else 'ON'
+
         for role in ('main', 'sub'):
-            if role not in results or results[role] is None:
+            res = results.get(role, None)
+            if res is None:
                 store['colorshift'][role].append((np.nan, np.nan, np.nan, np.nan))
                 continue
-            x, y, lv, cct, duv = results[role]
+
+            x, y, lv, cct, duv = res
+
+            # xy → u′v′ 변환
             u_p, v_p = cf.convert_xyz_to_uvprime(float(x), float(y))
             store['colorshift'][role].append((float(x), float(y), float(u_p), float(v_p)))
-            angle = 0 if role == 'main' else 60
-            self.vac_optimization_cie1976_chart.update(
-                u_p, v_p, data_label=profile.cie_label, view_angle=angle, vac_status=profile.legend_text
+
+            # ▶▶ 차트 업데이트 (간소화 API)
+            # CIE1976ChartVAC: add_point(state, role, u_p, v_p)
+            self.vac_optimization_cie1976_chart.add_point(
+                state=state,
+                role=role,        # 'main' 또는 'sub'
+                u_p=float(u_p),
+                v_p=float(v_p)
             )
 
     def _finalize_session(self):
@@ -1078,253 +1394,3 @@ class Widget_vacspace(QWidget):
             
         # 1.3 OFF 측정 세션 시작
         self._run_off_baseline_then_on()
-
-class CIE1976ChromaticityDiagram:
-    def __init__(self, target_widget, title=None, left_margin=0.10, right_margin=0.95, top_margin=0.95, bottom_margin=0.10):
-        self.fig, self.ax = plt.subplots()
-        self.canvas = FigureCanvas(self.fig)
-        target_widget.addWidget(self.canvas)
-
-        self._init_background(left_margin, right_margin, top_margin, bottom_margin)
-        self._init_style(title)
-        self._init_reference_lines()
-        self._init_data_lines()
-        self._init_data_storage()
-
-        self.canvas.draw()
-
-    def _init_background(self, left_margin, right_margin, top_margin, bottom_margin):
-        image_path = cf.get_normalized_path(__file__, '..', '..', '..', 'resources/images/pictures', 'cie1976 (2).png')
-        img = plt.imread(image_path, format='png')
-        self.ax.imshow(img, extent=[0, 0.70, 0, 0.60])
-        cs.MatFormat_ChartArea(self.fig, left=left_margin, right=right_margin, top=top_margin, bottom=bottom_margin)
-        cs.MatFormat_FigArea(self.ax)
-
-    def _init_style(self, title):
-        cs.MatFormat_ChartTitle(self.ax, title=title, color='#595959')
-        cs.MatFormat_AxisTitle(self.ax, axis_title='u`', axis='x')
-        cs.MatFormat_AxisTitle(self.ax, axis_title='v`', axis='y')
-        cs.MatFormat_Axis(self.ax, min_val=0, max_val=0.7, tick_interval=0.1, axis='x')
-        cs.MatFormat_Axis(self.ax, min_val=0, max_val=0.6, tick_interval=0.1, axis='y')
-        cs.MatFormat_Gridline(self.ax, linestyle='--')
-
-    def _init_reference_lines(self):
-        BT709_u, BT709_v = cf.convert2DlistToPlot(op.BT709_uvprime)
-        DCI_u, DCI_v = cf.convert2DlistToPlot(op.DCI_uvprime)
-        CIE1976_u = [item[1] for item in op.CIE1976_uvprime]
-        CIE1976_v = [item[2] for item in op.CIE1976_uvprime]
-
-        self.ax.plot(BT709_u, BT709_v, color='black', linestyle='--', linewidth=0.8, label="BT.709")
-        self.ax.plot(DCI_u, DCI_v, color='black', linestyle='-', linewidth=0.8, label="DCI")
-        self.ax.plot(CIE1976_u, CIE1976_v, color='black', linestyle='-', linewidth=0.3)
-        
-        self.ax.legend(loc='lower right', fontsize=7)
-
-    def _init_data_lines(self):
-        self.lines = {
-            'data_1_0deg': self.ax.plot([], [], 'o', markerfacecolor='none', markeredgecolor='green', markersize=4)[0],
-            'data_1_60deg': self.ax.plot([], [], 'o', markerfacecolor='green', markeredgecolor='green', markersize=4)[0],
-            'data_2_0deg': self.ax.plot([], [], 's', markerfacecolor='none', markeredgecolor='red', markersize=4)[0],
-            'data_2_60deg': self.ax.plot([], [], 's', markerfacecolor='red', markeredgecolor='red', markersize=4)[0],
-        }
-
-    def _init_data_storage(self):
-        self.data = {
-            'data_1_0deg': {'u': [], 'v': []},
-            'data_1_60deg': {'u': [], 'v': []},
-            'data_2_0deg': {'u': [], 'v': []},
-            'data_2_60deg': {'u': [], 'v': []},
-        }
-        
-    def _ensure_line(self, key):
-        if key in self.lines:
-            return
-        # 데이터셋 별 색/마커 대충 구분 (원하시면 팔레트 바꾸세요)
-        marker = 'o' if key.endswith('0deg') or '_0deg' in key else 's'
-        # data_n에 따라 색 배정
-        if 'data_1' in key: edge = 'red'
-        elif 'data_2' in key: edge = 'green'
-        else: edge = 'blue'
-        line, = self.ax.plot([], [], marker, markerfacecolor='none', markeredgecolor=edge)
-        self.lines[key] = line
-        self.data[key] = {'u': [], 'v': []}
-
-    def update(self, u_p, v_p, data_label, view_angle, vac_status):
-        key = f'{data_label}_{view_angle}deg'
-        # ▼ 추가
-        if key not in self.lines:
-            self._ensure_line(key)
-
-        self.data[key]['u'].append(float(u_p))
-        self.data[key]['v'].append(float(v_p))
-        self.lines[key].set_data(self.data[key]['u'], self.data[key]['v'])
-        self.lines[key].set_label(f'Data #{data_label[-1]} {view_angle}° {vac_status}')
-        self.ax.legend(loc='lower right', fontsize=7)
-        self.canvas.draw()
-
-class GammaChart:
-    def __init__(self, target_widget, multi_axes=False, num_axes=1):
-        # XYChart 인스턴스 생성
-        self.chart = XYChart(
-            target_widget=target_widget,
-            x_label='Gray Level',
-            y_label='Luminance (nit)',
-            x_range=(0, 255),
-            y_range=(0, 1),
-            x_tick=64,
-            y_tick=0.25,
-            title='Gamma',
-            multi_axes=multi_axes,
-            num_axes=num_axes,
-            layout='vertical',
-            share_x=True
-        )
-        self._init_lines()
-
-    def _init_lines(self):
-        # 측정 조건별 선 추가
-        colors = {
-            'W': 'gray',
-            'R': 'red',
-            'G': 'green',
-            'B': 'blue'
-        }
-
-        # 기본적으로 첫 번째 축에 선 추가
-        for angle in [0, 60]:
-            for data_label in ['data_1', 'data_2']:
-                for color_key, color_val in colors.items():
-                    key = f'{angle}deg_{color_key}_{data_label}'
-                    axis_index = 0  # 첫 번째 축
-                    self.chart.add_line(key, color=color_val, linestyle='--' if angle == 0 else '-', label=key, axis_index=axis_index)
-
-        # DQA용 선은 두 번째 축에 추가 (있다면)
-        for data_label in ['data_1', 'data_2']:
-            key = f'60deg_dqa_{data_label}'
-            dot_color = 'lightgray' if data_label == 'data_1' else 'darkgray'
-            axis_index = 1 if len(self.chart.axes) > 1 else 0
-            self.chart.add_line(key, color=dot_color, marker='*', linestyle='None', label=key, axis_index=axis_index)
-
-    def add_series(self, axis_index=0, label=None, color=None, linestyle='-'):
-        key = f"{label or 'series'}_{axis_index}_{len(self.chart.lines)}"
-        self.chart.add_line(key, color=color or 'black', linestyle=linestyle, label=label, axis_index=axis_index)
-        return self.chart.lines[key]
-
-    def autoscale(self):
-        # XYChart가 relim/autoscale_view를 update에서 하긴 하지만, 외부에서 강제 호출용
-        for ax in self.chart.axes:
-            ax.relim(); ax.autoscale_view()
-        self.canvas.draw_idle() if hasattr(self, 'canvas') else self.chart.canvas.draw_idle()
-
-    def draw(self):
-        self.chart.update_legend()
-        self.chart.canvas.draw_idle()
-        
-    def update_from_measurement(self, color, lv, viewangle, data_label, vac_status):
-        try:
-            lv = float(lv)
-        except ValueError:
-            print(f"[GammaChart] Invalid luminance value: {lv}")
-            return
-
-        if color == 'DQA':
-            key = f'60deg_dqa_{data_label}'
-            x_data = [0, 128, 200, 255][:len(self.chart.data[key]['y']) + 1]
-        else:
-            key = f'{viewangle}deg_{color}_{data_label}'
-            from modules import op  # gray_levels 사용
-            x_data = op.gray_levels[:len(self.chart.data[key]['y']) + 1]
-
-        if key in self.chart.data and len(x_data) == len(self.chart.data[key]['y']) + 1:
-            self.chart.update(key, x_data[-1], lv)
-            label = f'Data #{data_label[-1]} {viewangle}° {"(DQA) " if color == "DQA" else ""}{vac_status}'
-            self.chart.set_label(key, label)
-class XYChart:
-    def __init__(self, target_widget, x_label='X', y_label='Y',
-                 x_range=(0, 100), y_range=(0, 100), x_tick=10, y_tick=10,
-                 title=None, title_color='#333333', legend=True,
-                 multi_axes=False, num_axes=2, layout='vertical', share_x=True):
-        
-        self.multi_axes = multi_axes
-        self.lines = {}
-        self.data = {}
-        
-        if self.multi_axes:
-            if layout == 'vertical':
-                self.fig, axes = plt.subplots(num_axes, 1, sharex=share_x)
-            else:
-                self.fig, axes = plt.subplots(1, num_axes, sharex=share_x)   
-
-            self.axes = list(axes) if isinstance(axes, (list, tuple, np.ndarray)) else [axes]
-            self.ax = self.axes[0]  # 기본 축
-        else:
-            self.fig, self.ax = plt.subplots()
-            self.axes = [self.ax]
-
-        self.canvas = FigureCanvas(self.fig)
-        target_widget.addWidget(self.canvas)
-
-        # 스타일 초기화
-        self._init_style(title, title_color, x_label, y_label, x_range, y_range, x_tick, y_tick)
-
-        if legend:
-            for ax in self.axes:
-                cs.MatFormat_Legend(ax, position='upper left', fontsize=8)
-
-        self.canvas.draw()
-
-    def _init_style(self, title, title_color, x_label, y_label, x_range, y_range, x_tick, y_tick):
-        cs.MatFormat_ChartArea(self.fig, left=0.20, right=0.92, top=0.90, bottom=0.15)
-        for i, ax in enumerate(self.axes):
-            cs.MatFormat_FigArea(ax)
-            if i == 0:
-                cs.MatFormat_ChartTitle(ax, title=title, color=title_color)
-
-            cs.MatFormat_AxisTitle(ax, axis_title=x_label, axis='x', show_labels=(i == len(self.axes) - 1))
-            cs.MatFormat_AxisTitle(ax, axis_title=y_label, axis='y')
-            cs.MatFormat_Axis(ax, min_val=x_range[0], max_val=x_range[1], tick_interval=x_tick, axis='x')
-            cs.MatFormat_Axis(ax, min_val=y_range[0], max_val=y_range[1], tick_interval=y_tick, axis='y')
-            cs.MatFormat_Gridline(ax)
-
-    def add_line(self, key, color='blue', linestyle='-', marker=None, label=None, axis_index=0):
-        if axis_index >= len(self.axes):
-            print(f"[XYChart] Invalid axis index: {axis_index}")
-            return
-
-        axis = self.axes[axis_index]
-        line, = axis.plot([], [], color=color, linestyle=linestyle, marker=marker, label=label or key)
-        self.lines[key] = line
-        self.data[key] = {'x': [], 'y': []}
-
-    def update(self, key, x, y):
-        if key not in self.lines:
-            print(f"[XYChart] Line '{key}' not found.")
-            return
-
-        self.data[key]['x'].append(x)
-        self.data[key]['y'].append(y)
-        self.lines[key].set_data(self.data[key]['x'], self.data[key]['y'])
-
-        axis = self.lines[key].axes
-        axis.relim()
-        axis.autoscale_view()
-        axis.legend(fontsize=9)
-        self.canvas.draw()
-
-    def set_label(self, key, label):
-        if key in self.lines:
-            self.lines[key].set_label(label)
-            self.lines[key].axes.legend(fontsize=9)
-            
-    def update_legend(self):
-        for ax in self.axes:
-            handles, labels = ax.get_legend_handles_labels()
-            # Filter out lines with no data
-            filtered = [(h, l) for h, l in zip(handles, labels) if h.get_xdata().size > 0 and h.get_ydata().size > 0]
-            if filtered:
-                handles, labels = zip(*filtered)
-                ax.legend(handles, labels, loc='upper right', fontsize=8)
-            else:
-                ax.legend().remove()
-
-        
