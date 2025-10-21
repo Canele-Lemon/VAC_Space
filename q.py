@@ -134,3 +134,76 @@ class CIE1976ChromaticityDiagram:
         else:
             leg = self.ax.get_legend()
             if leg: leg.remove()
+                
+class LUTChartVAC:
+    """
+    TV LUT(12-bit)를 매번 reset_and_plot()으로 새로 그립니다.
+    CIE1976 차트와 동일한 cs.* 서식 적용.
+    """
+    def __init__(self, target_widget, title='TV LUT (12-bit)',
+                 left=0.10, right=0.95, top=0.95, bottom=0.10,
+                 x_tick=512, y_tick=512):
+        self.fig, self.ax = plt.subplots()
+        self.canvas = FigureCanvas(self.fig)
+        target_widget.addWidget(self.canvas)
+
+        # ── CIE와 동일한 포맷 적용 ──
+        cs.MatFormat_ChartArea(self.fig, left=left, right=right, top=top, bottom=bottom)
+        cs.MatFormat_FigArea(self.ax)
+        cs.MatFormat_ChartTitle(self.ax, title=title, color='#595959')
+        cs.MatFormat_AxisTitle(self.ax, axis_title='Gray Level (12-bit)', axis='x')
+        cs.MatFormat_AxisTitle(self.ax, axis_title='Input Level', axis='y')
+        cs.MatFormat_Axis(self.ax, min_val=0, max_val=4095, tick_interval=x_tick, axis='x')
+        cs.MatFormat_Axis(self.ax, min_val=0, max_val=4095, tick_interval=y_tick, axis='y')
+        cs.MatFormat_Gridline(self.ax, linestyle='--')
+
+        self._lines = {}
+        self.canvas.draw_idle()
+
+    def reset_and_plot(self, lut_dict: dict):
+        """
+        lut_dict = {
+          "R_Low":[4096], "R_High":[4096],
+          "G_Low":[4096], "G_High":[4096],
+          "B_Low":[4096], "B_High":[4096],
+        }
+        """
+        # 기존 라인 제거
+        for ln in list(self._lines.values()):
+            try: ln.remove()
+            except Exception: pass
+        self._lines.clear()
+
+        xs = np.arange(4096)
+        styles = {
+            'R_Low':  dict(color='red',   ls='--', label='R Low'),
+            'R_High': dict(color='red',   ls='-',  label='R High'),
+            'G_Low':  dict(color='green', ls='--', label='G Low'),
+            'G_High': dict(color='green', ls='-',  label='G High'),
+            'B_Low':  dict(color='blue',  ls='--', label='B Low'),
+            'B_High': dict(color='blue',  ls='-',  label='B High'),
+        }
+        ymax = 0.0
+        for k, st in styles.items():
+            ys = np.asarray(lut_dict.get(k, []), dtype=float).ravel()
+            if ys.size != 4096:
+                logging.warning(f"[LUTChartVAC] {k} length invalid: {ys.size}")
+                continue
+            ln, = self.ax.plot(xs, ys, **st)
+            self._lines[k] = ln
+            if ys.size:
+                m = np.nanmax(ys)
+                if np.isfinite(m): ymax = max(ymax, float(m))
+
+        # 축/범례 갱신
+        self.ax.set_xlim(0, 4095)
+        self.ax.set_ylim(0, max(4095.0, ymax*1.05 if ymax>0 else 4095.0))
+        if self._lines:
+            self.ax.legend([ln for ln in self._lines.values()],
+                           [ln.get_label() for ln in self._lines.values()],
+                           fontsize=8, loc='upper left')
+        else:
+            leg = self.ax.get_legend()
+            if leg: leg.remove()
+
+        self.canvas.draw_idle()
