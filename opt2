@@ -1,3 +1,126 @@
+# ----- [NEW] 예측-기반 내부 보정 루프 (가상 시뮬) -----
+inner_max_iters = 3      # 내부 루프 횟수 (권장 2~3)
+lambda_pred     = 1e-3   # 리지 안정화
+eta             = 0.5    # 감쇠 스텝(0<eta≤1); 진동/오버슈트 방지
+
+# 공통 준비물
+K   = len(self._jac_artifacts["knots"])
+Phi = self._stack_basis(self._jac_artifacts["knots"])  # (256,K)
+
+# 관성 변수
+best_candidate = { "R_High": high_256_new["R_High"].copy(),
+                   "G_High": high_256_new["G_High"].copy(),
+                   "B_High": high_256_new["B_High"].copy() }
+best_score = float("inf")
+
+for t in range(1, inner_max_iters+1):
+    # 1) 현재 candidate LUT(정규화)로 Y0 예측
+    low_256_norm = {
+        "R_Low":  self._down4096_to_256(vac_lut["R_Low"]) / 4095.0,
+        "G_Low":  self._down4096_to_256(vac_lut["G_Low"]) / 4095.0,
+        "B_Low":  self._down4096_to_256(vac_lut["B_Low"]) / 4095.0,
+    }
+    high_256_norm = {
+        "R_High": (high_256_new["R_High"] / 4095.0).astype(np.float32),
+        "G_High": (high_256_new["G_High"] / 4095.0).astype(np.float32),
+        "B_High": (high_256_new["B_High"] / 4095.0).astype(np.float32),
+    }
+    lut256_norm = {**low_256_norm, **high_256_norm}
+
+    panel_name = self.ui.vac_cmb_PanelMaker.currentText().strip()
+    frame_rate = float(self.ui.vac_cmb_FrameRate.currentText().strip())
+    model_year = float(getattr(self, "current_model_year", 0.0))
+
+    pred_y0_W = self._predict_Y0_W(
+        lut256_norm=lut256_norm,
+        panel_name=panel_name,
+        panel_categories=PANEL_MAKER_CATEGORIES[0],
+        frame_rate=frame_rate,
+        model_year=model_year
+    )
+
+    # 2) 스펙 체크 (통과 → 내부 루프 종료)
+    pred_ok = self._check_spec_with_prediction_W(
+        self._off_store, pred_y0_W, thr_gamma=0.05, thr_c=0.003
+    )
+    # 점수(최대 오차) 계산해서 best 갱신
+    def _pred_score(off_store, pred):
+        lv_ref = np.zeros(256); cx_ref = np.zeros(256); cy_ref = np.zeros(256)
+        for g in range(256):
+            tup = off_store['gamma']['main']['white'].get(g, None)
+            if tup: lv_ref[g], cx_ref[g], cy_ref[g] = tup
+            else:   lv_ref[g]=np.nan; cx_ref[g]=np.nan; cy_ref[g]=np.nan
+        G_ref = self._compute_gamma_series(lv_ref)
+        dG  = np.nan_to_num(pred["Gamma"] - G_ref, nan=0.0)
+        dCx = np.nan_to_num(pred["Cx"]    - cx_ref, nan=0.0)
+        dCy = np.nan_to_num(pred["Cy"]    - cy_ref, nan=0.0)
+        return max(float(np.max(np.abs(dG))),
+                   float(np.max(np.abs(dCx))),
+                   float(np.max(np.abs(dCy))))
+    score = _pred_score(self._off_store, pred_y0_W)
+    if score < best_score:
+        best_score = score
+        best_candidate = {k: v.copy() for k, v in high_256_new.items()}
+
+    if pred_ok:
+        logging.info(f"[PRED-LOOP] t={t}: ✅ 예측 스펙충족 — 내부 보정 종료")
+        break
+
+    # 3) 미통과라면, 예측 Δ를 타깃으로 추가 Δh 산출 → candidate LUT 업데이트
+    #    ΔY_pred = (ON_pred - OFF)
+    #    결합 선형계: A_cat Δh = - [wG*ΔGamma_pred; wC*ΔCx_pred; wC*ΔCy_pred]
+    wG, wC = 1.0, 1.0
+    # OFF baseline 만들기
+    lv_ref = np.zeros(256); cx_ref = np.zeros(256); cy_ref = np.zeros(256)
+    for g in range(256):
+        tup = self._off_store['gamma']['main']['white'].get(g, None)
+        if tup: lv_ref[g], cx_ref[g], cy_ref[g] = tup
+        else:   lv_ref[g]=np.nan; cx_ref[g]=np.nan; cy_ref[g]=np.nan
+    G_ref = self._compute_gamma_series(lv_ref)
+
+    dGamma_pred = np.nan_to_num(pred_y0_W["Gamma"] - G_ref, nan=0.0).astype(np.float32)
+    dCx_pred    = np.nan_to_num(pred_y0_W["Cx"]    - cx_ref, nan=0.0).astype(np.float32)
+    dCy_pred    = np.nan_to_num(pred_y0_W["Cy"]    - cy_ref, nan=0.0).astype(np.float32)
+
+    A_cat = np.vstack([wG*self.A_Gamma, wC*self.A_Cx, wC*self.A_Cy]).astype(np.float32)
+    b_cat = -np.concatenate([wG*dGamma_pred, wC*dCx_pred, wC*dCy_pred]).astype(np.float32)
+
+    mask = np.isfinite(b_cat)
+    A_use = A_cat[mask, :]
+    b_use = b_cat[mask]
+
+    ATA = A_use.T @ A_use
+    rhs = A_use.T @ b_use
+    ATA[np.diag_indices_from(ATA)] += lambda_pred
+
+    try:
+        delta_h = np.linalg.solve(ATA, rhs).astype(np.float32)
+    except np.linalg.LinAlgError:
+        logging.warning("[PRED-LOOP] 선형계 특이 — 작은 정규화 추가 후 재시도")
+        ATA[np.diag_indices_from(ATA)] += 1e-6
+        delta_h = np.linalg.solve(ATA, rhs).astype(np.float32)
+
+    dh_R = delta_h[0:K]; dh_G = delta_h[K:2*K]; dh_B = delta_h[2*K:3*K]
+    corr_R = Phi @ dh_R;  corr_G = Phi @ dh_G;  corr_B = Phi @ dh_B
+
+    # 감쇠 적용(eta)하여 업데이트
+    high_256_new["R_High"] = (high_256_new["R_High"] + eta * corr_R).astype(np.float32)
+    high_256_new["G_High"] = (high_256_new["G_High"] + eta * corr_G).astype(np.float32)
+    high_256_new["B_High"] = (high_256_new["B_High"] + eta * corr_B).astype(np.float32)
+
+    # 경계/단조/클램프
+    for ch in ("R_High","G_High","B_High"):
+        self._enforce_monotone(high_256_new[ch])
+        high_256_new[ch] = np.clip(high_256_new[ch], 0, 4095)
+
+# 내부 루프 종료 후: 통과 못했으면 best 후보 사용
+if not pred_ok:
+    logging.info(f"[PRED-LOOP] 내부 보정 후에도 예측 스펙 미충족 — best 후보로 진행 (score={best_score:.6f})")
+    high_256_new = {k: v.copy() for k, v in best_candidate.items()}
+# ---------------------------------------------
+
+
+
 def _onehot_panel(self, name: str, categories: list[str]) -> np.ndarray:
     v = np.zeros(len(categories), np.float32)
     if name in categories:
