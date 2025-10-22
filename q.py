@@ -1,4 +1,43 @@
-1. Gamma 차트: plot 선 굵기 줄이기, y축 tick 0~1 range 까지 밖에 안보임. 처음 VAC OFF 측정할 땐 legend 생성 안되다가 VAC ON 측정할 때 생김
-2. Color Shift 차트: plot 점 크기 줄이기, legend 폰트 사이즈 줄이기 (Gamma 리젠트 폰트 사이즈로), plot 점 종류 변경-OFF main(0도) 빨간 테두리 색깔없는 원, OFF sub(0도) 색깔없는 네모, ON(CORR) main(0도) 
-3. 데이터 업데이트 표: 업데이트될때마다 값이 업데이트되는 행/열로 이동 필요. 업데이트되는 셀 색깔 바뀌는 기능은 필요없습니다. 업데이트되는 행/열이 첫번째 행으로 보이는 위치가 아닌 스크롤이 따라서 내려가는 방식으로 해 주세요
-4. 델타 값 업데이트 될때 spec 에러인 값은 셀 색이 빨간색으로 업데이트되도록
+PS D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module> & C:/python310/python.exe "d:/00 업무/00 가상화기술/00 색시야각 보상 최적화/VAC algorithm/module/scripts/VACJacobianTrainer.py"
+[Jacobian] using 1042 PKs
+
+[Jacobian] Start training with 1042 PKs, 33 knots
+
+=== Learn Jacobian for Y0-Gamma (vs High) ===
+  └ X shape: (1046701, 210), y shape: (1046701,)
+C:\python310\lib\site-packages\sklearn\linear_model\_ridge.py:213: LinAlgWarning: Ill-conditioned matrix (rcond=4.10912e-10): result may not be accurate.
+  return linalg.solve(A, Xy, assume_a="pos", overwrite_a=True).T
+  ⏱  Y0-Gamma done in 49.1 s
+
+=== Learn Jacobian for Y0-Cx (vs High) ===
+  └ X shape: (1067008, 210), y shape: (1067008,)
+Traceback (most recent call last):
+  File "d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module\scripts\VACJacobianTrainer.py", line 319, in <module>
+    main()
+  File "d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module\scripts\VACJacobianTrainer.py", line 316, in main
+    train_jacobian_models(pk_list, out_path, knots_K=KNOTS)
+  File "d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module\scripts\VACJacobianTrainer.py", line 237, in train_jacobian_models
+    model.fit(X, y)
+  File "C:\python310\lib\site-packages\sklearn\base.py", line 1365, in wrapper
+    return fit_method(estimator, *args, **kwargs)
+  File "C:\python310\lib\site-packages\sklearn\pipeline.py", line 663, in fit
+    self._final_estimator.fit(Xt, y, **last_step_params["fit"])
+  File "C:\python310\lib\site-packages\sklearn\base.py", line 1365, in wrapper
+    return fit_method(estimator, *args, **kwargs)
+  File "C:\python310\lib\site-packages\sklearn\linear_model\_ridge.py", line 1248, in fit
+    return super().fit(X, y, sample_weight=sample_weight)
+  File "C:\python310\lib\site-packages\sklearn\linear_model\_ridge.py", line 990, in fit
+    self.coef_, self.n_iter_, self.solver_ = _ridge_regression(
+  File "C:\python310\lib\site-packages\sklearn\linear_model\_ridge.py", line 807, in _ridge_regression
+    coef = _solve_svd(X, y, alpha, xp)
+  File "C:\python310\lib\site-packages\sklearn\linear_model\_ridge.py", line 287, in _solve_svd
+    U, s, Vt = xp.linalg.svd(X, full_matrices=False)
+  File "C:\python310\lib\site-packages\sklearn\externals\array_api_compat\_internal.py", line 34, in wrapped_f
+    return f(*args, xp=xp, **kwargs)
+  File "C:\python310\lib\site-packages\sklearn\externals\array_api_compat\common\_linalg.py", line 76, in svd
+    return SVDResult(*xp.linalg.svd(x, full_matrices=full_matrices, **kwargs))
+  File "<__array_function__ internals>", line 200, in svd
+  File "C:\python310\lib\site-packages\numpy\linalg\linalg.py", line 1642, in svd
+    u, s, vh = gufunc(a, signature=signature, extobj=extobj)
+numpy.core._exceptions._ArrayMemoryError: Unable to allocate 1.67 GiB for an array with shape (1067008, 210) and data type float64
+PS D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module>
