@@ -16,10 +16,13 @@ from scripts.VAC_dataset import VACDataset  # 이미 사용 중인 Dataset
 # ------------------------
 # 설정
 # ------------------------
-KNOTS = 17                     # High/Low 컨트롤 포인트 개수(권장: 9~33)
-PATTERNS = ['W','R','G','B']   # Y0의 패턴
+KNOTS = 33                     # High/Low 컨트롤 포인트 개수(권장: 9~33)
+PATTERNS = ['W']   # Y0의 패턴
 COMPONENTS = ['Gamma','Cx','Cy']
 RANDOM_STATE = 42
+
+save_dir = os.path.dirname(__file__)
+out_path = os.path.join(save_dir, "jacobian_Y0_high_K33.pkl")
 
 # ------------------------
 # 유틸: knot & basis
@@ -310,9 +313,7 @@ def main():
 
     # 3) 자코비안 학습 실행 (예: Y0=Gamma/Cx/Cy 3개 모두 High만의 영향)
     #    함수명은 당신이 사용 중인 오프라인 학습 함수로 바꾸세요.
-    save_dir = os.path.dirname(__file__)
-    out_path = os.path.join(save_dir, "jacobian_Y0_high.pkl")
-    train_jacobian_models(pk_list, out_path, knots_K=17)
+    train_jacobian_models(pk_list, out_path, knots_K=KNOTS)
 
 if __name__ == "__main__":
     main()
