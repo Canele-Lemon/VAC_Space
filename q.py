@@ -1,58 +1,25 @@
-import numpy as np
+from PIL import Image, ImageSequence
 
-class XYChart:
-    ...
-    def update_legend(self):
-        for ax in self.axes:
-            handles, labels = ax.get_legend_handles_labels()
+# 원본 GIF 열기
+im = Image.open("input.gif")
 
-            def _has_data(h):
-                # Line2D가 아닐 수도 있으니 방어적으로
-                getx = getattr(h, "get_xdata", None)
-                gety = getattr(h, "get_ydata", None)
-                if callable(getx) and callable(gety):
-                    x = np.asarray(getx())
-                    y = np.asarray(gety())
-                    return x.size > 0 and y.size > 0
-                return False
+# 자를 영역 지정 (left, upper, right, lower)
+# 예: 위 30, 아래 40 픽셀 잘라내기
+top_crop = 30
+bottom_crop = 40
+left, top, right, bottom = 0, top_crop, im.width, im.height - bottom_crop
 
-            filtered_pairs = [(h, l) for h, l in zip(handles, labels) if _has_data(h)]
-            leg = ax.get_legend()
+frames = []
+for frame in ImageSequence.Iterator(im):
+    frame = frame.copy().crop((left, top, right, bottom))
+    frames.append(frame)
 
-            if filtered_pairs:
-                fh, fl = zip(*filtered_pairs)
-                ax.legend(fh, fl, loc='upper right', fontsize=8)
-            else:
-                if leg is not None:
-                    leg.remove()
-
-    def set_series(self, key, x_list, y_list, *, marker=None, linestyle='-', label=None, axis_index=0):
-        """한 번에 x/y 전체를 세팅 (배치 갱신)"""
-        # 1) 1D 배열로 강제 + 길이 체크
-        x_arr = np.asarray(x_list).reshape(-1)
-        y_arr = np.asarray(y_list).reshape(-1)
-        if x_arr.size != y_arr.size:
-            print(f"[XYChart] set_series: length mismatch (x={x_arr.size}, y={y_arr.size})")
-            return
-
-        # 2) 라인 생성(없으면)
-        if key not in self.lines:
-            axis = self.axes[axis_index]
-            line, = axis.plot([], [], linestyle=linestyle, marker=marker, label=label or key)
-            self.lines[key] = line
-            self.data[key] = {'x': [], 'y': []}
-
-        # 3) 데이터 반영 (list→array여도 OK)
-        self.data[key]['x'] = x_arr.tolist()
-        self.data[key]['y'] = y_arr.tolist()
-
-        ln = self.lines[key]
-        if marker is not None: ln.set_marker(marker)
-        ln.set_linestyle(linestyle)
-        if label is not None: ln.set_label(label)
-        ln.set_data(self.data[key]['x'], self.data[key]['y'])
-
-        ax = ln.axes
-        ax.relim(); ax.autoscale_view()
-        self.update_legend()
-        self.canvas.draw()
+# 잘라낸 GIF 저장
+frames[0].save(
+    "output_cropped.gif",
+    save_all=True,
+    append_images=frames[1:],
+    loop=0,
+    duration=im.info["duration"],
+    disposal=2
+)
