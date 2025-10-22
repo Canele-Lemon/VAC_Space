@@ -1,19 +1,23 @@
-def _focus_cell(self, table: QtWidgets.QTableWidget, row: int, col: int, center: bool=True):
-    """해당 셀을 선택하고 스크롤로 가시화."""
-    table.setCurrentCell(row, col)  # 선택 & 포커스
-    item = table.item(row, col)
-    if item is None:
-        return
-    hint = (QtWidgets.QAbstractItemView.PositionAtCenter
-            if center else QtWidgets.QAbstractItemView.PositionAtBottom)
-    table.scrollToItem(item, hint)
+def _set_item(self, table: QtWidgets.QTableWidget, row: int, col: int, value):
+    # 정렬 잠시 OFF (행 재배치 방지)
+    sorting_on = table.isSortingEnabled()
+    if sorting_on:
+        table.setSortingEnabled(False)
 
-def _flash_cell(self, table: QtWidgets.QTableWidget, row: int, col: int,
-                ms: int=350, color: QtGui.QColor=QtGui.QColor(255, 236, 179)):
-    """셀 배경을 잠깐 하이라이트(시각적 피드백)."""
+    # 행 확보
+    self._ensure_row_count(table, row)
+
+    # 기존 아이템이 있으면 재사용(배경/폰트 유지), 없으면 생성
     item = table.item(row, col)
     if item is None:
-        return
-    old_brush = item.background()
-    item.setBackground(QtGui.QBrush(color))
-    QtCore.QTimer.singleShot(ms, lambda: item.setBackground(old_brush))
+        item = QtWidgets.QTableWidgetItem()
+        table.setItem(row, col, item)
+    item.setText("" if value is None else str(value))
+
+    # 포커스 + 스크롤 + 하이라이트
+    self._focus_cell(table, row, col, center=True)
+    self._flash_cell(table, row, col, ms=300)
+
+    # 정렬 복구
+    if sorting_on:
+        table.setSortingEnabled(True)
