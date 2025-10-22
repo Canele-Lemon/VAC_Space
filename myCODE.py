@@ -1,23 +1,64 @@
-def _set_item(self, table: QtWidgets.QTableWidget, row: int, col: int, value):
-    # 정렬 잠시 OFF (행 재배치 방지)
-    sorting_on = table.isSortingEnabled()
-    if sorting_on:
-        table.setSortingEnabled(False)
+class CIE1976Chart:
+    def __init__(self, parent=None):
+        ...
+        ms = 4.0  # 마커 크기 조금 작게
+        self.lines = {
+            ('OFF', 'main'): self.ax.plot([], [], 'o',
+                                          markersize=ms,
+                                          markerfacecolor='none',
+                                          markeredgecolor='red', linewidth=0)[0],
+            ('OFF', 'sub'):  self.ax.plot([], [], 'o',
+                                          markersize=ms,
+                                          markerfacecolor='none',
+                                          markeredgecolor='green', linewidth=0)[0],
+            ('ON', 'main'):  self.ax.plot([], [], 'o',
+                                          markersize=ms,
+                                          markerfacecolor='red',
+                                          markeredgecolor='red', linewidth=0)[0],
+            ('ON', 'sub'):   self.ax.plot([], [], 'o',
+                                          markersize=ms,
+                                          markerfacecolor='green',
+                                          markeredgecolor='green', linewidth=0)[0],
+        }
 
-    # 행 확보
-    self._ensure_row_count(table, row)
+        # 🔹 데이터 저장용 딕셔너리
+        self.data = {k: {'u': [], 'v': []} for k in self.lines.keys()}  # (self._data → self.data)
+        self._update_legend()
 
-    # 기존 아이템이 있으면 재사용(배경/폰트 유지), 없으면 생성
-    item = table.item(row, col)
-    if item is None:
-        item = QtWidgets.QTableWidgetItem()
-        table.setItem(row, col, item)
-    item.setText("" if value is None else str(value))
+    def reset_on(self):
+        for k in (('ON', 'main'), ('ON', 'sub')):
+            self.data[k]['u'].clear()
+            self.data[k]['v'].clear()
+            self.lines[k].set_data([], [])
+        self._update_legend()
+        self.canvas.draw_idle()
 
-    # 포커스 + 스크롤 + 하이라이트
-    self._focus_cell(table, row, col, center=True)
-    self._flash_cell(table, row, col, ms=300)
+    def add_point(self, *, state: str, role: str, u_p: float, v_p: float):
+        key = (state, role)
+        if key not in self.lines:
+            return
+        self.data[key]['u'].append(float(u_p))
+        self.data[key]['v'].append(float(v_p))
+        self.lines[key].set_data(self.data[key]['u'], self.data[key]['v'])
+        self.lines[key].set_label(f"{state} {role}")
+        self._update_legend()
+        self.canvas.draw_idle()
 
-    # 정렬 복구
-    if sorting_on:
-        table.setSortingEnabled(True)
+    def _update_legend(self):
+        handles, labels = [], []
+        for ln in self.ax.lines:
+            lb = ln.get_label()
+            if lb in ("BT.709", "DCI"):
+                handles.append(ln)
+                labels.append(lb)
+        for k in (('OFF', 'main'), ('OFF', 'sub'), ('ON', 'main'), ('ON', 'sub')):
+            ln = self.lines.get(k)
+            if ln and ln.get_xdata() and ln.get_ydata():
+                handles.append(ln)
+                labels.append(ln.get_label())
+        if handles:
+            self.ax.legend(handles, labels, fontsize=8, loc='lower right')
+        else:
+            leg = self.ax.get_legend()
+            if leg:
+                leg.remove()
