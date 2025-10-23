@@ -159,4 +159,62 @@ def _apply_vac_from_db_and_measure_on(self):
         return
     # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
+def _get_ui_meta(self):
+    """
+    UI 콤보값에서 패널명, 프레임레이트(Hz 제거), 모델연도(두 자리) 파싱.
+    - FrameRate: "120Hz", "119.88 Hz" 등 → 숫자만 float
+    - ModelYear: "25Y", "Y2024", "2024Y", "2025", "25" 등 → 두 자리(float: 25.0)
+      (없으면 self.current_model_year 같은 백업 값 사용, 최종 실패 시 0.0)
+    """
+    import re
+
+    # Panel text (그대로)
+    panel_text = self.ui.vac_cmb_PanelMaker.currentText().strip()
+
+    # Frame Rate: 숫자만 추출
+    fr_text = self.ui.vac_cmb_FrameRate.currentText().strip()
+    fr_num = 0.0
+    try:
+        m = re.search(r'(\d+(?:\.\d+)?)', fr_text)
+        if m:
+            fr_num = float(m.group(1))
+        else:
+            logging.warning(f"[UI META] FrameRate parsing failed: '{fr_text}' → 0.0")
+    except Exception as e:
+        logging.warning(f"[UI META] FrameRate parsing error for '{fr_text}': {e}")
+
+    # Model Year: "25Y" 형태 포함 모든 변형 지원 → 두 자리로 강제(예: 2025 → 25.0)
+    def _parse_model_year_2digit(txt: str) -> float:
+        if not txt:
+            return float('nan')
+        try:
+            m = re.search(r'(\d{2,4})', txt)  # 25, 2025 등
+            if m:
+                yy = int(m.group(1))
+                return float(yy % 100)        # 두 자리 고정
+        except Exception:
+            pass
+        return float('nan')
+
+    # 1순위: 콤보박스 (예: "25Y")
+    my_text = self.ui.vac_cmb_ModelYear.currentText().strip() if hasattr(self.ui, "vac_cmb_ModelYear") else ""
+    my2 = _parse_model_year_2digit(my_text)
+
+    # 2순위: 런타임 보관값(있다면), 이것도 두 자리화
+    if not np.isfinite(my2):
+        backup = getattr(self, "current_model_year", 0.0)
+        try:
+            my2 = float(int(backup) % 100)
+        except Exception:
+            my2 = 0.0
+
+    # 최종 보정/로그
+    if not np.isfinite(my2):
+        logging.warning(f"[UI META] ModelYear parsing failed: '{my_text}' → 0.0")
+        my2 = 0.0
+
+    # 디버그 로그 (원문/파싱결과)
+    logging.debug(f"[UI META] panel='{panel_text}', fr='{fr_text}'→{fr_num}, model_year='{my_text}'→{my2}")
+
+    return panel_text, fr_num, my2
 
