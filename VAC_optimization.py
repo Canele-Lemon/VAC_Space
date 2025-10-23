@@ -1,220 +1,57 @@
-# ===== [ADD] 정규화 다운샘플 & 업샘플 =====
-def _down4096_to_256_norm(self, arr4096):
-    """4096 → 256 다운샘플 + [0,1] 정규화 (학습 스케일과 일치)"""
-    a = np.asarray(arr4096, dtype=np.float32)
-    idx = np.round(np.linspace(0, 4095, 256)).astype(int)
-    return (a[idx] / 4095.0).astype(np.float32)
+    def _predict_Y0W_from_models(self, lut256_dict, *, panel_text, frame_rate, model_year):
+        """
+        저장된 hybrid_*_model.pkl 3개로 'W' 패턴 256 포인트의 (Gamma, Cx, Cy) 예측 벡터를 생성
+        """
+        # 256행 피처 매트릭스
+        X_rows = [ self._build_runtime_feature_row_W(lut256_dict, g,
+                        panel_text=panel_text, frame_rate=frame_rate, model_year=model_year) for g in range(256) ]
+        X = np.vstack(X_rows).astype(np.float32)
 
-def _up256_to_4096_norm(self, arr256_norm):
-    """[0,1] 256 → [0,1] 4096 업샘플 (TV 적용 전 마지막에만 12bit 변환)"""
-    arr256_norm = np.asarray(arr256_norm, dtype=np.float32)
-    x_small = np.linspace(0, 1, 256)
-    x_big   = np.linspace(0, 1, 4096)
-    return np.interp(x_big, x_small, arr256_norm).astype(np.float32)
+        def _pred_one(payload):
+            lin = payload["linear_model"]; rf = payload["rf_residual"]
+            tgt = payload["target_scaler"]; y_mean = float(tgt["mean"]); y_std = float(tgt["std"])
+            base_s = lin.predict(X)
+            resid_s = rf.predict(X).astype(np.float32)
+            y = (base_s + resid_s) * y_std + y_mean
+            return y.astype(np.float32)
 
-def _to_tv_12bit(self, arr4096_norm):
-    """[0,1] 4096 → 12bit 정수"""
-    a = np.asarray(arr4096_norm, np.float32)
-    return np.clip(np.round(a * 4095.0), 0, 4095).astype(int)
+        yG = _pred_one(self.models_Y0_bundle["Gamma"])
+        yCx= _pred_one(self.models_Y0_bundle["Cx"])
+        yCy= _pred_one(self.models_Y0_bundle["Cy"])
+        # Gamma의 0,255는 신뢰구간 밖 → NaN 취급
+        yG[0] = np.nan; yG[255] = np.nan
+        return {"Gamma": yG, "Cx": yCx, "Cy": yCy}
+        여기서 아래 에러가 떴어요
 
-# ===== [ADD] 패널 원핫 =====
-def _panel_onehot(self, panel_text: str):
-    # 학습 때 쓰던 순서와 동일해야 합니다.
-    PANEL_MAKER_CATEGORIES = ['HKC(H2)', 'HKC(H5)', 'BOE', 'CSOT', 'INX']
-    v = np.zeros(len(PANEL_MAKER_CATEGORIES), np.float32)
-    try:
-        i = PANEL_MAKER_CATEGORIES.index(panel_text)
-        v[i] = 1.0
-    except ValueError:
-        # 미스매치면 전부 0 (학습과 계약 유지)
-        pass
-    return v
 
-# ===== [ADD] per-gray(W) 한 행 피처 (길이=18) =====
-def _build_runtime_feature_row_W(self, lut256_norm: dict, gray: int,
-                                 panel_text: str, frame_rate: float, model_year_2digit: float):
-    """
-    스키마(18):
-    [R_Low, R_High, G_Low, G_High, B_Low, B_High, panel_onehot(5), frame_rate, model_year(2-digit), gray_norm, W,R,G,B]
-    """
-    row = [
-        float(lut256_norm['R_Low'][gray]),  float(lut256_norm['R_High'][gray]),
-        float(lut256_norm['G_Low'][gray]),  float(lut256_norm['G_High'][gray]),
-        float(lut256_norm['B_Low'][gray]),  float(lut256_norm['B_High'][gray]),
-    ]
-    row.extend(self._panel_onehot(panel_text).tolist())
-    row.append(float(frame_rate))
-    row.append(float(model_year_2digit))      # 반드시 두 자리(예: 25.0)
-    row.append(gray / 255.0)                  # gray_norm
-    # W 패턴 one-hot
-    row.extend([1.0, 0.0, 0.0, 0.0])
-    return np.asarray(row, dtype=np.float32)
+2025-10-23 12:48:36,976 - DEBUG - subpage_vacspace.py:2192 - [UI META] panel='INX', fr='60Hz'→60.0, model_year='Y26'→26.0
+2025-10-23 12:48:36,978 - DEBUG - subpage_vacspace.py:2252 - [RUNTIME X from DB+UI] shape=(256, 18), dim=18
+2025-10-23 12:48:36,979 - DEBUG - subpage_vacspace.py:2269 - [RUNTIME X from DB+UI] panel_onehot sum unique: [1.] (expect 0 or 1)
+2025-10-23 12:48:36,979 - DEBUG - subpage_vacspace.py:2270 - [RUNTIME X from DB+UI] ctx: panel='INX', fr=60.0, my(2digit)=26.0
+2025-10-23 12:48:36,980 - DEBUG - subpage_vacspace.py:2278 - [RUNTIME X from DB+UI] sample: idx=  0 | LUT6=[0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000] | tail10=[0.0000, 0.0000, 1.0000, 60.0000, 26.0000, 0.0000, 1.0000, 0.0000, 0.0000, 0.0000]
+2025-10-23 12:48:36,980 - DEBUG - subpage_vacspace.py:2279 - [RUNTIME X from DB+UI] sample: idx=128 | LUT6=[0.1800, 0.6869, 0.2415, 0.6801, 0.1499, 0.6869] | tail10=[0.0000, 0.0000, 1.0000, 60.0000, 26.0000, 0.5020, 1.0000, 0.0000, 0.0000, 0.0000]
+2025-10-23 12:48:36,980 - DEBUG - subpage_vacspace.py:2280 - [RUNTIME X from DB+UI] sample: idx=255 | LUT6=[1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000] | tail10=[0.0000, 0.0000, 1.0000, 60.0000, 26.0000, 1.0000, 1.0000, 0.0000, 0.0000, 0.0000]
+2025-10-23 12:48:36,980 - DEBUG - subpage_vacspace.py:2286 - [RUNTIME X from DB+UI] last10 idx=246 | gray_norm=0.9647 | tail10=(0.0, 0.0, 1.0, 60.0, 26.0, 0.9647058844566345, 1.0, 0.0, 0.0, 0.0)
+2025-10-23 12:48:36,981 - DEBUG - subpage_vacspace.py:2286 - [RUNTIME X from DB+UI] last10 idx=247 | gray_norm=0.9686 | tail10=(0.0, 0.0, 1.0, 60.0, 26.0, 0.9686274528503418, 1.0, 0.0, 0.0, 0.0)
+2025-10-23 12:48:36,981 - DEBUG - subpage_vacspace.py:2286 - [RUNTIME X from DB+UI] last10 idx=248 | gray_norm=0.9725 | tail10=(0.0, 0.0, 1.0, 60.0, 26.0, 0.9725490212440491, 1.0, 0.0, 0.0, 0.0)
+2025-10-23 12:48:36,981 - DEBUG - subpage_vacspace.py:2286 - [RUNTIME X from DB+UI] last10 idx=249 | gray_norm=0.9765 | tail10=(0.0, 0.0, 1.0, 60.0, 26.0, 0.9764705896377563, 1.0, 0.0, 0.0, 0.0)
+2025-10-23 12:48:36,981 - DEBUG - subpage_vacspace.py:2286 - [RUNTIME X from DB+UI] last10 idx=250 | gray_norm=0.9804 | tail10=(0.0, 0.0, 1.0, 60.0, 26.0, 0.9803921580314636, 1.0, 0.0, 0.0, 0.0)
+2025-10-23 12:48:36,982 - DEBUG - subpage_vacspace.py:2286 - [RUNTIME X from DB+UI] last10 idx=251 | gray_norm=0.9843 | tail10=(0.0, 0.0, 1.0, 60.0, 26.0, 0.9843137264251709, 1.0, 0.0, 0.0, 0.0)
+2025-10-23 12:48:36,982 - DEBUG - subpage_vacspace.py:2286 - [RUNTIME X from DB+UI] last10 idx=252 | gray_norm=0.9882 | tail10=(0.0, 0.0, 1.0, 60.0, 26.0, 0.9882352948188782, 1.0, 0.0, 0.0, 0.0)
+2025-10-23 12:48:36,982 - DEBUG - subpage_vacspace.py:2286 - [RUNTIME X from DB+UI] last10 idx=253 | gray_norm=0.9922 | tail10=(0.0, 0.0, 1.0, 60.0, 26.0, 0.9921568632125854, 1.0, 0.0, 0.0, 0.0)
+2025-10-23 12:48:36,982 - DEBUG - subpage_vacspace.py:2286 - [RUNTIME X from DB+UI] last10 idx=254 | gray_norm=0.9961 | tail10=(0.0, 0.0, 1.0, 60.0, 26.0, 0.9960784316062927, 1.0, 0.0, 0.0, 0.0)
+2025-10-23 12:48:36,982 - DEBUG - subpage_vacspace.py:2286 - [RUNTIME X from DB+UI] last10 idx=255 | gray_norm=1.0000 | tail10=(0.0, 0.0, 1.0, 60.0, 26.0, 1.0, 1.0, 0.0, 0.0, 0.0)
+2025-10-23 12:48:36,982 - INFO - subpage_vacspace.py:937 - [PredictOpt] 예측 기반 1차 최적화 시작
+2025-10-23 12:48:36,987 - DEBUG - subpage_vacspace.py:2192 - [UI META] panel='INX', fr='60Hz'→60.0, model_year='Y26'→26.0
+2025-10-23 12:48:36,989 - ERROR - subpage_vacspace.py:2129 - [PredictOpt] failed
+Traceback (most recent call last):
+  File "d:\LCM_DX\OMS_2\he_opticalmeasurement\subpages\vacspace_130\subpage_vacspace.py", line 2073, in _predictive_first_optimize
+    y_pred = self._predict_Y0W_from_models(lut256_iter,
+  File "d:\LCM_DX\OMS_2\he_opticalmeasurement\subpages\vacspace_130\subpage_vacspace.py", line 1987, in _predict_Y0W_from_models
+    X_rows = [ self._build_runtime_feature_row_W(lut256_dict, g,
+  File "d:\LCM_DX\OMS_2\he_opticalmeasurement\subpages\vacspace_130\subpage_vacspace.py", line 1987, in <listcomp>
+    X_rows = [ self._build_runtime_feature_row_W(lut256_dict, g,
+TypeError: Widget_vacspace._build_runtime_feature_row_W() got an unexpected keyword argument 'model_year'
+2025-10-23 12:48:36,992 - WARNING - subpage_vacspace.py:942 - [PredictOpt] 실패 → 원본 DB LUT로 진행
 
-# ===== [ADD] DB JSON → 런타임 X(256×18) 생성 =====
-def _build_runtime_X_from_db_json(self, vac_data_json: str):
-    vac_dict = json.loads(vac_data_json)
-
-    # 4096→256 정규화 (학습 스케일과 동일)
-    lut256_norm = {
-        "R_Low":  self._down4096_to_256_norm(vac_dict["RchannelLow"]),
-        "R_High": self._down4096_to_256_norm(vac_dict["RchannelHigh"]),
-        "G_Low":  self._down4096_to_256_norm(vac_dict["GchannelLow"]),
-        "G_High": self._down4096_to_256_norm(vac_dict["GchannelHigh"]),
-        "B_Low":  self._down4096_to_256_norm(vac_dict["BchannelLow"]),
-        "B_High": self._down4096_to_256_norm(vac_dict["BchannelHigh"]),
-    }
-
-    # UI 메타 (model_year는 두 자리로 강제)
-    panel_text, frame_rate, model_year_full = self._get_ui_meta()
-    model_year_2digit = float(int(model_year_full) % 100)
-
-    X_rows = [
-        self._build_runtime_feature_row_W(
-            lut256_norm, g,
-            panel_text=panel_text,
-            frame_rate=frame_rate,
-            model_year_2digit=model_year_2digit
-        )
-        for g in range(256)
-    ]
-    X = np.vstack(X_rows).astype(np.float32)
-    ctx = {"panel_text": panel_text, "frame_rate": frame_rate, "model_year_2digit": model_year_2digit}
-    return X, lut256_norm, ctx
-
-# ===== [ADD] 런타임 X 디버그 로깅 =====
-def _debug_log_runtime_X(self, X: np.ndarray, ctx: dict, tag="[RUNTIME X]"):
-    # 기대: X.shape=(256,18)
-    try:
-        D = X.shape[1]
-    except Exception:
-        D = None
-    logging.debug(f"{tag} shape={getattr(X,'shape',None)}, dim={D}")
-    if X is None or X.shape != (256, 18):
-        logging.warning(f"{tag} 스키마 불일치: 기대 (256,18), 실제 {getattr(X,'shape',None)}")
-
-    # 컬럼 해석을 위해 인덱스 슬라이스
-    idx = {
-        "LUT": slice(0,6),
-        "panel_onehot": slice(6,11),
-        "fr": 11,
-        "my": 12,
-        "gray_norm": 13,
-        "p_oh": slice(14,18),
-    }
-
-    # 패널 원핫 합/원핫성
-    p_sum = X[:, idx["panel_onehot"]].sum(axis=1)
-    uniq = np.unique(p_sum)
-    logging.debug(f"{tag} panel_onehot sum unique: {uniq[:8]} (expect 0 or 1)")
-    logging.debug(f"{tag} ctx: panel='{ctx.get('panel_text')}', fr={ctx.get('frame_rate')}, my(2digit)={ctx.get('model_year_2digit')}")
-
-    # 샘플 행 (0, 128, -1) & tail10
-    def _fmt_row(i):
-        r = X[i]
-        lut = ", ".join(f"{v:.4f}" for v in r[idx["LUT"]])
-        tail = ", ".join(f"{v:.4f}" for v in r[-10:])
-        return f"idx={i:3d} | LUT6=[{lut}] | tail10=[{tail}]"
-    logging.debug(f"{tag} sample: {_fmt_row(0)}")
-    logging.debug(f"{tag} sample: {_fmt_row(128)}")
-    logging.debug(f"{tag} sample: {_fmt_row(255)}")
-
-    # 마지막 10개 행의 tail & 회귀 타깃이 없으니 gray_norm만 체크
-    for i in range(246, 256):
-        r = X[i]
-        tail10 = tuple(float(x) for x in r[-10:])
-        logging.debug(f"{tag} last10 idx={i:3d} | gray_norm={r[idx['gray_norm']]:.4f} | tail10={tail10}")
-        
-def _get_ui_meta(self):
-    panel_text = self.ui.vac_cmb_PanelMaker.currentText().strip()
-
-    fr_text = self.ui.vac_cmb_FrameRate.currentText().strip()
-    fr_num = 0.0
-    m = re.search(r'(\d+(?:\.\d+)?)', fr_text)
-    if m: fr_num = float(m.group(1))
-
-    my_text = self.ui.vac_cmb_ModelYear.currentText().strip() if hasattr(self.ui, "vac_cmb_ModelYear") else ""
-    model_year = 0.0
-    m = re.search(r'(\d{2,4})', my_text)
-    if m:
-        yy = int(m.group(1))
-        model_year = float(yy % 100)   # ← 두 자리 강제
-    return panel_text, fr_num, model_year
-
-def _apply_vac_from_db_and_measure_on(self):
-    panel = self.ui.vac_cmb_PanelMaker.currentText().strip()
-    fr    = self.ui.vac_cmb_FrameRate.currentText().strip()
-    vac_pk, vac_version, vac_data = self._fetch_vac_by_model(panel, fr)
-    if vac_data is None:
-        logging.error(f"{panel}+{fr} 조합으로 매칭되는 VAC Data가 없습니다 - 종료")
-        return
-
-    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-    # [ADD] 런타임 X(256×18) 생성 & 스키마 디버그 로깅
-    try:
-        X_runtime, lut256_norm, ctx = self._build_runtime_X_from_db_json(vac_data)
-        self._debug_log_runtime_X(X_runtime, ctx, tag="[RUNTIME X from DB+UI]")
-    except Exception as e:
-        logging.exception("[RUNTIME X] build/debug failed")
-        # 여기서 실패하면 예측/최적화 전에 스키마 문제로 조기 중단하도록 권장
-        return
-    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
-def _get_ui_meta(self):
-    """
-    UI 콤보값에서 패널명, 프레임레이트(Hz 제거), 모델연도(두 자리) 파싱.
-    - FrameRate: "120Hz", "119.88 Hz" 등 → 숫자만 float
-    - ModelYear: "25Y", "Y2024", "2024Y", "2025", "25" 등 → 두 자리(float: 25.0)
-      (없으면 self.current_model_year 같은 백업 값 사용, 최종 실패 시 0.0)
-    """
-    import re
-
-    # Panel text (그대로)
-    panel_text = self.ui.vac_cmb_PanelMaker.currentText().strip()
-
-    # Frame Rate: 숫자만 추출
-    fr_text = self.ui.vac_cmb_FrameRate.currentText().strip()
-    fr_num = 0.0
-    try:
-        m = re.search(r'(\d+(?:\.\d+)?)', fr_text)
-        if m:
-            fr_num = float(m.group(1))
-        else:
-            logging.warning(f"[UI META] FrameRate parsing failed: '{fr_text}' → 0.0")
-    except Exception as e:
-        logging.warning(f"[UI META] FrameRate parsing error for '{fr_text}': {e}")
-
-    # Model Year: "25Y" 형태 포함 모든 변형 지원 → 두 자리로 강제(예: 2025 → 25.0)
-    def _parse_model_year_2digit(txt: str) -> float:
-        if not txt:
-            return float('nan')
-        try:
-            m = re.search(r'(\d{2,4})', txt)  # 25, 2025 등
-            if m:
-                yy = int(m.group(1))
-                return float(yy % 100)        # 두 자리 고정
-        except Exception:
-            pass
-        return float('nan')
-
-    # 1순위: 콤보박스 (예: "25Y")
-    my_text = self.ui.vac_cmb_ModelYear.currentText().strip() if hasattr(self.ui, "vac_cmb_ModelYear") else ""
-    my2 = _parse_model_year_2digit(my_text)
-
-    # 2순위: 런타임 보관값(있다면), 이것도 두 자리화
-    if not np.isfinite(my2):
-        backup = getattr(self, "current_model_year", 0.0)
-        try:
-            my2 = float(int(backup) % 100)
-        except Exception:
-            my2 = 0.0
-
-    # 최종 보정/로그
-    if not np.isfinite(my2):
-        logging.warning(f"[UI META] ModelYear parsing failed: '{my_text}' → 0.0")
-        my2 = 0.0
-
-    # 디버그 로그 (원문/파싱결과)
-    logging.debug(f"[UI META] panel='{panel_text}', fr='{fr_text}'→{fr_num}, model_year='{my_text}'→{my2}")
-
-    return panel_text, fr_num, my2
 
