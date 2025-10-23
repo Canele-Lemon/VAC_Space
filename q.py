@@ -1,329 +1,197 @@
-    def _run_off_baseline_then_on(self):
-        profile_off = SessionProfile(
-            legend_text="VAC OFF (Ref.)",
-            cie_label="data_1",
-            table_cols={"lv":0, "cx":1, "cy":2, "gamma":3},
-            ref_store=None
+import json
+import numpy as np
+
+def _build_runtime_feature_row_W(self, lut256_dict, gray, *, panel_text:str, frame_rate:float, model_year:float):
+    """
+    train_Y0_models 에 맞춘 per-gray feature (pattern='W' only).
+    - LUT 6ch(256 중 g 위치) + panel_onehot + frame_rate + model_year + gray_norm + pattern_onehot(4)
+    - panel_onehot은 UI의 panel_text를 PANEL_MAKER_CATEGORIES에서 인덱싱
+    """
+    from src.config.app_config import PANEL_MAKER_CATEGORIES
+    # LUT 6ch @gray
+    row = [
+        float(lut256_dict['R_Low'][gray]),  float(lut256_dict['R_High'][gray]),
+        float(lut256_dict['G_Low'][gray]),  float(lut256_dict['G_High'][gray]),
+        float(lut256_dict['B_Low'][gray]),  float(lut256_dict['B_High'][gray]),
+    ]
+    # panel one-hot
+    cats = PANEL_MAKER_CATEGORIES[0]
+    p_idx = cats.index(panel_text) if panel_text in cats else -1
+    panel_oh = np.zeros(len(cats), np.float32)
+    if 0 <= p_idx < len(cats): panel_oh[p_idx] = 1.0
+    row.extend(panel_oh.tolist())
+    # meta
+    row.append(float(frame_rate))
+    row.append(float(model_year))
+    # gray_norm
+    row.append(gray/255.0)
+    # pattern one-hot (W,R,G,B)
+    p_oh = np.zeros(4, np.float32); p_oh[0] = 1.0  # 'W'
+    row.extend(p_oh.tolist())
+    return np.asarray(row, dtype=np.float32)
+
+def _predict_Y0W_from_models(self, lut256_dict, *, panel_text, frame_rate, model_year):
+    """
+    저장된 hybrid_*_model.pkl 3개로 'W' 패턴 256 포인트의 (Gamma, Cx, Cy) 예측 벡터를 생성
+    """
+    # 256행 피처 매트릭스
+    X_rows = [ self._build_runtime_feature_row_W(lut256_dict, g,
+                    panel_text=panel_text, frame_rate=frame_rate, model_year=model_year) for g in range(256) ]
+    X = np.vstack(X_rows).astype(np.float32)
+
+    def _pred_one(payload):
+        lin = payload["linear_model"]; rf = payload["rf_residual"]
+        tgt = payload["target_scaler"]; y_mean = float(tgt["mean"]); y_std = float(tgt["std"])
+        base_s = lin.predict(X)
+        resid_s = rf.predict(X).astype(np.float32)
+        y = (base_s + resid_s) * y_std + y_mean
+        return y.astype(np.float32)
+
+    yG = _pred_one(self.models_Y0_bundle["Gamma"])
+    yCx= _pred_one(self.models_Y0_bundle["Cx"])
+    yCy= _pred_one(self.models_Y0_bundle["Cy"])
+    # Gamma의 0,255는 신뢰구간 밖 → NaN 취급
+    yG[0] = np.nan; yG[255] = np.nan
+    return {"Gamma": yG, "Cx": yCx, "Cy": yCy}
+
+def _delta_targets_vs_OFF_from_pred(self, y_pred_W, off_store):
+    """
+    OFF 실측(white/main)과 예측 ON 값을 비교해 Δ 타깃(길이 256)을 만든다.
+    """
+    # OFF store → lv, cx, cy 시리즈
+    lv_ref = np.zeros(256); cx_ref = np.zeros(256); cy_ref = np.zeros(256)
+    for g in range(256):
+        tR = off_store['gamma']['main']['white'].get(g, None)
+        if tR: lv_ref[g], cx_ref[g], cy_ref[g] = tR
+        else:  lv_ref[g]=np.nan; cx_ref[g]=np.nan; cy_ref[g]=np.nan
+    G_ref = self._compute_gamma_series(lv_ref)
+
+    d = {
+        "Gamma": (np.nan_to_num(y_pred_W["Gamma"], nan=np.nan) - G_ref),
+        "Cx":    (y_pred_W["Cx"] - cx_ref),
+        "Cy":    (y_pred_W["Cy"] - cy_ref),
+    }
+    for k in d:
+        d[k] = np.nan_to_num(d[k], nan=0.0).astype(np.float32)
+    return d
+
+def _down4096_to_256_float(self, arr4096):
+    idx = np.round(np.linspace(0, 4095, 256)).astype(int)
+    return np.asarray(arr4096, dtype=np.float32)[idx]
+
+def _predictive_first_optimize(self, vac_data_json, *, n_iters=2, wG=0.4, wC=1.0, lambda_ridge=1e-3):
+    """
+    DB에서 가져온 VAC JSON을 예측모델+자코비안으로 미리 n회 보정.
+    - 감마 정확도 낮음: wG(기본 0.4)로 영향 축소
+    - return: (optimized_vac_json_str, lut_dict_4096)  혹은 (None, None) 실패 시
+    """
+    try:
+        # 0) 로딩 GIF 시작 (Step2 라벨)
+        self.label_processing_step_2, self.movie_processing_step_2 = self.start_loading_animation(
+            self.ui.vac_label_pixmap_step_2, 'processing.gif'
         )
 
-        def _after_off(store_off):
-            self._off_store = store_off
-            logging.debug(f"VAC ON 측정 결과:\n{self._off_store}")
-            self.stop_loading_animation(self.label_processing_step_1, self.movie_processing_step_1)
-            self.ui.vac_label_pixmap_step_1.setPixmap(self.process_complete_pixmap)
-            logging.info("[MES] VAC OFF 상태 측정 완료")
-            
-            logging.info("[TV CONTROL] TV VAC ON 전환")
-            if not self._set_vac_active(True):
-                logging.warning("[TV CONTROL] VAC ON 전환 실패 - VAC 최적화 종료")
-                return
-                
-            # 3. DB에서 모델/주사율에 맞는 VAC Data 적용 → 읽기 → LUT 차트 갱신
-            self._apply_vac_from_db_and_measure_on()
+        # 1) json→dict
+        vac_dict = json.loads(vac_data_json)
 
-        self.start_viewing_angle_session(
-            profile=profile_off, 
-            gray_levels=op.gray_levels_256, 
-            gamma_patterns=('white',),
-            colorshift_patterns=op.colorshift_patterns,
-            first_gray_delay_ms=3000, cs_settle_ms=1000,
-            on_done=_after_off
-        )
+        # 2) 4096→256
+        lut256 = {
+            "R_Low":  self._down4096_to_256_float(vac_dict["RchannelLow"]),
+            "R_High": self._down4096_to_256_float(vac_dict["RchannelHigh"]),
+            "G_Low":  self._down4096_to_256_float(vac_dict["GchannelLow"]),
+            "G_High": self._down4096_to_256_float(vac_dict["GchannelHigh"]),
+            "B_Low":  self._down4096_to_256_float(vac_dict["BchannelLow"]),
+            "B_High": self._down4096_to_256_float(vac_dict["BchannelHigh"]),
+        }
 
-    def _apply_vac_from_db_and_measure_on(self):
-        """
-        3-a) DB에서 Panel_Maker + Frame_Rate 조합인 VAC_Data 가져오기
-        3-b) TV에 쓰기 → TV에서 읽기
-            → LUT 차트 갱신(reset_and_plot)
-            → ON 시리즈 리셋(reset_on)
-            → ON 측정 세션 시작(start_viewing_angle_session)
-        """
-        # 3-a) DB에서 VAC JSON 로드
-        self.label_processing_step_1, self.movie_processing_step_1 = self.start_loading_animation(self.ui.vac_label_pixmap_step_2, 'processing.gif')
+        # 3) 자코비안 준비 확인
+        if not hasattr(self, "A_Gamma"):  # start에서 이미 _load_jacobian_artifacts 호출됨
+            logging.error("[PredictOpt] Jacobian not prepared.")
+            return None, None
+
+        # 4) UI 메타
         panel = self.ui.vac_cmb_PanelMaker.currentText().strip()
-        fr    = self.ui.vac_cmb_FrameRate.currentText().strip()
-        vac_pk, vac_version, vac_data = self._fetch_vac_by_model(panel, fr)
-        if vac_data is None:
-            logging.error(f"{panel}+{fr} 조합으로 매칭되는 VAC Data가 없습니다 - 최적화 루프 종료")
-            return
+        fr    = float(self.ui.vac_cmb_FrameRate.currentText().strip())
+        # model_year는 알 수 없으면 0으로
+        model_year = float(getattr(self, "current_model_year", 0.0))
 
-        # TV 쓰기 완료 시 콜백
-        def _after_write(ok, msg):
-            if not ok:
-                logging.error(f"[LUT LOADING] DB fetch LUT TV Writing 실패: {msg} - 최적화 루프 종료")
-                return
-            
-            # 쓰기 성공 → TV에서 VAC 읽어오기
-            logging.info(f"[LUT LOADING] DB fetch LUT TV Writing 완료: {msg}")
-            logging.info("[LUT LOADING] DB fetch LUT TV Writing 확인을 위한 TV Reading 시작")
-            self._read_vac_from_tv(_after_read)
+        # 5) 반복 보정
+        K = len(self._jac_artifacts["knots"])
+        Phi = self._stack_basis(self._jac_artifacts["knots"])  # (256,K)
 
-        # TV에서 읽기 완료 시 콜백
-        def _after_read(vac_dict):
-            if not vac_dict:
-                logging.error("[LUT LOADING] DB fetch LUT TV Writing 확인을 위한 TV Reading 실패 - 최적화 루프 종료")
-                return
-            logging.info("[LUT LOADING] DB fetch LUT TV Writing 확인을 위한 TV Reading 완료")
-            
-            # 캐시 보관 (TV 원 키명 유지)
-            self._vac_dict_cache = vac_dict
-            lut_dict_plot = {key.replace("channel", "_"): v
-                            for key, v in vac_dict.items() if "channel" in key
+        high_R = lut256["R_High"].copy()
+        high_G = lut256["G_High"].copy()
+        high_B = lut256["B_High"].copy()
+
+        for it in range(1, n_iters+1):
+            # (a) 예측 ON (W)
+            lut256_iter = {
+                "R_Low": lut256["R_Low"], "G_Low": lut256["G_Low"], "B_Low": lut256["B_Low"],
+                "R_High": high_R, "G_High": high_G, "B_High": high_B
             }
-            self._update_lut_chart_and_table(lut_dict_plot)
+            y_pred = self._predict_Y0W_from_models(lut256_iter,
+                        panel_text=panel, frame_rate=fr, model_year=model_year)
 
-            # ── ON 세션 시작 전: ON 시리즈 전부 리셋 ──
-            self.vac_optimization_gamma_chart.reset_on()
-            self.vac_optimization_cie1976_chart.reset_on()
+            # (b) Δ타깃 (예측 ON vs OFF)
+            d_targets = self._delta_targets_vs_OFF_from_pred(y_pred, self._off_store)
 
-            # ON 세션 프로파일 (OFF를 참조로 Δ 계산)
-            profile_on = SessionProfile(
-                legend_text="VAC ON",
-                cie_label="data_2",
-                table_cols={"lv":4, "cx":5, "cy":6, "gamma":7, "d_cx":8, "d_cy":9, "d_gamma":10},
-                ref_store=self._off_store
-            )
+            # (c) 결합 선형계
+            A_cat = np.vstack([wG*self.A_Gamma, wC*self.A_Cx, wC*self.A_Cy]).astype(np.float32)
+            b_cat = -np.concatenate([wG*d_targets["Gamma"], wC*d_targets["Cx"], wC*d_targets["Cy"]]).astype(np.float32)
+            mask = np.isfinite(b_cat)
+            A_use = A_cat[mask,:]; b_use = b_cat[mask]
 
-            # ON 세션 종료 후: 스펙 체크 → 미통과면 보정 1회차 진입
-            def _after_on(store_on):
-                self._on_store = store_on
-                spec_ok = self._check_spec_pass(self._off_store, self._on_store)
-                self._update_spec_views(self._off_store, self._on_store)  # ← 여기!
-                if spec_ok:
-                    logging.info("✅ 스펙 통과 — 종료")
-                    return
-                self._run_correction_iteration(iter_idx=1)
+            ATA = A_use.T @ A_use
+            rhs = A_use.T @ b_use
+            ATA[np.diag_indices_from(ATA)] += float(lambda_ridge)
+            delta_h = np.linalg.solve(ATA, rhs).astype(np.float32)
 
-            # ── ON 측정 세션 시작 ──
-            logging.info("[MES] DB fetch LUT 기준 측정 시작")
-            self.start_viewing_angle_session(
-                profile=profile_on,
-                gray_levels=op.gray_levels_256,
-                gamma_patterns=('white',),
-                colorshift_patterns=op.colorshift_patterns,
-                first_gray_delay_ms=3000, cs_settle_ms=1000,
-                on_done=_after_on
-            )
+            # (d) 채널별 Δcurve = Phi @ Δh
+            dh_R = delta_h[0:K]; dh_G = delta_h[K:2*K]; dh_B = delta_h[2*K:3*K]
+            corr_R = Phi @ dh_R; corr_G = Phi @ dh_G; corr_B = Phi @ dh_B
 
-        # 3-b) VAC_Data TV에 writing
-        logging.info("[LUT LOADING] DB fetch LUT TV Writing 시작")
-        self._write_vac_to_tv(vac_data, on_finished=_after_write)
+            # (e) High 갱신 + 보정
+            high_R = np.clip(self._enforce_monotone(high_R + corr_R), 0, 4095)
+            high_G = np.clip(self._enforce_monotone(high_G + corr_G), 0, 4095)
+            high_B = np.clip(self._enforce_monotone(high_B + corr_B), 0, 4095)
 
+            logging.info(f"[PredictOpt] iter {it} done. (wG={wG}, wC={wC})")
 
-DB에서 로드한 LUT를 tv에 바로 적용을 해서 측정을 하는게 아니라, 중간에 예측 모델로 결과값을 미리 예측 해서 보정을 하는 LUT 1차 최적화 과정을 넣으려고 해요.
-보시면 감마 정확도가 낮은데 이것을 감안하여 가중치 설정을 할 수 있도록 해 주시고 우선 예측 - 보정 - 예측 - 보정 과정을 통해 LUT가 산출되면  vac_graph_rgbLUT_4, vac_table_rbgLUT_4 UI에 각각 차트와 테이블을 업데이트 하고 싶습니다.(기존엔 reading할 때 시각화함)
-또 VAC OFF 측정이 끝나고 1차 최적화가 시작하는 시점에 vac_label_pixmap_step_2 라벨에 GIF를 SET 하고 싶습니다.
-아래는 예측 모델입니다:
+        # 6) 256→4096 업샘플 (Low는 그대로, High만 갱신)
+        new_lut_4096 = {
+            "RchannelLow":  np.asarray(vac_dict["RchannelLow"], dtype=np.float32),
+            "GchannelLow":  np.asarray(vac_dict["GchannelLow"], dtype=np.float32),
+            "BchannelLow":  np.asarray(vac_dict["BchannelLow"], dtype=np.float32),
+            "RchannelHigh": self._up256_to_4096(high_R),
+            "GchannelHigh": self._up256_to_4096(high_G),
+            "BchannelHigh": self._up256_to_4096(high_B),
+        }
 
-PS D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module> & C:/python310/python.exe "d:/00 업무/00 가상화기술/00 색시야각 보상 최적화/VAC algorithm/module/scripts/train_model.py"
-▶ TEST with 1042 PKs
+        # 7) UI 바로 업데이트 (차트+테이블)
+        lut_plot = {
+            "R_Low":  new_lut_4096["RchannelLow"],  "R_High": new_lut_4096["RchannelHigh"],
+            "G_Low":  new_lut_4096["GchannelLow"],  "G_High": new_lut_4096["GchannelHigh"],
+            "B_Low":  new_lut_4096["BchannelLow"],  "B_High": new_lut_4096["BchannelHigh"],
+        }
+        self._update_lut_chart_and_table(lut_plot)
 
-=== Train Y0: Gamma ===
-⏱️ [Y0-Gamma] Linear fit: 0.1s | MSE=0.023224 R²=0.455105
-Fitting 3 folds for each of 20 candidates, totalling 60 fits
-[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  40.7s
-[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  41.2s
-[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  41.4s
-[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 1.7min
-[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 1.7min
-[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 1.8min
-[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 1.8min
-[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 1.8min
-[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 1.4min
-[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 1.5min
-[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  31.1s
-[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  31.2s
-[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  28.5s
-[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  31.2s
-[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 1.8min
-[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  28.5s
-[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  28.3s
-[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 1.5min
-[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.1min
-[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.1min
-[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.1min
-[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.2min
-[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.2min
-[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.2min
-[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time=  53.8s
-[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time=  54.1s
-[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time=  54.1s
-[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 2.0min
-[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=  58.9s
-[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=  59.8s
-[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 1.9min
-[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 1.9min
-[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=  59.4s
-[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=  51.6s
-[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=  51.8s
-[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.5min
-[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.5min
-[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=  51.5s
-[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.5min
-[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=  59.9s
-[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=  59.6s
-[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=  59.7s
-[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 1.7min
-[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 1.8min
-[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.2min
-[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.2min
-[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 1.8min
-[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  44.7s
-[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  44.7s
-[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  44.0s
-[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  27.4s
-[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.2min
-[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  30.3s
-[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  30.5s
-[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  46.1s
-[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  47.3s
-[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  46.3s
-[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 1.9min
-[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 1.9min
-[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 1.8min
-⏱️ [Y0-Gamma] RF(residual) search: 11.8 min
-✅ [Y0-Gamma] RF best params: {'max_depth': 17, 'max_features': 0.9722042458113105, 'min_samples_leaf': 15, 'min_samples_split': 5, 'n_estimators': 160}
-✅ [Y0-Gamma] RF best R² (CV): 0.719537
-🏁 [Y0-Gamma] Hybrid — MSE:0.008166 R²:0.808401
-📁 saved: d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module\scripts\hybrid_Gamma_model.pkl
+        # 8) JSON 텍스트로 재조립 (TV write용)
+        vac_json_optimized = self.build_vacparam_std_format(base_vac_dict=vac_dict, new_lut_tvkeys=new_lut_4096)
 
-=== Train Y0: Cx ===
-⏱️ [Y0-Cx] Linear fit: 0.1s | MSE=0.000032 R²=0.304553
-Fitting 3 folds for each of 20 candidates, totalling 60 fits
-[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  42.5s
-[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  42.8s
-[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  42.9s
-[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 1.7min
-[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 1.7min
-[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 1.8min
-[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 1.8min
-[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 1.8min
-[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 1.4min
-[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 1.4min
-[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  32.0s
-[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  31.8s
-[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  29.8s
-[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  32.6s
-[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 1.8min
-[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  30.2s
-[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  30.2s
-[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 1.4min
-[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.1min
-[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.1min
-[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.1min
-[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.1min
-[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.1min
-[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.1min
-[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time=  54.6s
-[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time=  54.3s
-[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time=  55.0s
-[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 1.9min
-[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=  59.3s
-[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time= 1.0min
-[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 1.9min
-[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 1.9min
-[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time= 1.0min
-[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=  53.1s
-[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=  52.7s
-[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.5min
-[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.5min
-[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=  53.9s
-[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.5min
-[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=  56.5s
-[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=  57.1s
-[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=  56.9s
-[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 1.7min
-[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 1.7min
-[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.1min
-[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.1min
-[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 1.8min
-[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  45.5s
-[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  45.1s
-[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  45.5s
-[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  29.1s
-[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.2min
-[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  29.1s
-[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  29.0s
-[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  45.2s
-[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  45.6s
-[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  45.4s
-[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 1.8min
-[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 1.8min
-[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 1.8min
-⏱️ [Y0-Cx] RF(residual) search: 11.7 min
-✅ [Y0-Cx] RF best params: {'max_depth': 17, 'max_features': 0.9722042458113105, 'min_samples_leaf': 15, 'min_samples_split': 5, 'n_estimators': 160}
-✅ [Y0-Cx] RF best R² (CV): 0.953437
-🏁 [Y0-Cx] Hybrid — MSE:0.000002 R²:0.963334
-📁 saved: d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module\scripts\hybrid_Cx_model.pkl
+        # 9) 로딩 GIF 정지/완료 아이콘
+        self.stop_loading_animation(self.label_processing_step_2, self.movie_processing_step_2)
+        self.ui.vac_label_pixmap_step_2.setPixmap(self.process_complete_pixmap)
 
-=== Train Y0: Cy ===
-⏱️ [Y0-Cy] Linear fit: 0.1s | MSE=0.000106 R²=0.328758
-Fitting 3 folds for each of 20 candidates, totalling 60 fits
-[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  43.7s
-[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  44.0s
-[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  44.6s
-[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 1.8min
-[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 1.8min
-[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 1.8min
-[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 1.9min
-[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 1.9min
-[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 1.4min
-[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 1.4min
-[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  31.3s
-[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  31.4s
-[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  29.1s
-[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  32.0s
-[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 1.8min
-[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  29.3s
-[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  29.8s
-[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 1.4min
-[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.1min
-[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.1min
-[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.1min
-[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.1min
-[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.1min
-[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.1min
-[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time=  53.9s
-[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time=  54.1s
-[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time=  53.9s
-[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 1.9min
-[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time= 1.0min
-[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=  60.0s
-[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 1.9min
-[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 1.9min
-[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time= 1.0min
-[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=  53.4s
-[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=  54.0s
-[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.5min
-[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.5min
-[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=  54.4s
-[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.5min
-[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=  55.8s
-[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=  56.0s
-[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=  56.4s
-[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 1.8min
-[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 1.8min
-[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.2min
-[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.2min
-[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 1.7min
-[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  45.0s
-[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  43.5s
-[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.2min
-[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  28.0s
-[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  45.0s
-[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  28.7s
-[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  28.5s
-[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  46.2s
-[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  46.8s
-[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  46.9s
-[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 1.8min
-[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 1.8min
-[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 1.8min
-⏱️ [Y0-Cy] RF(residual) search: 11.7 min
-✅ [Y0-Cy] RF best params: {'max_depth': 17, 'max_features': 0.9722042458113105, 'min_samples_leaf': 15, 'min_samples_split': 5, 'n_estimators': 160}
-✅ [Y0-Cy] RF best R² (CV): 0.928867
-🏁 [Y0-Cy] Hybrid — MSE:0.000006 R²:0.962731
-📁 saved: d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module\scripts\hybrid_Cy_model.pkl
+        return vac_json_optimized, new_lut_4096
 
-✅ ALL DONE.
-
+    except Exception as e:
+        logging.exception("[PredictOpt] failed")
+        # 로딩 애니 정리
+        try:
+            self.stop_loading_animation(self.label_processing_step_2, self.movie_processing_step_2)
+        except Exception:
+            pass
+        return None, None
+        
+        
+.
