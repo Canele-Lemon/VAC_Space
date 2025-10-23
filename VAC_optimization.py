@@ -100,4 +100,140 @@
         self._write_vac_to_tv(vac_data, on_finished=_after_write)
 
 
-여기서 예측-보정을 통해 생성한 new lut를 tv에 적용하고 싶습니다.
+여기서 예측-보정을 통해 생성한 new lut를 tv에 적용하고 싶습니다. 그리고, 아래 _run_correction_iteration에서 스펙 평가하는 부분을 스레드 클래스로 분리하고 싶습니다.
+
+    def _run_correction_iteration(self, iter_idx, max_iters=2, lambda_ridge=1e-3):
+        logging.info(f"[CORR] iteration {iter_idx} start")
+
+        # 1) 현재 TV LUT (캐시) 확보
+        if not hasattr(self, "_vac_dict_cache") or self._vac_dict_cache is None:
+            logging.warning("[CORR] LUT 캐시 없음 → 직전 읽기 결과가 필요합니다.")
+            return None
+        vac_dict = self._vac_dict_cache # 표준 키 dict
+
+        # 2) 4096→256 다운샘플 (High만 수정, Low 고정)
+        #    원래 키 → 표준 LUT 키로 꺼내 계산
+        vac_lut = {
+            "R_Low":  np.asarray(vac_dict["RchannelLow"],  dtype=np.float32),
+            "R_High": np.asarray(vac_dict["RchannelHigh"], dtype=np.float32),
+            "G_Low":  np.asarray(vac_dict["GchannelLow"],  dtype=np.float32),
+            "G_High": np.asarray(vac_dict["GchannelHigh"], dtype=np.float32),
+            "B_Low":  np.asarray(vac_dict["BchannelLow"],  dtype=np.float32),
+            "B_High": np.asarray(vac_dict["BchannelHigh"], dtype=np.float32),
+        }
+        high_256 = {ch: self._down4096_to_256(vac_lut[ch]) for ch in ['R_High','G_High','B_High']}
+        # low_256  = {ch: self._down4096_to_256(vac_lut[ch]) for ch in ['R_Low','G_Low','B_Low']}
+
+        # 3) Δ 목표(white/main 기준): OFF vs ON 차이를 256 길이로 구성
+        #    Gamma: 1..254 유효, Cx/Cy: 0..255
+        d_targets = self._build_delta_targets_from_stores(self._off_store, self._on_store)
+        # d_targets: {"Gamma":(256,), "Cx":(256,), "Cy":(256,)}
+
+        # 4) 결합 선형계: [wG*A_Gamma; wC*A_Cx; wC*A_Cy] Δh = - [wG*ΔGamma; wC*ΔCx; wC*ΔCy]
+        wG, wC = 1.0, 1.0
+        A_cat = np.vstack([wG*self.A_Gamma, wC*self.A_Cx, wC*self.A_Cy]).astype(np.float32)
+        b_cat = -np.concatenate([wG*d_targets["Gamma"], wC*d_targets["Cx"], wC*d_targets["Cy"]]).astype(np.float32)
+
+        # 유효치 마스크(특히 gamma의 NaN)
+        mask = np.isfinite(b_cat)
+        A_use = A_cat[mask, :]
+        b_use = b_cat[mask]
+
+        # 5) 리지 해(Δh) 구하기 (3K-dim: [Rknots, Gknots, Bknots])
+        #    (A^T A + λI) Δh = A^T b
+        ATA = A_use.T @ A_use
+        rhs = A_use.T @ b_use
+        ATA[np.diag_indices_from(ATA)] += lambda_ridge
+        delta_h = np.linalg.solve(ATA, rhs).astype(np.float32)
+
+        # 6) Δcurve = Phi * Δh_channel 로 256-포인트 보정곡선 만들고 High에 적용
+        K    = len(self._jac_artifacts["knots"])
+        dh_R = delta_h[0:K]; dh_G = delta_h[K:2*K]; dh_B = delta_h[2*K:3*K]
+        Phi  = self._stack_basis(self._jac_artifacts["knots"])  # (256,K)
+        corr_R = Phi @ dh_R; corr_G = Phi @ dh_G; corr_B = Phi @ dh_B
+
+        high_256_new = {
+            "R_High": (high_256["R_High"] + corr_R).astype(np.float32),
+            "G_High": (high_256["G_High"] + corr_G).astype(np.float32),
+            "B_High": (high_256["B_High"] + corr_B).astype(np.float32),
+        }
+
+        # 7) High 경계/단조/클램프 → 12bit 업샘플 & Low는 유지하여 "표준 dict 구성"
+        for ch in high_256_new:
+            self._enforce_monotone(high_256_new[ch])
+            high_256_new[ch] = np.clip(high_256_new[ch], 0, 4095)
+
+        new_lut_tvkeys = {
+            "RchannelLow":  np.asarray(self._vac_dict_cache["RchannelLow"], dtype=np.float32),
+            "GchannelLow":  np.asarray(self._vac_dict_cache["GchannelLow"], dtype=np.float32),
+            "BchannelLow":  np.asarray(self._vac_dict_cache["BchannelLow"], dtype=np.float32),
+            "RchannelHigh": self._up256_to_4096(high_256_new["R_High"]),
+            "GchannelHigh": self._up256_to_4096(high_256_new["G_High"]),
+            "BchannelHigh": self._up256_to_4096(high_256_new["B_High"]),
+        }
+
+        vac_write_json = self.build_vacparam_std_format(self._vac_dict_cache, new_lut_tvkeys)
+
+        def _after_write(ok, msg):
+            logging.info(f"[VAC Write] {msg}")
+            if not ok:
+                return
+            # 쓰기 성공 → 재읽기
+            logging.info(f"보정 LUT TV Reading 시작")
+            self._read_vac_from_tv(_after_read_back)
+
+        def _after_read_back(vac_dict_after):
+            if not vac_dict_after:
+                logging.error("보정 후 VAC 재읽기 실패")
+                return
+            logging.info(f"보정 LUT TV Reading 완료")
+            self.stop_loading_animation(self.label_processing_step_3, self.movie_processing_step_3)
+            
+            # 1) 캐시/차트 갱신
+            self._vac_dict_cache = vac_dict_after
+            lut_dict_plot = {k.replace("channel","_"): v
+                            for k, v in vac_dict_after.items() if "channel" in k}
+            # self._update_lut_chart_and_table(lut_dict_plot)
+            
+            # 2) ON 시리즈 리셋 (OFF는 참조 유지)
+            # self.vac_optimization_gamma_chart.reset_on()
+            # self.vac_optimization_cie1976_chart.reset_on()
+            
+            # 3) 보정 후(=ON) 측정 세션 시작
+            profile_corr = SessionProfile(
+                legend_text=f"CORR #{iter_idx}",   # state 판정은 'VAC OFF' prefix 여부로 하므로 여기선 ON 상태로 처리됨
+                cie_label=None,                    # data_1/2 안 씀
+                table_cols={"lv":4, "cx":5, "cy":6, "gamma":7, "d_cx":8, "d_cy":9, "d_gamma":10},
+                ref_store=self._off_store          # 항상 OFF 대비 Δ를 계산
+            )
+            
+            def _after_corr(store_corr):
+                self.stop_loading_animation(self.label_processing_step_4, self.movie_processing_step_4)
+                self._on_store = store_corr  # 최신 ON(보정 후) 측정 결과로 교체
+                spec_ok = self._check_spec_pass(self._off_store, self._on_store)
+                self._update_spec_views(self._off_store, self._on_store)
+                if spec_ok:
+                    logging.info("✅ 스펙 통과 — 최적화 종료")
+                    return
+                if iter_idx < max_iters:
+                    logging.info(f"🔁 스펙 out — 다음 보정 사이클로 진행 (iter={iter_idx+1})")
+                    self._run_correction_iteration(iter_idx=iter_idx+1, max_iters=max_iters)
+                else:
+                    logging.info("⛔ 최대 보정 횟수 도달 — 종료")
+
+            logging.info(f"보정 LUT 기준 측정 시작")
+            self.label_processing_step_4, self.movie_processing_step_4 = self.start_loading_animation(self.ui.vac_label_pixmap_step_4, 'processing.gif')
+            self.start_viewing_angle_session(
+                profile=profile_corr,
+                gray_levels=getattr(op, "gray_levels_256", list(range(256))),
+                gamma_patterns=('white',),                 # ✅ 감마는 white만 측정
+                colorshift_patterns=op.colorshift_patterns,
+                first_gray_delay_ms=3000,
+                cs_settle_ms=1000,
+                on_done=_after_corr
+            )
+
+        # TV에 적용
+        logging.info(f"LUT {iter_idx}차 보정 완료")
+        logging.info(f"LUT {iter_idx}차 TV Writing 시작")
+        self._write_vac_to_tv(vac_write_json, on_finished=_after_write)
