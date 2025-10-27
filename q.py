@@ -1,44 +1,54 @@
-    def prepare_Y(self, y1_patterns=('W',)):
-        """
-        최종 Y 딕셔너리 병합 반환:
-        {
-          "Y0": { 'W': {'Gamma':(256,), 'Cx':(256,), 'Cy':(256,)}, 
-                  'R': {'Gamma':(256,), 'Cx':(256,), 'Cy':(256,)},
-                  'G': {'Gamma':(256,), 'Cx':(256,), 'Cy':(256,)},
-                  'B': {'Gamma':(256,), 'Cx':(256,), 'Cy':(256,)},
-                }
-          "Y1": { 'W': (255,),
-                  'R': (255,),
-                  'G': (255,),
-                  'B': (255,) 
-                },
-          "Y2": { 'Red': val, 
-                  ..., 
-                  'Western': val 
-                }
-        }
-        """
-        y0 = self.compute_Y0_struct()
-        y1 = self.compute_Y1_struct(patterns=y1_patterns)
-        y2 = self.compute_Y2_struct()
-        
-        return {"Y0": y0, "Y1": y1, "Y2": y2}
+def build_per_gray_y0(self, component='dGamma', patterns=('W','R','G','B')):
+    """
+    자코비안/보정 학습용 1D 회귀 데이터셋 생성.
 
+    각 row는 (pk, pattern p, gray g)에 해당.
+    X_row 는 ΔLUT 기반 피처 (prepare_X_delta() 결과에서 나온 lut)
+    y_val 는 Δ응답 (dGamma / dCx / dCy), 즉 target - ref
 
-prepare_output.py를 위처럼 바꾸어서, VAC_dataset.py를 아래와 같이 하는 방향으로 하고자 합니다.
+    Parameters
+    ----------
+    component : {'dGamma','dCx','dCy'}
+    patterns  : tuple of patterns to include ('W','R','G','B')
 
+    Returns
+    -------
+    X_mat : (N, D)
+    y_vec : (N,)
+    groups: (N,) pk ID for each row (useful for grouped CV 등)
+    """
+    assert component in ('dGamma','dCx','dCy')
 
-    def _collect(self):
-        for pk in self.pk_list:
-            x_builder = VACInputBuilder(pk)
-            y_builder = VACOutputBuilder(pk)
-            X = x_builder.prepare_X_delta()   # {"dLUT": {...}, "meta": {...}}
-            Y = y_builder.prepare_Y(y1_patterns=('W',))    # {"Y0": {...}, "Y1": {...}, "Y2": {...}}
-            
-            self.samples.append({
-                "pk": pk, 
-                "X": X, 
-                "Y": Y
-            })
+    X_rows, y_vals, groups = [], [], []
 
-이 방향으로 하면 또 어느부분을 수정해야 할까요?
+    for s in self.samples:
+        pk  = s["pk"]
+        Xd  = s["X"]  # this is now ΔLUT dict (prepare_X_delta)
+        Yd  = s["Y"]  # this is now ΔY dict (prepare_Y -> compute_Y0_struct)
+
+        for p in patterns:
+            y_vec = Yd['Y0'][p][component]  # (256,)
+            for g in range(256):
+                y_val = y_vec[g]
+                if not np.isfinite(y_val):
+                    continue
+
+                feat_row = self._build_features_for_gray(
+                    X_dict=Xd,
+                    gray=g,
+                    add_pattern=p
+                )
+
+                X_rows.append(feat_row)
+                y_vals.append(float(y_val))
+                groups.append(pk)
+
+    if X_rows:
+        X_mat = np.vstack(X_rows).astype(np.float32)
+    else:
+        X_mat = np.empty((0,0), dtype=np.float32)
+
+    y_vec = np.asarray(y_vals, dtype=np.float32)
+    groups = np.asarray(groups, dtype=np.int64)
+
+    return X_mat, y_vec, groups
