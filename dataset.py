@@ -124,7 +124,6 @@ class VACInputBuilder:
         }
 
 # prepare_output.py
-
 from src.config.db_config import engine
 
 import logging
@@ -529,6 +528,7 @@ class VACOutputBuilder:
         y2 = self.compute_Y2_struct()
         
         return {"Y0": y0, "Y1": y1, "Y2": y2}
+        
 # VAC_dataset.py
 import sys
 import torch
@@ -743,34 +743,58 @@ class VACDataset(Dataset):
     # 2) Y0(계조별 dGamma/dCx/dCy) 회귀 (선형 추세 등)
     #    행 단위: (pk, pattern, gray)
     # -----------------------------------------------------
+    # def build_per_gray_y0(self, component='Gamma', patterns=('W','R','G','B')):
+    #     """
+    #     Y0(계조별 Gamma/Cx/Cy) 단일 스칼라 회귀용 데이터셋.
+
+    #     Parameters
+    #     ----------
+    #     component : {'Gamma','Cx','Cy'}
+    #     patterns : tuple[str]
+
+    #     Returns
+    #     -------
+    #     X_mat : np.ndarray, shape (N * len(patterns) * 256, Dx)
+    #         행 단위 = (pk, pattern, gray)
+    #     y_vec : np.ndarray, shape (N * len(patterns) * 256,)
+    #         타깃 스칼라 (선택한 component 값)
+    #     """
+        # assert component in ('Gamma', 'Cx', 'Cy')
+        # X_rows, y_vals = [], []
+        # for s in self.samples:
+        #     Xd = s["X"]; Yd = s["Y"]
+        #     for p in patterns:
+        #         y_vec = Yd['Y0'][p][component]  # (256,)
+        #         for g in range(256):
+        #             y_val = y_vec[g]
+        #             if not np.isfinite(y_val):     # NaN/inf는 스킵
+        #                 continue
+        #             X_rows.append(self._build_features_for_gray(Xd, g, add_pattern=p))
+        #             y_vals.append(float(y_val))
+        # X_mat = np.vstack(X_rows).astype(np.float32)
+        # y_vec = np.asarray(y_vals, dtype=np.float32)
+        # return X_mat, y_vec
     def build_per_gray_y0(self, component='Gamma', patterns=('W','R','G','B')):
-        """
-        Y0(계조별 Gamma/Cx/Cy) 단일 스칼라 회귀용 데이터셋.
-
-        Parameters
-        ----------
-        component : {'Gamma','Cx','Cy'}
-        patterns : tuple[str]
-
-        Returns
-        -------
-        X_mat : np.ndarray, shape (N * len(patterns) * 256, Dx)
-            행 단위 = (pk, pattern, gray)
-        y_vec : np.ndarray, shape (N * len(patterns) * 256,)
-            타깃 스칼라 (선택한 component 값)
-        """
         assert component in ('Gamma', 'Cx', 'Cy')
-        X_rows, y_vals = [], []
+        X_rows, y_vals, groups = [], [], []
+
         for s in self.samples:
+            pk = s["pk"]
             Xd = s["X"]; Yd = s["Y"]
             for p in patterns:
                 y_vec = Yd['Y0'][p][component]  # (256,)
                 for g in range(256):
+                    y_val = y_vec[g]
+                    if not np.isfinite(y_val):   # NaN/inf는 스킵
+                        continue
                     X_rows.append(self._build_features_for_gray(Xd, g, add_pattern=p))
-                    y_vals.append(float(np.nan_to_num(y_vec[g], nan=0.0)))
-        X_mat = np.vstack(X_rows).astype(np.float32)
+                    y_vals.append(float(y_val))
+                    groups.append(pk)            # ← 유지된 행에 대해 pk를 같이 쌓기
+
+        X_mat = np.vstack(X_rows).astype(np.float32) if X_rows else np.empty((0,0), np.float32)
         y_vec = np.asarray(y_vals, dtype=np.float32)
-        return X_mat, y_vec
+        groups = np.asarray(groups, dtype=np.int64)
+        return X_mat, y_vec, groups
 
     # -----------------------------------------------------
     # 3) Y1(측면 slope) 회귀 (gray 0~254)
@@ -911,127 +935,3 @@ class VACDataset(Dataset):
     def __getitem__(self, idx):
         # 원본 dict를 그대로 반환 (torch 학습 시엔 별도 빌더로 만든 X,y를 쓰세요)
         return self.samples[idx]
-    
-# if __name__ == "__main__":
-#     import numpy as np
-#     import pandas as pd
-#     import tempfile, webbrowser
-#     import matplotlib.pyplot as plt
-
-#     target_pk = 500
-#     reference_pk = 203
-#     dataset = VACDataset([target_pk], reference_pk)
-
-#     # 1) 추출
-#     Y = dataset.samples[0]["Y"]
-#     assert "Y0" in Y, "Y0_abs가 준비되어 있지 않습니다. prepare_output.py가 절대타깃(Gamma/Cx/Cy)으로 수정되었는지 확인하세요."
-#     y0_abs = Y["Y0"]  # {'W':{'Gamma':(256,), 'Cx':(256,), 'Cy':(256,)}, ...}
-
-#     # 2) 긴형(long) 테이블로 펼치기 -> CSV로 열어보기 좋음
-#     rows = []
-#     for ptn, comps in y0_abs.items():  # ptn in ['W','R','G','B']
-#         for comp_name in ['Gamma','Cx','Cy']:
-#             arr = comps[comp_name]
-#             for g, val in enumerate(arr):
-#                 rows.append({"Pattern": ptn, "Component": comp_name, "Gray": g, "Value": val})
-#     Y0abs_df = pd.DataFrame(rows)
-
-#     # 3) 빠른 품질 체크: NaN 개수, 유효 구간 요약
-#     summary = (
-#         Y0abs_df
-#         .groupby(["Pattern","Component"])
-#         .agg(
-#             count=("Value","size"),
-#             nan_cnt=("Value", lambda s: int(np.isnan(s).sum())),
-#             min_val=("Value", "min"),
-#             max_val=("Value", "max"),
-#             mean_val=("Value", "mean")
-#         )
-#         .reset_index()
-#     )
-#     print("\n[Y0_abs 요약]")
-#     print(summary)
-
-#     # 4) 경계 NaN 확인 (Gamma는 Gray 0/255에서 NaN이어야 함)
-#     gamma_W = Y0abs_df[(Y0abs_df.Pattern=="W") & (Y0abs_df.Component=="Gamma")]
-#     print("\n[체크] W 패턴 Gamma @Gray0, @Gray255:", gamma_W.loc[gamma_W.Gray.isin([0,255]), ["Gray","Value"]].to_dict("records"))
-
-#     # 5) CSV로 저장 후 자동 열기(엑셀/기본 뷰어)
-#     with tempfile.NamedTemporaryFile(delete=False, suffix="_Y0_abs.csv", mode="w", newline="", encoding="utf-8") as tmp:
-#         Y0abs_df.to_csv(tmp.name, index=False)
-#         print(f"\n[Y0_abs CSV] {tmp.name}")
-#         webbrowser.open(f"file://{tmp.name}")
-
-#     # 6) 빠른 시각화: 각 패턴별 Gamma 곡선(유효구간만)
-#     try:
-#         fig, axes = plt.subplots(2, 2, figsize=(10, 6), tight_layout=True)
-#         axes = axes.ravel()
-#         for i, ptn in enumerate(['W','R','G','B']):
-#             sub = Y0abs_df[(Y0abs_df.Pattern==ptn) & (Y0abs_df.Component=="Gamma")].sort_values("Gray")
-#             x = sub["Gray"].to_numpy()
-#             y = sub["Value"].to_numpy()
-#             # 유효 구간만 그리기 (NaN 제거)
-#             mask = ~np.isnan(y)
-#             axes[i].plot(x[mask], y[mask])
-#             axes[i].set_title(f"Gamma (abs) - {ptn}")
-#             axes[i].set_xlabel("Gray")
-#             axes[i].set_ylabel("Gamma")
-#             axes[i].grid(True, alpha=0.3)
-#         plt.show()
-#     except Exception as e:
-#         print(f"[Plot skipped] {e}")
-    
-# if __name__ == "__main__":
-#     target_pk = 500
-#     reference_pk = 203
-#     dataset = VACDataset([target_pk], reference_pk)
-    
-    # X = dataset.samples[0]["X"]
-
-    # X_df = pd.DataFrame({
-    #     "R_Low":  X["lut"]["R_Low"],
-    #     "R_High": X["lut"]["R_High"],
-    #     "G_Low":  X["lut"]["G_Low"],
-    #     "G_High": X["lut"]["G_High"],
-    #     "B_Low":  X["lut"]["B_Low"],
-    #     "B_High": X["lut"]["B_High"],
-    # })
-
-    # X_df["panel_maker"] = str(X["meta"]["panel_maker"])
-    # X_df["frame_rate"] = X["meta"]["frame_rate"]
-    # X_df["model_year"] = X["meta"]["model_year"]
-
-    # with tempfile.NamedTemporaryFile(delete=False, suffix="X_raw.csv", mode="w", encoding="utf-8", newline="") as tmp:
-    #     X_df.to_csv(tmp.name, index=False)
-    #     webbrowser.open(f"file://{tmp.name}")
-    
-    # Y = dataset.samples[0]["Y"]
-    # np.set_printoptions(threshold=20)
-    # # === Y0 저장 ===
-    # rows = []
-    # for ptn, comps in Y["Y0"].items():
-    #     for comp, arr in comps.items():
-    #         for g, val in enumerate(arr):
-    #             rows.append({"Pattern": ptn, "Component": comp, "Gray": g, "Value": val})
-    # Y0_df = pd.DataFrame(rows)
-
-    # with tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="w", newline="", encoding="utf-8") as tmp:
-    #     Y0_df.to_csv(tmp.name, index=False)
-    #     webbrowser.open(f"file://{tmp.name}")
-
-    # # === Y1 저장 ===
-    # rows = []
-    # for ptn, arr in Y["Y1"].items():
-    #     for g, val in enumerate(arr):
-    #         rows.append({"Pattern": ptn, "GraySeg": g, "Slope": val})
-    # Y1_df = pd.DataFrame(rows)
-
-    # with tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="w", newline="", encoding="utf-8") as tmp:
-    #     Y1_df.to_csv(tmp.name, index=False)
-    #     webbrowser.open(f"file://{tmp.name}")
-
-    # # === Y2 저장 ===
-    # Y2_df = pd.DataFrame(list(Y["Y2"].items()), columns=["Patch", "Delta_uv"])
-    # with tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="w", newline="", encoding="utf-8") as tmp:
-    #     Y2_df.to_csv(tmp.name, index=False)
-    #     webbrowser.open(f"file://{tmp.name}")
