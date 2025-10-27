@@ -275,11 +275,10 @@ def train_jacobian_models(pk_list: List[int], save_path: str, knots_K=KNOTS):
 # ------------------------
 def build_A_for_component(artifacts: dict, comp: str, L=256) -> np.ndarray:
     """
-    ΔY ≈ A Δh  (여기서 Δh는 [R_high_knots(K), G_high_knots(K), B_high_knots(K)] 순서)
-    - 학습 시 'phi-only' 모드였으므로: A[g, k] = β_k * φ_k(g)
-    - R/G/B를 좌우로 이어붙여 A의 열 수 = 3K
-    - 패턴/메타를 고정하지 않고 '기저 기반'의 평균적 자코비안(모형 계수만) 반환
-      (운용 시 패턴별 A가 필요하면, pattern 원핫을 고정하고 “해당 패턴 행만 사용”)
+    ΔY ≈ A Δh
+    여기서 Δh는 [R_high_knots(K), G_high_knots(K), B_high_knots(K),
+                 R_low_knots(K),  G_low_knots(K),  B_low_knots(K)]
+    A shape = (L, 6K)
     """
     knots = np.asarray(artifacts["knots"], dtype=np.int32)
     comp_obj = artifacts["components"][comp]
@@ -287,21 +286,27 @@ def build_A_for_component(artifacts: dict, comp: str, L=256) -> np.ndarray:
     scale = np.asarray(comp_obj["standardizer"]["scale"], dtype=np.float32)
 
     s = comp_obj["feature_slices"]
-    s_high_R = slice(s["high_R"][0], s["high_R"][1])
-    s_high_G = slice(s["high_G"][0], s["high_G"][1])
-    s_high_B = slice(s["high_B"][0], s["high_B"][1])
+    # slice 정보 다 있음
+    beta_high_R = coef[s["high_R"][0]:s["high_R"][1]] / np.maximum(scale[s["high_R"][0]:s["high_R"][1]], 1e-12)
+    beta_high_G = coef[s["high_G"][0]:s["high_G"][1]] / np.maximum(scale[s["high_G"][0]:s["high_G"][1]], 1e-12)
+    beta_high_B = coef[s["high_B"][0]:s["high_B"][1]] / np.maximum(scale[s["high_B"][0]:s["high_B"][1]], 1e-12)
 
-    beta_R = coef[s_high_R] / np.maximum(scale[s_high_R], 1e-12)
-    beta_G = coef[s_high_G] / np.maximum(scale[s_high_G], 1e-12)
-    beta_B = coef[s_high_B] / np.maximum(scale[s_high_B], 1e-12)
+    beta_low_R  = coef[s["low_R"][0]:s["low_R"][1]]   / np.maximum(scale[s["low_R"][0]:s["low_R"][1]],   1e-12)
+    beta_low_G  = coef[s["low_G"][0]:s["low_G"][1]]   / np.maximum(scale[s["low_G"][0]:s["low_G"][1]],   1e-12)
+    beta_low_B  = coef[s["low_B"][0]:s["low_B"][1]]   / np.maximum(scale[s["low_B"][0]:s["low_B"][1]],   1e-12)
 
-    Phi = stack_basis_all_grays(knots, L=L)  # (L,K)
+    Phi = stack_basis_all_grays(knots, L=L)  # (L,K), phi(g) basis over gray
 
-    # A = [Phi * diag(beta_R) | Phi * diag(beta_G) | Phi * diag(beta_B)]
-    A_R = Phi * beta_R.reshape(1, -1)
-    A_G = Phi * beta_G.reshape(1, -1)
-    A_B = Phi * beta_B.reshape(1, -1)
-    A = np.hstack([A_R, A_G, A_B]).astype(np.float32)  # (L, 3K)
+    A_high_R = Phi * beta_high_R.reshape(1, -1)
+    A_high_G = Phi * beta_high_G.reshape(1, -1)
+    A_high_B = Phi * beta_high_B.reshape(1, -1)
+
+    A_low_R  = Phi * beta_low_R.reshape(1, -1)
+    A_low_G  = Phi * beta_low_G.reshape(1, -1)
+    A_low_B  = Phi * beta_low_B.reshape(1, -1)
+
+    A = np.hstack([A_high_R, A_high_G, A_high_B,
+                   A_low_R,  A_low_G,  A_low_B]).astype(np.float32)
     return A
     
 def main():
@@ -314,6 +319,51 @@ def main():
     # 3) 자코비안 학습 실행 (예: Y0=Gamma/Cx/Cy 3개 모두 High만의 영향)
     #    함수명은 당신이 사용 중인 오프라인 학습 함수로 바꾸세요.
     train_jacobian_models(pk_list, out_path, knots_K=KNOTS)
+    
+def debug_dump_single_pk(pk_debug=1411, knots_K=KNOTS, n_preview=5):
+    # 1) knot 정의
+    knots = make_knot_positions(K=knots_K)
 
+    # 2) 해당 PK만으로 Dataset 생성
+    ds = VACDataset([pk_debug])
+
+    # 3) X, y 구성 (Gamma/Cx/Cy 중 하나씩 확인할 수도 있지만
+    #    여기선 Gamma만 예시. 다른 것도 보면 comp 바꿔서 한 번 더 호출하면 돼요)
+    X, y, feat_slices = build_dataset_Y0_abs(
+        ds,
+        knots,
+        components=("Gamma",)  # ("Cx",) / ("Cy",) 로 바꿔서도 확인 가능
+    )
+
+    print(f"[DEBUG] pk={pk_debug}")
+    print(f"X shape: {X.shape}, y shape: {y.shape}")
+    print("feature_slices:", feat_slices)
+
+    # 4) 앞부분 몇 행만 preview
+    for i in range(min(n_preview, len(y))):
+        print(f"\n--- sample {i} ---")
+        print(f"y[{i}] (target Gamma diff) = {y[i]}")
+        print(f"X[{i}] (feature row) =\n{X[i]}")
+        # 원하는 구간만 잘렸는지 보고 싶으면 예: high_R 구간만 따로 출력
+        hr = X[i][feat_slices.high_R]
+        hg = X[i][feat_slices.high_G]
+        hb = X[i][feat_slices.high_B]
+        meta_block = X[i][feat_slices.meta]
+        gray_norm_val = X[i][feat_slices.gray]
+        pattern_oh_block = X[i][feat_slices.pattern_oh]
+
+        print(f"  high_R(phi-only)[len={len(hr)}]: {hr}")
+        print(f"  high_G(phi-only)[len={len(hg)}]: {hg}")
+        print(f"  high_B(phi-only)[len={len(hb)}]: {hb}")
+        print(f"  meta                : {meta_block}")
+        print(f"  gray_norm           : {gray_norm_val}")
+        print(f"  pattern_onehot      : {pattern_oh_block}")
+
+# -------------------------------------------------
+# main() 대신 또는 main() 위에서 임시로 호출
+# -------------------------------------------------
 if __name__ == "__main__":
-    main()
+    debug_dump_single_pk(pk_debug=1411, knots_K=KNOTS, n_preview=5)
+
+    # 원래 학습 루틴을 돌릴 때는 아래를 다시 활성화하면 됩니다.
+    # main()
