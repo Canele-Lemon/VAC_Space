@@ -1,54 +1,55 @@
-def build_per_gray_y0(self, component='dGamma', patterns=('W','R','G','B')):
-    """
-    자코비안/보정 학습용 1D 회귀 데이터셋 생성.
+def debug_dump_delta_training_rows():
+    # 1) PK=2444만으로 dataset 구성
+    ds = VACDataset(pk_list=[2444])
 
-    각 row는 (pk, pattern p, gray g)에 해당.
-    X_row 는 ΔLUT 기반 피처 (prepare_X_delta() 결과에서 나온 lut)
-    y_val 는 Δ응답 (dGamma / dCx / dCy), 즉 target - ref
+    # 2) ΔGamma 학습셋 생성
+    X_mat, y_vec, groups = ds.build_per_gray_y0(component='dGamma', patterns=('W',))
 
-    Parameters
-    ----------
-    component : {'dGamma','dCx','dCy'}
-    patterns  : tuple of patterns to include ('W','R','G','B')
+    print("[DEBUG] dGamma dataset (ΔLUT -> ΔGamma)")
+    print("X_mat shape:", X_mat.shape)   # 예상: (유효 gray 수, feature_dim)
+    print("y_vec shape:", y_vec.shape)   # 예상: (유효 gray 수,)
+    print("groups shape:", groups.shape) # 모든 값이 2444일 것
 
-    Returns
-    -------
-    X_mat : (N, D)
-    y_vec : (N,)
-    groups: (N,) pk ID for each row (useful for grouped CV 등)
-    """
-    assert component in ('dGamma','dCx','dCy')
+    if X_mat.shape[0] == 0:
+        print("No valid samples (all NaN?). Check measurement data or gamma calc.")
+        return
 
-    X_rows, y_vals, groups = [], [], []
+    # panel one-hot 길이 파악
+    panel_len = len(ds.samples[0]["X"]["meta"]["panel_maker"])
 
-    for s in self.samples:
-        pk  = s["pk"]
-        Xd  = s["X"]  # this is now ΔLUT dict (prepare_X_delta)
-        Yd  = s["Y"]  # this is now ΔY dict (prepare_Y -> compute_Y0_struct)
+    # 3) 앞에서 몇 개만 출력
+    for i in range(min(5, X_mat.shape[0])):
+        print(f"\n--- sample {i} ---")
+        print("pk:", groups[i])
+        print("y (ΔGamma vs ref):", y_vec[i])
 
-        for p in patterns:
-            y_vec = Yd['Y0'][p][component]  # (256,)
-            for g in range(256):
-                y_val = y_vec[g]
-                if not np.isfinite(y_val):
-                    continue
+        feat = X_mat[i]
 
-                feat_row = self._build_features_for_gray(
-                    X_dict=Xd,
-                    gray=g,
-                    add_pattern=p
-                )
+        # feat layout:
+        # [ΔR_Low, ΔR_High, ΔG_Low, ΔG_High, ΔB_Low, ΔB_High,
+        #  panel_onehot..., frame_rate, model_year,
+        #  gray_norm,
+        #  pattern_onehot(4)]
 
-                X_rows.append(feat_row)
-                y_vals.append(float(y_val))
-                groups.append(pk)
+        delta_lut_part = feat[:6]
+        panel_oh       = feat[6 : 6+panel_len]
+        frame_rate     = feat[6+panel_len]
+        model_year     = feat[6+panel_len+1]
+        gray_norm      = feat[6+panel_len+2]
+        pattern_onehot = feat[6+panel_len+3 : 6+panel_len+7]
 
-    if X_rows:
-        X_mat = np.vstack(X_rows).astype(np.float32)
-    else:
-        X_mat = np.empty((0,0), dtype=np.float32)
+        print("ΔLUT[0:6]             :", delta_lut_part)
+        print("panel_onehot          :", panel_oh)
+        print("frame_rate            :", frame_rate)
+        print("model_year            :", model_year)
+        print("gray_norm             :", gray_norm)
+        print("pattern_onehot(WRGB)  :", pattern_onehot)
 
-    y_vec = np.asarray(y_vals, dtype=np.float32)
-    groups = np.asarray(groups, dtype=np.int64)
+    print("\n[CHECK]")
+    print("- ΔLUT[0:6]는 prepare_X_delta()에서 본 delta lut 값과 동일해야 합니다 (같은 gray 인덱스).")
+    print("- y는 ΔGamma = target_gamma - ref_gamma 이므로 0에 가까우면 레퍼런스와 유사.")
+    print("- gray_norm가 0.5 근처면 gray≈128 정도 샘플일 거고, pattern_onehot이 [1,0,0,0]이면 'W' 패턴입니다.")
 
-    return X_mat, y_vec, groups
+
+if __name__ == "__main__":
+    debug_dump_delta_training_rows()
