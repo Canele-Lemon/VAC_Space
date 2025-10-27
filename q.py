@@ -1,27 +1,48 @@
-[DEBUG] build_per_gray_y0 (component='Cx', pattern='W')
-  X_mat shape: (256, 18)
-  y_vec shape: (256,)
-  groups shape: (256,)
-  unique pk in groups: [500]
-  inferred panel_onehot length: 5
-  tail pattern_onehot sample(last row): [1. 0. 0. 0.]
+def debug_dump_single_pk(pk_debug=1411, knots_K=KNOTS, n_preview=5):
+    # 1) knot 정의
+    knots = make_knot_positions(K=knots_K)
 
-  sample row @idx=0   : [0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 1.0000, 0.0000, 0.0000, 0.0000, ..., 0.0000, 0.0000, 0.0000, 60.0000, 25.0000, 0.0000, 1.0000, 0.0000, 0.0000, 0.0000] (len=18), y=0.228300, pk=500
-  sample row @idx=128: [0.2193, 0.7849, 0.2193, 0.7849, 0.2193, 0.7849, 1.0000, 0.0000, 0.0000, 0.0000, ..., 0.0000, 0.0000, 0.0000, 60.0000, 25.0000, 0.5020, 1.0000, 0.0000, 0.0000, 0.0000] (len=18), y=0.288000, pk=500
-  sample row @idx=-1  : [1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 0.0000, 0.0000, 0.0000, ..., 0.0000, 0.0000, 0.0000, 60.0000, 25.0000, 1.0000, 1.0000, 0.0000, 0.0000, 0.0000] (len=18), y=0.289900, pk=500
+    # 2) 해당 PK만으로 Dataset 생성
+    ds = VACDataset([pk_debug])
 
-[DEBUG] Last 10 rows (features tail & y):
-  idx=   246 | y=0.289500 | pk=500 | tail10=(0.0000, 0.0000, 0.0000, 60.0000, 25.0000, 0.9647, 1.0000, 0.0000, 0.0000, 0.0000)
-  idx=   247 | y=0.289500 | pk=500 | tail10=(0.0000, 0.0000, 0.0000, 60.0000, 25.0000, 0.9686, 1.0000, 0.0000, 0.0000, 0.0000)
-  idx=   248 | y=0.289600 | pk=500 | tail10=(0.0000, 0.0000, 0.0000, 60.0000, 25.0000, 0.9725, 1.0000, 0.0000, 0.0000, 0.0000)
-  idx=   249 | y=0.289700 | pk=500 | tail10=(0.0000, 0.0000, 0.0000, 60.0000, 25.0000, 0.9765, 1.0000, 0.0000, 0.0000, 0.0000)
-  idx=   250 | y=0.289700 | pk=500 | tail10=(0.0000, 0.0000, 0.0000, 60.0000, 25.0000, 0.9804, 1.0000, 0.0000, 0.0000, 0.0000)
-  idx=   251 | y=0.289800 | pk=500 | tail10=(0.0000, 0.0000, 0.0000, 60.0000, 25.0000, 0.9843, 1.0000, 0.0000, 0.0000, 0.0000)
-  idx=   252 | y=0.289900 | pk=500 | tail10=(0.0000, 0.0000, 0.0000, 60.0000, 25.0000, 0.9882, 1.0000, 0.0000, 0.0000, 0.0000)
-  idx=   253 | y=0.289900 | pk=500 | tail10=(0.0000, 0.0000, 0.0000, 60.0000, 25.0000, 0.9922, 1.0000, 0.0000, 0.0000, 0.0000)
-  idx=   254 | y=0.289900 | pk=500 | tail10=(0.0000, 0.0000, 0.0000, 60.0000, 25.0000, 0.9961, 1.0000, 0.0000, 0.0000, 0.0000)
-  idx=   255 | y=0.289900 | pk=500 | tail10=(0.0000, 0.0000, 0.0000, 60.0000, 25.0000, 1.0000, 1.0000, 0.0000, 0.0000, 0.0000)
+    # 3) X, y 구성 (Gamma/Cx/Cy 중 하나씩 확인할 수도 있지만
+    #    여기선 Gamma만 예시. 다른 것도 보면 comp 바꿔서 한 번 더 호출하면 돼요)
+    X, y, feat_slices = build_dataset_Y0_abs(
+        ds,
+        knots,
+        components=("Gamma",)  # ("Cx",) / ("Cy",) 로 바꿔서도 확인 가능
+    )
 
-[DEBUG] build_multitarget_flat(include=Y0,Y1,Y2)
-  X_flat shape: (1, 1543)  # 6*256 + |panel_onehot| + 2
-  Y_flat shape: (1, 3339)  # 3072 + 255 + 12 per PK
+    print(f"[DEBUG] pk={pk_debug}")
+    print(f"X shape: {X.shape}, y shape: {y.shape}")
+    print("feature_slices:", feat_slices)
+
+    # 4) 앞부분 몇 행만 preview
+    for i in range(min(n_preview, len(y))):
+        print(f"\n--- sample {i} ---")
+        print(f"y[{i}] (target Gamma diff) = {y[i]}")
+        print(f"X[{i}] (feature row) =\n{X[i]}")
+        # 원하는 구간만 잘렸는지 보고 싶으면 예: high_R 구간만 따로 출력
+        hr = X[i][feat_slices.high_R]
+        hg = X[i][feat_slices.high_G]
+        hb = X[i][feat_slices.high_B]
+        meta_block = X[i][feat_slices.meta]
+        gray_norm_val = X[i][feat_slices.gray]
+        pattern_oh_block = X[i][feat_slices.pattern_oh]
+
+        print(f"  high_R(phi-only)[len={len(hr)}]: {hr}")
+        print(f"  high_G(phi-only)[len={len(hg)}]: {hg}")
+        print(f"  high_B(phi-only)[len={len(hb)}]: {hb}")
+        print(f"  meta                : {meta_block}")
+        print(f"  gray_norm           : {gray_norm_val}")
+        print(f"  pattern_onehot      : {pattern_oh_block}")
+
+# -------------------------------------------------
+# main() 대신 또는 main() 위에서 임시로 호출
+# -------------------------------------------------
+if __name__ == "__main__":
+    # debug 전용 출력
+    debug_dump_single_pk(pk_debug=1411, knots_K=KNOTS, n_preview=5)
+
+    # 원래 학습 루틴을 돌릴 때는 아래를 다시 활성화하면 됩니다.
+    # main()
