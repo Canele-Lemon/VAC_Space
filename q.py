@@ -1,65 +1,35 @@
-import os, sys
-
-# 현재 파일 경로 기준으로 프로젝트 루트(= module 디렉토리)를 sys.path에 추가
-# ex) module/src/prepare_output.py -> module
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))       # .../module/src
-PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..")) # .../module
-if PROJECT_ROOT not in sys.path:
-    sys.path.append(PROJECT_ROOT)
-    
-def debug_dump_y0_delta(target_pk=2444, reference_pk=2154, preview_grays=(0, 1, 32, 128, 255)):
+def build_A_for_component(artifacts: dict, comp: str, L=256) -> np.ndarray:
     """
-    1) target_pk와 reference_pk 각각의 raw 측정 데이터를 CSV로 저장하고 엽니다.
-    2) 두 데이터로부터 계산된 dGamma / dCx / dCy 일부 값을 콘솔에 출력합니다.
+    ΔY ≈ A Δh
+    여기서 Δh는 [R_high_knots(K), G_high_knots(K), B_high_knots(K),
+                 R_low_knots(K),  G_low_knots(K),  B_low_knots(K)]
+    A shape = (L, 6K)
     """
-    print(f"[DEBUG] target_pk={target_pk}, reference_pk={reference_pk}")
+    knots = np.asarray(artifacts["knots"], dtype=np.int32)
+    comp_obj = artifacts["components"][comp]
+    coef = np.asarray(comp_obj["coef"], dtype=np.float32)
+    scale = np.asarray(comp_obj["standardizer"]["scale"], dtype=np.float32)
 
-    # 빌더 준비
-    target_builder = VACOutputBuilder(pk=target_pk, reference_pk=reference_pk)
-    ref_builder    = VACOutputBuilder(pk=reference_pk, reference_pk=reference_pk)
+    s = comp_obj["feature_slices"]
+    # slice 정보 다 있음
+    beta_high_R = coef[s["high_R"][0]:s["high_R"][1]] / np.maximum(scale[s["high_R"][0]:s["high_R"][1]], 1e-12)
+    beta_high_G = coef[s["high_G"][0]:s["high_G"][1]] / np.maximum(scale[s["high_G"][0]:s["high_G"][1]], 1e-12)
+    beta_high_B = coef[s["high_B"][0]:s["high_B"][1]] / np.maximum(scale[s["high_B"][0]:s["high_B"][1]], 1e-12)
 
-    # 1) RAW MEASUREMENTS 덤프 → CSV
-    print("\n[STEP 1] Dump raw measurement rows for target and reference to CSV (and open)")
-    df_target = target_builder.load_set_info_pk_data(target_pk)
-    df_ref    = ref_builder.load_set_info_pk_data(reference_pk)
+    beta_low_R  = coef[s["low_R"][0]:s["low_R"][1]]   / np.maximum(scale[s["low_R"][0]:s["low_R"][1]],   1e-12)
+    beta_low_G  = coef[s["low_G"][0]:s["low_G"][1]]   / np.maximum(scale[s["low_G"][0]:s["low_G"][1]],   1e-12)
+    beta_low_B  = coef[s["low_B"][0]:s["low_B"][1]]   / np.maximum(scale[s["low_B"][0]:s["low_B"][1]],   1e-12)
 
-    print(f"  target df rows: {len(df_target)} (pk={target_pk})")
-    print(f"  ref    df rows: {len(df_ref)}    (pk={reference_pk})")
+    Phi = stack_basis_all_grays(knots, L=L)  # (L,K), phi(g) basis over gray
 
-    # 2) ΔY0 계산 (dGamma, dCx, dCy)
-    print("\n[STEP 2] Compute dGamma / dCx / dCy using compute_Y0_struct() ...")
-    y0_delta = target_builder.compute_Y0_struct()
+    A_high_R = Phi * beta_high_R.reshape(1, -1)
+    A_high_G = Phi * beta_high_G.reshape(1, -1)
+    A_high_B = Phi * beta_high_B.reshape(1, -1)
 
-    # y0_delta 구조 예:
-    # {
-    #   'W': {'dGamma': (256,), 'dCx': (256,), 'dCy': (256,)},
-    #   'R': {...},
-    #   'G': {...},
-    #   'B': {...}
-    # }
+    A_low_R  = Phi * beta_low_R.reshape(1, -1)
+    A_low_G  = Phi * beta_low_G.reshape(1, -1)
+    A_low_B  = Phi * beta_low_B.reshape(1, -1)
 
-    patterns = ['W','R','G','B']
-    for ptn in patterns:
-        if ptn not in y0_delta:
-            continue
-
-        dGamma_arr = y0_delta[ptn]['dGamma']
-        dCx_arr    = y0_delta[ptn]['dCx']
-        dCy_arr    = y0_delta[ptn]['dCy']
-
-        print(f"\n[PTN {ptn}]  (values are target - ref)")
-        for g in preview_grays:
-            if g < 0 or g >= len(dGamma_arr):
-                continue
-
-            dGamma_val = float(dGamma_arr[g]) if np.isfinite(dGamma_arr[g]) else None
-            dCx_val    = float(dCx_arr[g])    if np.isfinite(dCx_arr[g])    else None
-            dCy_val    = float(dCy_arr[g])    if np.isfinite(dCy_arr[g])    else None
-
-            print(f"  gray {g:3d}:  dGamma={dGamma_val} , dCx={dCx_val} , dCy={dCy_val}")
-
-    print("\n[STEP 3] Sanity checklist:")
-    print(" - 위 dCx, dCy는 실제로 df_target에서 해당 gray의 Cx/Cy 값 minus df_ref의 Cx/Cy 값과 일치해야 합니다.")
-    print(" - dGamma는 정규화된 Lv → gamma 계산 후 차이이므로, 그냥 Lv 차이랑은 다를 수 있습니다.")
-    print(" - dGamma/dCx/dCy가 거의 0이라면 target_pk와 reference_pk의 특성이 매우 유사하다는 뜻입니다.")
-    
+    A = np.hstack([A_high_R, A_high_G, A_high_B,
+                   A_low_R,  A_low_G,  A_low_B]).astype(np.float32)
+    return A
