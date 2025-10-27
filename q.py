@@ -1,51 +1,97 @@
-def debug_dump_delta_example(target_pk=2444):
-    print(f"[DEBUG] Checking ΔLUT for target PK={target_pk}")
+[DEBUG] Checking ΔLUT for target PK=2444
 
-    builder = VACInputBuilder(target_pk)
+[META INFO]
+panel_maker one-hot : [0. 0. 0. 0. 1.]
+frame_rate          : 60.0
+model_year          : 26.0
 
-    # 절대 LUT (target 자체)
-    X_abs = builder.prepare_X0()
+--- Channel: R_Low ---
+  shape abs   : (256,), dtype=float32
+  shape delta : (256,), dtype=float32
+    gray   0 : abs= 0.000000 , delta= 0.000000
+    gray   1 : abs= 0.000733 , delta=-0.003175
+    gray  32 : abs= 0.021490 , delta=-0.104029
+    gray 128 : abs= 0.153846 , delta=-0.348230
+    gray 255 : abs= 1.000000 , delta= 0.000000
 
-    # ΔLUT = target - ref(PK=1)
-    X_delta = builder.prepare_X_delta()
+--- Channel: R_High ---
+  shape abs   : (256,), dtype=float32
+  shape delta : (256,), dtype=float32
+    gray   0 : abs= 0.000244 , delta= 0.000244
+    gray   1 : abs= 0.005128 , delta= 0.001221
+    gray  32 : abs= 0.168742 , delta= 0.043223
+    gray 128 : abs= 0.655433 , delta= 0.153358
+    gray 255 : abs= 1.000000 , delta= 0.000000
 
-    lut_abs   = X_abs["lut"]
-    lut_delta = X_delta["lut"]
-    meta      = X_delta["meta"]  # meta는 target 기준으로 동일하므로 어느쪽을 써도 같아야 함
+--- Channel: G_Low ---
+  shape abs   : (256,), dtype=float32
+  shape delta : (256,), dtype=float32
+    gray   0 : abs= 0.000000 , delta= 0.000000
+    gray   1 : abs= 0.000733 , delta=-0.003175
+    gray  32 : abs= 0.020024 , delta=-0.105495
+    gray 128 : abs= 0.155311 , delta=-0.346764
+    gray 255 : abs= 1.000000 , delta= 0.000000
 
-    print("\n[META INFO]")
-    print(f"panel_maker one-hot : {meta['panel_maker']}")
-    print(f"frame_rate          : {meta['frame_rate']}")
-    print(f"model_year          : {meta['model_year']}")
+--- Channel: G_High ---
+  shape abs   : (256,), dtype=float32
+  shape delta : (256,), dtype=float32
+    gray   0 : abs= 0.000244 , delta= 0.000244
+    gray   1 : abs= 0.005861 , delta= 0.001954
+    gray  32 : abs= 0.188767 , delta= 0.063248
+    gray 128 : abs= 0.688645 , delta= 0.186569
+    gray 255 : abs= 1.000000 , delta= 0.000000
 
-    # 채널 리스트 (prepare_X0와 동일)
-    channels = ['R_Low','R_High','G_Low','G_High','B_Low','B_High']
+--- Channel: B_Low ---
+  shape abs   : (256,), dtype=float32
+  shape delta : (256,), dtype=float32
+    gray   0 : abs= 0.000000 , delta= 0.000000
+    gray   1 : abs= 0.000733 , delta=-0.003175
+    gray  32 : abs= 0.018559 , delta=-0.106960
+    gray 128 : abs= 0.147009 , delta=-0.355067
+    gray 255 : abs= 1.000000 , delta= 0.000000
 
-    # 우리가 직접 눈으로 확인해볼 gray 인덱스 몇 개
-    sample_grays = [0, 1, 32, 128, 255]
+--- Channel: B_High ---
+  shape abs   : (256,), dtype=float32
 
-    for ch in channels:
-        arr_abs   = lut_abs[ch]    # (256,) 절대 LUT 값 [0..1] 정규화
-        arr_delta = lut_delta[ch]  # (256,) ΔLUT 값 = target - ref
+--- Channel: B_Low ---
+  shape abs   : (256,), dtype=float32
+  shape delta : (256,), dtype=float32
+    gray   0 : abs= 0.000000 , delta= 0.000000
+    gray   1 : abs= 0.000733 , delta=-0.003175
+    gray  32 : abs= 0.018559 , delta=-0.106960
+    gray 128 : abs= 0.147009 , delta=-0.355067
+    gray 255 : abs= 1.000000 , delta= 0.000000
 
-        print(f"\n--- Channel: {ch} ---")
-        print(f"  shape abs   : {arr_abs.shape}, dtype={arr_abs.dtype}")
-        print(f"  shape delta : {arr_delta.shape}, dtype={arr_delta.dtype}")
+--- Channel: B_High ---
+  shape abs   : (256,), dtype=float32
+--- Channel: B_Low ---
+  shape abs   : (256,), dtype=float32
+  shape delta : (256,), dtype=float32
+    gray   0 : abs= 0.000000 , delta= 0.000000
+    gray   1 : abs= 0.000733 , delta=-0.003175
+    gray  32 : abs= 0.018559 , delta=-0.106960
+    gray 128 : abs= 0.147009 , delta=-0.355067
+    gray 255 : abs= 1.000000 , delta= 0.000000
 
-        for g in sample_grays:
-            if g >= len(arr_abs):
-                continue
-            v_abs   = float(arr_abs[g])
-            v_delta = float(arr_delta[g])
-            print(f"    gray {g:3d} : abs={v_abs: .6f} , delta={v_delta: .6f}")
+--- Channel: B_High ---
+  shape abs   : (256,), dtype=float32
+    gray   0 : abs= 0.000000 , delta= 0.000000
+    gray   1 : abs= 0.000733 , delta=-0.003175
+    gray  32 : abs= 0.018559 , delta=-0.106960
+    gray 128 : abs= 0.147009 , delta=-0.355067
+    gray 255 : abs= 1.000000 , delta= 0.000000
 
-    # 간단 sanity check:
-    # ΔLUT가 전부 0에 가깝다면 → target LUT가 ref(LUT@PK=1)랑 거의 동일하다는 뜻
-    # ΔLUT가 + 쪽이면 → target이 ref보다 더 크게 올려놓은 구간
-    # ΔLUT가 - 쪽이면 → target이 ref보다 더 낮춘 구간
-    print("\n[NOTE] If delta≈0 for all channels, target LUT is basically same as ref(PK=1).")
-    print("[NOTE] Positive delta means target LUT is higher than ref at that gray, negative means lower.\n")
+--- Channel: B_High ---
+  shape abs   : (256,), dtype=float32
 
-
-if __name__ == "__main__":
-    debug_dump_delta_example(target_pk=2444)
+--- Channel: B_High ---
+  shape abs   : (256,), dtype=float32
+--- Channel: B_High ---
+  shape abs   : (256,), dtype=float32
+  shape abs   : (256,), dtype=float32
+  shape delta : (256,), dtype=float32
+    gray   0 : abs= 0.000244 , delta= 0.000244
+    gray   1 : abs= 0.005617 , delta= 0.001709
+    gray  32 : abs= 0.163858 , delta= 0.038339
+    gray 128 : abs= 0.661050 , delta= 0.158974
+    gray 255 : abs= 1.000000 , delta= 0.000000
