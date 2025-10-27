@@ -1,97 +1,44 @@
-[DEBUG] Checking ΔLUT for target PK=2444
+    def prepare_Y(self, y1_patterns=('W',)):
+        """
+        최종 Y 딕셔너리 병합 반환:
+        {
+          "Y0": { 'W': {'Gamma':(256,), 'Cx':(256,), 'Cy':(256,)}, 
+                  'R': {'Gamma':(256,), 'Cx':(256,), 'Cy':(256,)},
+                  'G': {'Gamma':(256,), 'Cx':(256,), 'Cy':(256,)},
+                  'B': {'Gamma':(256,), 'Cx':(256,), 'Cy':(256,)},
+                }
+          "Y1": { 'W': (255,),
+                  'R': (255,),
+                  'G': (255,),
+                  'B': (255,) 
+                },
+          "Y2": { 'Red': val, 
+                  ..., 
+                  'Western': val 
+                }
+        }
+        """
+        y0 = self.compute_Y0_struct()
+        y1 = self.compute_Y1_struct(patterns=y1_patterns)
+        y2 = self.compute_Y2_struct()
+        
+        return {"Y0": y0, "Y1": y1, "Y2": y2}
 
-[META INFO]
-panel_maker one-hot : [0. 0. 0. 0. 1.]
-frame_rate          : 60.0
-model_year          : 26.0
 
---- Channel: R_Low ---
-  shape abs   : (256,), dtype=float32
-  shape delta : (256,), dtype=float32
-    gray   0 : abs= 0.000000 , delta= 0.000000
-    gray   1 : abs= 0.000733 , delta=-0.003175
-    gray  32 : abs= 0.021490 , delta=-0.104029
-    gray 128 : abs= 0.153846 , delta=-0.348230
-    gray 255 : abs= 1.000000 , delta= 0.000000
+prepare_output.py를 위처럼 바꾸어서, VAC_dataset.py를 아래와 같이 하는 방향으로 하고자 합니다.
 
---- Channel: R_High ---
-  shape abs   : (256,), dtype=float32
-  shape delta : (256,), dtype=float32
-    gray   0 : abs= 0.000244 , delta= 0.000244
-    gray   1 : abs= 0.005128 , delta= 0.001221
-    gray  32 : abs= 0.168742 , delta= 0.043223
-    gray 128 : abs= 0.655433 , delta= 0.153358
-    gray 255 : abs= 1.000000 , delta= 0.000000
 
---- Channel: G_Low ---
-  shape abs   : (256,), dtype=float32
-  shape delta : (256,), dtype=float32
-    gray   0 : abs= 0.000000 , delta= 0.000000
-    gray   1 : abs= 0.000733 , delta=-0.003175
-    gray  32 : abs= 0.020024 , delta=-0.105495
-    gray 128 : abs= 0.155311 , delta=-0.346764
-    gray 255 : abs= 1.000000 , delta= 0.000000
+    def _collect(self):
+        for pk in self.pk_list:
+            x_builder = VACInputBuilder(pk)
+            y_builder = VACOutputBuilder(pk)
+            X = x_builder.prepare_X_delta()   # {"dLUT": {...}, "meta": {...}}
+            Y = y_builder.prepare_Y(y1_patterns=('W',))    # {"Y0": {...}, "Y1": {...}, "Y2": {...}}
+            
+            self.samples.append({
+                "pk": pk, 
+                "X": X, 
+                "Y": Y
+            })
 
---- Channel: G_High ---
-  shape abs   : (256,), dtype=float32
-  shape delta : (256,), dtype=float32
-    gray   0 : abs= 0.000244 , delta= 0.000244
-    gray   1 : abs= 0.005861 , delta= 0.001954
-    gray  32 : abs= 0.188767 , delta= 0.063248
-    gray 128 : abs= 0.688645 , delta= 0.186569
-    gray 255 : abs= 1.000000 , delta= 0.000000
-
---- Channel: B_Low ---
-  shape abs   : (256,), dtype=float32
-  shape delta : (256,), dtype=float32
-    gray   0 : abs= 0.000000 , delta= 0.000000
-    gray   1 : abs= 0.000733 , delta=-0.003175
-    gray  32 : abs= 0.018559 , delta=-0.106960
-    gray 128 : abs= 0.147009 , delta=-0.355067
-    gray 255 : abs= 1.000000 , delta= 0.000000
-
---- Channel: B_High ---
-  shape abs   : (256,), dtype=float32
-
---- Channel: B_Low ---
-  shape abs   : (256,), dtype=float32
-  shape delta : (256,), dtype=float32
-    gray   0 : abs= 0.000000 , delta= 0.000000
-    gray   1 : abs= 0.000733 , delta=-0.003175
-    gray  32 : abs= 0.018559 , delta=-0.106960
-    gray 128 : abs= 0.147009 , delta=-0.355067
-    gray 255 : abs= 1.000000 , delta= 0.000000
-
---- Channel: B_High ---
-  shape abs   : (256,), dtype=float32
---- Channel: B_Low ---
-  shape abs   : (256,), dtype=float32
-  shape delta : (256,), dtype=float32
-    gray   0 : abs= 0.000000 , delta= 0.000000
-    gray   1 : abs= 0.000733 , delta=-0.003175
-    gray  32 : abs= 0.018559 , delta=-0.106960
-    gray 128 : abs= 0.147009 , delta=-0.355067
-    gray 255 : abs= 1.000000 , delta= 0.000000
-
---- Channel: B_High ---
-  shape abs   : (256,), dtype=float32
-    gray   0 : abs= 0.000000 , delta= 0.000000
-    gray   1 : abs= 0.000733 , delta=-0.003175
-    gray  32 : abs= 0.018559 , delta=-0.106960
-    gray 128 : abs= 0.147009 , delta=-0.355067
-    gray 255 : abs= 1.000000 , delta= 0.000000
-
---- Channel: B_High ---
-  shape abs   : (256,), dtype=float32
-
---- Channel: B_High ---
-  shape abs   : (256,), dtype=float32
---- Channel: B_High ---
-  shape abs   : (256,), dtype=float32
-  shape abs   : (256,), dtype=float32
-  shape delta : (256,), dtype=float32
-    gray   0 : abs= 0.000244 , delta= 0.000244
-    gray   1 : abs= 0.005617 , delta= 0.001709
-    gray  32 : abs= 0.163858 , delta= 0.038339
-    gray 128 : abs= 0.661050 , delta= 0.158974
-    gray 255 : abs= 1.000000 , delta= 0.000000
+이 방향으로 하면 또 어느부분을 수정해야 할까요?
