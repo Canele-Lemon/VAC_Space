@@ -1,22 +1,36 @@
-PS D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module> & C:/python310/python.exe "d:/00 업무/00 가상화기술/00 색시야각 보상 최적화/VAC algorithm/module/scripts/VACJacobianTrainer.py"
-[Jacobian] using 1042 PKs
+def _build_A_from_artifacts(self, artifacts, comp: str):
+    """
+    저장된 자코비안 pkl로부터 A 행렬 (ΔY ≈ A·Δh) 복원
+    이제 Δh = [ΔR_Low_knots, ΔG_Low_knots, ΔB_Low_knots,
+               ΔR_High_knots,ΔG_High_knots,ΔB_High_knots] (총 6*K)
+    반환 A shape: (256, 6*K)
+    """
+    knots = np.asarray(artifacts["knots"], dtype=np.int32)
+    comp_obj = artifacts["components"][comp]
 
-[Jacobian-DELTA] Start training with 1042 PKs, 33 knots
+    coef  = np.asarray(comp_obj["coef"], dtype=np.float32)
+    scale = np.asarray(comp_obj["standardizer"]["scale"], dtype=np.float32)
 
-=== Learn Jacobian for dGamma (ΔLUT High+Low) ===
-  └ X shape: (263401, 210), y shape: (263401,)
-  ⏱  dGamma done in 10.0 s
+    s = comp_obj["feature_slices"]
+    # 6채널 모두
+    slices = [
+        ("low_R",  "R_Low"),
+        ("low_G",  "G_Low"),
+        ("low_B",  "B_Low"),
+        ("high_R", "R_High"),
+        ("high_G", "G_High"),
+        ("high_B", "B_High"),
+    ]
 
-=== Learn Jacobian for dCx (ΔLUT High+Low) ===
-  └ X shape: (266752, 210), y shape: (266752,)
-  ⏱  dCx done in 10.1 s
+    Phi = self._stack_basis(knots, L=256)    # (256,K)
 
-=== Learn Jacobian for dCy (ΔLUT High+Low) ===
-  └ X shape: (266752, 210), y shape: (266752,)
-  ⏱  dCy done in 10.2 s
+    A_blocks = []
+    for key_slice, _pretty_name in slices:
+        sl = slice(s[key_slice][0], s[key_slice][1])   # e.g. (0,33), (33,66), ...
+        beta = coef[sl] / np.maximum(scale[sl], 1e-12)  # (K,)
+        A_ch = Phi * beta.reshape(1, -1)                # (256,K)
+        A_blocks.append(A_ch)
 
-✅ All components trained in 10.0 min
-📁 saved Jacobian model: d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module\scripts\jacobian_INX_60_K33.pkl
-[DEBUG] A_dGamma shape: (256, 198)
-        first row few elems: [ 0.01602387  0.          0.          0.          0.          0.
-  0.         -0.          0.         -0.        ]
+    A = np.hstack(A_blocks).astype(np.float32)          # (256, 6K)
+    logging.info(f"[Jacobian] {comp} A 행렬 shape: {A.shape}") 
+    return A
