@@ -1,97 +1,119 @@
-def _finalize_session(self):
+def _consume_colorshift_pair(self, patch_name, results):
+    """
+    results: {
+        'main': (x, y, lv, cct, duv)  또는  None,
+        'sub' : (x, y, lv, cct, duv)  또는  None
+    }
+    """
     s = self._sess
+    store = s['store']
     profile: SessionProfile = s['profile']
-    table_main = self.ui.vac_table_opt_mes_results_main
-    cols = profile.table_cols
-    thr_gamma = 0.05
 
-    # =========================
-    # 1) main 감마 컬럼 채우기
-    # =========================
-    lv_series_main = np.zeros(256, dtype=np.float64)
-    for g in range(256):
-        tup = s['store']['gamma']['main']['white'].get(g, None)
-        lv_series_main[g] = float(tup[0]) if tup else np.nan
+    # 현재 세션 상태 문자열
+    state = 'OFF' if profile.legend_text.startswith('VAC OFF') else 'ON'
 
-    gamma_vec = self._compute_gamma_series(lv_series_main)
-    for g in range(256):
-        if np.isfinite(gamma_vec[g]):
-            self._set_item(table_main, g, cols['gamma'], f"{gamma_vec[g]:.6f}")
+    # 현재 패턴의 row index = cs_idx (op.colorshift_patterns 순서 그대로)
+    row_idx = s['cs_idx']
 
-    # =========================
-    # 2) ΔGamma (ON세션일 때만)
-    # =========================
-    if profile.ref_store is not None and 'd_gamma' in cols:
-        ref_lv_main = np.zeros(256, dtype=np.float64)
-        for g in range(256):
-            tup = profile.ref_store['gamma']['main']['white'].get(g, None)
-            ref_lv_main[g] = float(tup[0]) if tup else np.nan
-        ref_gamma = self._compute_gamma_series(ref_lv_main)
-        dG = gamma_vec - ref_gamma
-        for g in range(256):
-            if np.isfinite(dG[g]):
-                self._set_item_with_spec(
-                    table_main, g, cols['d_gamma'], f"{dG[g]:.6f}",
-                    is_spec_ok=(abs(dG[g]) <= thr_gamma)
-                )
+    # 미리 테이블 핸들 가져오기
+    tbl_cs_raw = self.ui.vac_table_opt_mes_results_colorshift
 
-    # =================================================================
-    # 3) [ADD: slope 계산 후 sub 테이블 업데이트 - 측정 종료 후 한 번에]
-    # =================================================================
-    # 요구사항:
-    # - sub 측정 white의 lv로 normalized 휘도 계산
-    # - 88gray부터 8 gray step씩 (88→96, 96→104, ... 224→232)
-    # - slope = abs( Ynorm[g+8] - Ynorm[g] ) / ((8)/255)
-    # - slope는 row=g 에 기록
-    # - VAC OFF 세션이면 sub 테이블의 4번째 열(0-based index 3)
-    #   VAC ON / CORR 세션이면 sub 테이블의 8번째 열(0-based index 7)
+    # main/sub 측정 결과 기록하고 차트 갱신 (기존 코드 유지)
+    for role in ('main', 'sub'):
+        res = results.get(role, None)
+        if res is None:
+            store['colorshift'][role].append((np.nan, np.nan, np.nan, np.nan))
+            continue
 
-    table_sub = self.ui.vac_table_opt_mes_results_sub
+        x, y, lv, cct, duv_unused = res
 
-    # 3-1) sub white lv 배열 뽑기
-    lv_series_sub = np.full(256, np.nan, dtype=np.float64)
-    for g in range(256):
-        tup_sub = s['store']['gamma']['sub']['white'].get(g, None)
-        if tup_sub:
-            lv_series_sub[g] = float(tup_sub[0])
+        # xy -> u' v'
+        u_p, v_p = cf.convert_xyz_to_uvprime(float(x), float(y))
 
-    # 3-2) 정규화된 휘도 Ynorm[g] = (Lv[g]-Lv[0]) / max(Lv[1:]-Lv[0])
-    def _norm_lv(lv_arr):
-        lv0 = lv_arr[0]
-        denom = np.nanmax(lv_arr[1:] - lv0)
-        if not np.isfinite(denom) or denom <= 0:
-            return np.full_like(lv_arr, np.nan, dtype=np.float64)
-        return (lv_arr - lv0) / denom
+        # store에 누적 (x,y,u',v')
+        store['colorshift'][role].append((float(x), float(y), float(u_p), float(v_p)))
 
-    Ynorm_sub = _norm_lv(lv_series_sub)
+        # 차트 갱신 (기존)
+        self.vac_optimization_cie1976_chart.add_point(
+            state=state,
+            role=role,
+            u_p=float(u_p),
+            v_p=float(v_p)
+        )
 
-    # 3-3) 어느 열에 쓰는지 결정
-    is_off_session = profile.legend_text.startswith('VAC OFF')
-    slope_col_idx = 3 if is_off_session else 7  # 4번째 or 8번째 열
+    # ============================
+    # [ADD] 표 업데이트 로직
+    # ============================
+    #
+    # 요구사항 정리:
+    #   - VAC OFF 세션이면:
+    #         2열,3열,4열에 main 계측값의 Lv / u' / v'를 쓴다
+    #   - VAC ON (또는 보정 이후 세션) 이면:
+    #         5열,6열,7열에 main 계측값의 Lv / u' / v'를 쓴다
+    #         그리고 8열에는 du'v' = main과 sub의 거리
+    #
+    #   du'v' = sqrt((u_sub-u_main)^2 + (v_sub-v_main)^2)
+    #
+    #   row는 현재 cs_idx 인덱스
+    #
+    #   sub 결과가 없으면 du'v'는 "" 로 둔다.
 
-    # 3-4) 각 8gray 블록 slope 계산해서 테이블에 기록
-    # 블록 시작 gray: 88,96,104,...,224
-    for g0 in range(88, 225, 8):
-        g1 = g0 + 8
-        if g1 >= 256:
-            break
+    # table helper (이미 클래스에 있는 것 그대로 재사용)
+    def _safe_set_item(table, r, c, text):
+        self._set_item(table, r, c, text if text is not None else "")
 
-        y0 = Ynorm_sub[g0]
-        y1 = Ynorm_sub[g1]
-        d_gray_norm = (g1 - g0) / 255.0  # 8/255
+    # main/sub 최신 측정값 꺼내기
+    # 방금 append 했으므로 store['colorshift'][role][row_idx] 가 방금 결과
+    main_ok = row_idx < len(store['colorshift']['main'])
+    sub_ok  = row_idx < len(store['colorshift']['sub'])
 
-        if np.isfinite(y0) and np.isfinite(y1) and d_gray_norm > 0:
-            slope_val = abs(y1 - y0) / d_gray_norm
-            txt = f"{slope_val:.6f}"
-        else:
-            txt = ""
+    main_entry = store['colorshift']['main'][row_idx] if main_ok else (np.nan, np.nan, np.nan, np.nan)
+    sub_entry  = store['colorshift']['sub'][row_idx]  if sub_ok  else (np.nan, np.nan, np.nan, np.nan)
 
-        # row = g0 에 기록
-        self._set_item(table_sub, g0, slope_col_idx, txt)
+    # main_entry = (x, y, u', v')
+    x_m, y_m, u_m, v_m = main_entry
+    # sub_entry = (x, y, u', v')
+    x_s, y_s, u_s, v_s = sub_entry
 
-    # 끝났으면 on_done 콜백 실행
-    if callable(s['on_done']):
-        try:
-            s['on_done'](s['store'])
-        except Exception as e:
-            logging.exception(e)
+    # Lv은 results 딕셔너리에서 직접 가져오는 게 더 정확 (store에는 x,y,u',v'만 넣었기 때문)
+    # 방금 측정한 results['main'] / results['sub']에서 lv를 다시 읽는다.
+    lv_m = np.nan
+    lv_s = np.nan
+    if 'main' in results and results['main'] is not None:
+        _, _, lv_tmp, _, _ = results['main']
+        lv_m = float(lv_tmp)
+    if 'sub' in results and results['sub'] is not None:
+        _, _, lv_tmp2, _, _ = results['sub']
+        lv_s = float(lv_tmp2)
+
+    if profile.legend_text.startswith('VAC OFF'):
+        # OFF 세션 → 2~4열 업데이트 (row=row_idx)
+        #  2열: Lv(main)
+        #  3열: u'(main)
+        #  4열: v'(main)
+        txt_lv = f"{lv_m:.6f}" if np.isfinite(lv_m) else ""
+        txt_u  = f"{u_m:.6f}"  if np.isfinite(u_m)  else ""
+        txt_v  = f"{v_m:.6f}"  if np.isfinite(v_m)  else ""
+
+        _safe_set_item(tbl_cs_raw, row_idx, 1, txt_lv)
+        _safe_set_item(tbl_cs_raw, row_idx, 2, txt_u)
+        _safe_set_item(tbl_cs_raw, row_idx, 3, txt_v)
+
+    else:
+        # ON 세션 (VAC ON 또는 CORR 이후 세션 포함)
+        # 5~7열: Lv(main), u'(main), v'(main)
+        txt_lv_on = f"{lv_m:.6f}" if np.isfinite(lv_m) else ""
+        txt_u_on  = f"{u_m:.6f}"  if np.isfinite(u_m)  else ""
+        txt_v_on  = f"{v_m:.6f}"  if np.isfinite(v_m)  else ""
+
+        _safe_set_item(tbl_cs_raw, row_idx, 4, txt_lv_on)
+        _safe_set_item(tbl_cs_raw, row_idx, 5, txt_u_on)
+        _safe_set_item(tbl_cs_raw, row_idx, 6, txt_v_on)
+
+        # 8열: du'v' = 거리(main vs sub)
+        duv = ""
+        if np.isfinite(u_m) and np.isfinite(v_m) and np.isfinite(u_s) and np.isfinite(v_s):
+            dist = np.sqrt((u_s - u_m)**2 + (v_s - v_m)**2)
+            duv = f"{dist:.6f}"
+
+        _safe_set_item(tbl_cs_raw, row_idx, 7, duv)
