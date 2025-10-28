@@ -1,119 +1,62 @@
-def _consume_colorshift_pair(self, patch_name, results):
+def _debug_log_knot_update(self, iter_idx, knots, delta_h, lut256_before, lut256_after):
     """
-    results: {
-        'main': (x, y, lv, cct, duv)  또는  None,
-        'sub' : (x, y, lv, cct, duv)  또는  None
-    }
+    iter_idx        : 현재 iteration 번호 (1, 2, ...)
+    knots           : self._jac_artifacts["knots"]  # 길이 K, 예: [0,8,16,...,255]
+    delta_h         : (6K,) 이번 iteration에서 solve한 Δh
+    lut256_before   : dict of 6채널 256길이 LUT (보정 전, float32)
+    lut256_after    : dict of 6채널 256길이 LUT (보정 후, float32)
+
+    이걸 로그에 예쁘게 찍어 분석용으로 쓸 수 있게 해 준다.
     """
-    s = self._sess
-    store = s['store']
-    profile: SessionProfile = s['profile']
+    try:
+        K = len(knots)
+        # 채널 분해
+        dh_RL = delta_h[0*K : 1*K]
+        dh_GL = delta_h[1*K : 2*K]
+        dh_BL = delta_h[2*K : 3*K]
+        dh_RH = delta_h[3*K : 4*K]
+        dh_GH = delta_h[4*K : 5*K]
+        dh_BH = delta_h[5*K : 6*K]
 
-    # 현재 세션 상태 문자열
-    state = 'OFF' if profile.legend_text.startswith('VAC OFF') else 'ON'
+        def _summ(ch_name, dh_vec):
+            # dh_vec 길이 K
+            # 상위 몇 개만 큰 변화 순으로 보여주면 어디가 움직였는지 직관적으로 파악 가능
+            mag = np.abs(dh_vec)
+            top_idx = np.argsort(mag)[::-1][:5]  # 변화량 큰 상위 5개 knot
+            msg_lines = [f"    {ch_name} top5 |knot(gray)->Δh|:"]
+            for i in top_idx:
+                msg_lines.append(
+                    f"      knot#{i:02d} (gray≈{knots[i]:3d}) : Δh={dh_vec[i]:+.4f}"
+                )
+            return "\n".join(msg_lines)
 
-    # 현재 패턴의 row index = cs_idx (op.colorshift_patterns 순서 그대로)
-    row_idx = s['cs_idx']
-
-    # 미리 테이블 핸들 가져오기
-    tbl_cs_raw = self.ui.vac_table_opt_mes_results_colorshift
-
-    # main/sub 측정 결과 기록하고 차트 갱신 (기존 코드 유지)
-    for role in ('main', 'sub'):
-        res = results.get(role, None)
-        if res is None:
-            store['colorshift'][role].append((np.nan, np.nan, np.nan, np.nan))
-            continue
-
-        x, y, lv, cct, duv_unused = res
-
-        # xy -> u' v'
-        u_p, v_p = cf.convert_xyz_to_uvprime(float(x), float(y))
-
-        # store에 누적 (x,y,u',v')
-        store['colorshift'][role].append((float(x), float(y), float(u_p), float(v_p)))
-
-        # 차트 갱신 (기존)
-        self.vac_optimization_cie1976_chart.add_point(
-            state=state,
-            role=role,
-            u_p=float(u_p),
-            v_p=float(v_p)
+        logging.info("======== [CORR DEBUG] Iter %d Knot Δh ========\n%s\n%s\n%s\n%s\n%s\n%s",
+            iter_idx,
+            _summ("R_Low ", dh_RL),
+            _summ("G_Low ", dh_GL),
+            _summ("B_Low ", dh_BL),
+            _summ("R_High", dh_RH),
+            _summ("G_High", dh_GH),
+            _summ("B_High", dh_BH),
         )
 
-    # ============================
-    # [ADD] 표 업데이트 로직
-    # ============================
-    #
-    # 요구사항 정리:
-    #   - VAC OFF 세션이면:
-    #         2열,3열,4열에 main 계측값의 Lv / u' / v'를 쓴다
-    #   - VAC ON (또는 보정 이후 세션) 이면:
-    #         5열,6열,7열에 main 계측값의 Lv / u' / v'를 쓴다
-    #         그리고 8열에는 du'v' = main과 sub의 거리
-    #
-    #   du'v' = sqrt((u_sub-u_main)^2 + (v_sub-v_main)^2)
-    #
-    #   row는 현재 cs_idx 인덱스
-    #
-    #   sub 결과가 없으면 du'v'는 "" 로 둔다.
+        # LUT 전/후 차이도 간단 비교 (예: High 채널만 대표로)
+        def _lut_diff_stats(name):
+            before = np.asarray(lut256_before[name], dtype=np.float32)
+            after  = np.asarray(lut256_after[name],  dtype=np.float32)
+            diff   = after - before
+            return (float(np.min(diff)),
+                    float(np.max(diff)),
+                    float(np.mean(diff)),
+                    float(np.std(diff)))
 
-    # table helper (이미 클래스에 있는 것 그대로 재사용)
-    def _safe_set_item(table, r, c, text):
-        self._set_item(table, r, c, text if text is not None else "")
+        for ch in ["R_Low","G_Low","B_Low","R_High","G_High","B_High"]:
+            dmin, dmax, dmean, dstd = _lut_diff_stats(ch)
+            logging.debug(
+                "[CORR DEBUG] Iter %d %s LUT256 delta stats: "
+                "min=%+.4f max=%+.4f mean=%+.4f std=%.4f",
+                iter_idx, ch, dmin, dmax, dmean, dstd
+            )
 
-    # main/sub 최신 측정값 꺼내기
-    # 방금 append 했으므로 store['colorshift'][role][row_idx] 가 방금 결과
-    main_ok = row_idx < len(store['colorshift']['main'])
-    sub_ok  = row_idx < len(store['colorshift']['sub'])
-
-    main_entry = store['colorshift']['main'][row_idx] if main_ok else (np.nan, np.nan, np.nan, np.nan)
-    sub_entry  = store['colorshift']['sub'][row_idx]  if sub_ok  else (np.nan, np.nan, np.nan, np.nan)
-
-    # main_entry = (x, y, u', v')
-    x_m, y_m, u_m, v_m = main_entry
-    # sub_entry = (x, y, u', v')
-    x_s, y_s, u_s, v_s = sub_entry
-
-    # Lv은 results 딕셔너리에서 직접 가져오는 게 더 정확 (store에는 x,y,u',v'만 넣었기 때문)
-    # 방금 측정한 results['main'] / results['sub']에서 lv를 다시 읽는다.
-    lv_m = np.nan
-    lv_s = np.nan
-    if 'main' in results and results['main'] is not None:
-        _, _, lv_tmp, _, _ = results['main']
-        lv_m = float(lv_tmp)
-    if 'sub' in results and results['sub'] is not None:
-        _, _, lv_tmp2, _, _ = results['sub']
-        lv_s = float(lv_tmp2)
-
-    if profile.legend_text.startswith('VAC OFF'):
-        # OFF 세션 → 2~4열 업데이트 (row=row_idx)
-        #  2열: Lv(main)
-        #  3열: u'(main)
-        #  4열: v'(main)
-        txt_lv = f"{lv_m:.6f}" if np.isfinite(lv_m) else ""
-        txt_u  = f"{u_m:.6f}"  if np.isfinite(u_m)  else ""
-        txt_v  = f"{v_m:.6f}"  if np.isfinite(v_m)  else ""
-
-        _safe_set_item(tbl_cs_raw, row_idx, 1, txt_lv)
-        _safe_set_item(tbl_cs_raw, row_idx, 2, txt_u)
-        _safe_set_item(tbl_cs_raw, row_idx, 3, txt_v)
-
-    else:
-        # ON 세션 (VAC ON 또는 CORR 이후 세션 포함)
-        # 5~7열: Lv(main), u'(main), v'(main)
-        txt_lv_on = f"{lv_m:.6f}" if np.isfinite(lv_m) else ""
-        txt_u_on  = f"{u_m:.6f}"  if np.isfinite(u_m)  else ""
-        txt_v_on  = f"{v_m:.6f}"  if np.isfinite(v_m)  else ""
-
-        _safe_set_item(tbl_cs_raw, row_idx, 4, txt_lv_on)
-        _safe_set_item(tbl_cs_raw, row_idx, 5, txt_u_on)
-        _safe_set_item(tbl_cs_raw, row_idx, 6, txt_v_on)
-
-        # 8열: du'v' = 거리(main vs sub)
-        duv = ""
-        if np.isfinite(u_m) and np.isfinite(v_m) and np.isfinite(u_s) and np.isfinite(v_s):
-            dist = np.sqrt((u_s - u_m)**2 + (v_s - v_m)**2)
-            duv = f"{dist:.6f}"
-
-        _safe_set_item(tbl_cs_raw, row_idx, 7, duv)
+    except Exception:
+        logging.exception("[CORR DEBUG] knot update logging failed")
