@@ -1,118 +1,35 @@
-def _consume_colorshift_pair(self, patch_name, results):
+def _scroll_show_column_window(self, table, lead_col, window=3):
     """
-    results: {
-        'main': (x, y, lv, cct, duv)  또는  None,   # main = 0°
-        'sub' : (x, y, lv, cct, duv)  또는  None    # sub  = 60°
-    }
+    table    : QTableWidget
+    lead_col : 우리가 "마지막으로 갱신한 열 index"
+               예: OFF일 땐 2, ON일 땐 8
+    window   : 한 화면에 보여주고 싶은 열 개수 (지금 요구는 3열씩)
+
+    동작:
+      - start_col = max(lead_col - (window-1), 0)
+        예: lead_col=2, window=3 → start_col=0
+            lead_col=8, window=3 → start_col=6
+      - 해당 start_col의 왼쪽 edge pixel을 구해서
+        horizontalScrollBar().setValue()로 그 위치로 스크롤
     """
-    s = self._sess
-    store = s['store']
-    profile: SessionProfile = s['profile']
+    if table is None:
+        return
 
-    # 현재 세션 상태 문자열 ('VAC OFF...' 이면 OFF, 아니면 ON)
-    state = 'OFF' if profile.legend_text.startswith('VAC OFF') else 'ON'
+    header = table.horizontalHeader()
+    scrollbar = table.horizontalScrollBar()
 
-    # 이 측정 패턴의 row index (op.colorshift_patterns 순서 그대로)
-    row_idx = s['cs_idx']
+    # 우리가 보이게 하고 싶은 첫 열
+    start_col = lead_col - (window - 1)
+    if start_col < 0:
+        start_col = 0
 
-    # 이 테이블: vac_table_opt_mes_results_colorshift
-    tbl_cs_raw = self.ui.vac_table_opt_mes_results_colorshift
+    # start_col의 왼쪽 픽셀 offset을 구한다.
+    # header.sectionPosition(c)는 그 열의 왼쪽 x좌표(스크롤 0 기준) px를 줌.
+    try:
+        target_x = header.sectionPosition(start_col)
+    except Exception:
+        # 만약 header가 아직 레이아웃 안 된 타이밍이면 그냥 리턴(나중에 다시 불릴 수도 있음)
+        return
 
-    # ------------------------------------------------
-    # 1) main / sub 결과 변환해서 store에 넣고 차트 갱신
-    #    store['colorshift'][role][row_idx] = (Lv, u', v')
-    # ------------------------------------------------
-    for role in ('main', 'sub'):
-        res = results.get(role, None)
-        if res is None:
-            # 측정 실패 시 해당 row에 placeholder 저장
-            store['colorshift'][role].append((np.nan, np.nan, np.nan))
-            continue
-
-        x, y, lv, cct, duv_unused = res
-
-        # xy -> u' v'
-        u_p, v_p = cf.convert_xyz_to_uvprime(float(x), float(y))
-
-        # store에 (Lv, u', v') 저장
-        store['colorshift'][role].append((
-            float(lv),
-            float(u_p),
-            float(v_p),
-        ))
-
-        # 차트 갱신 (vac_optimization_cie1976_chart 는 u' v' scatter)
-        self.vac_optimization_cie1976_chart.add_point(
-            state=state,
-            role=role,      # 'main' or 'sub'
-            u_p=float(u_p),
-            v_p=float(v_p)
-        )
-
-    # ------------------------------------------------
-    # 2) 표 업데이트
-    #    OFF 세션:
-    #        2열,3열,4열 ← main의 Lv / u' / v'
-    #    ON/CORR 세션:
-    #        5열,6열,7열 ← main의 Lv / u' / v'
-    #        8열        ← du'v' (sub vs main 거리)
-    # ------------------------------------------------
-
-    # 이제 방금 append한 값들을 row_idx에서 꺼냄
-    main_ok = row_idx < len(store['colorshift']['main'])
-    sub_ok  = row_idx < len(store['colorshift']['sub'])
-
-    if main_ok:
-        lv_main, up_main, vp_main = store['colorshift']['main'][row_idx]
-    else:
-        lv_main, up_main, vp_main = (np.nan, np.nan, np.nan)
-
-    if sub_ok:
-        lv_sub, up_sub, vp_sub = store['colorshift']['sub'][row_idx]
-    else:
-        lv_sub, up_sub, vp_sub = (np.nan, np.nan, np.nan)
-
-    # 테이블에 안전하게 set 하는 helper
-    def _safe_set_item(table, r, c, text):
-        self._set_item(table, r, c, text if text is not None else "")
-
-    if profile.legend_text.startswith('VAC OFF'):
-        # ---------- VAC OFF ----------
-        # row_idx 행의
-        #   col=1 → Lv(main)
-        #   col=2 → u'(main)
-        #   col=3 → v'(main)
-
-        txt_lv_off = f"{lv_main:.6f}" if np.isfinite(lv_main) else ""
-        txt_u_off  = f"{up_main:.6f}"  if np.isfinite(up_main)  else ""
-        txt_v_off  = f"{vp_main:.6f}"  if np.isfinite(vp_main)  else ""
-
-        _safe_set_item(tbl_cs_raw, row_idx, 1, txt_lv_off)
-        _safe_set_item(tbl_cs_raw, row_idx, 2, txt_u_off)
-        _safe_set_item(tbl_cs_raw, row_idx, 3, txt_v_off)
-
-    else:
-        # ---------- VAC ON (또는 CORR 이후) ----------
-        # row_idx 행의
-        #   col=4 → Lv(main)
-        #   col=5 → u'(main)
-        #   col=6 → v'(main)
-        #   col=7 → du'v' = sqrt((u'_sub - u'_main)^2 + (v'_sub - v'_main)^2)
-
-        txt_lv_on = f"{lv_main:.6f}" if np.isfinite(lv_main) else ""
-        txt_u_on  = f"{up_main:.6f}"  if np.isfinite(up_main)  else ""
-        txt_v_on  = f"{vp_main:.6f}"  if np.isfinite(vp_main)  else ""
-
-        _safe_set_item(tbl_cs_raw, row_idx, 4, txt_lv_on)
-        _safe_set_item(tbl_cs_raw, row_idx, 5, txt_u_on)
-        _safe_set_item(tbl_cs_raw, row_idx, 6, txt_v_on)
-
-        # du'v' 계산
-        # 엑셀식: =SQRT( (60deg_u' - 0deg_u')^2 + (60deg_v' - 0deg_v')^2 )
-        # 여기서 main=0°, sub=60°
-        duv_txt = ""
-        if np.isfinite(up_main) and np.isfinite(vp_main) and np.isfinite(up_sub) and np.isfinite(vp_sub):
-            dist = np.sqrt((up_sub - up_main)**2 + (vp_sub - vp_main)**2)
-            duv_txt = f"{dist:.6f}"
-
-        _safe_set_item(tbl_cs_raw, row_idx, 7, duv_txt)
+    # 스크롤바를 그 위치로 맞춰준다
+    scrollbar.setValue(target_x)
