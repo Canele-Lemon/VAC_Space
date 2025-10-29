@@ -32,3 +32,31 @@ self.vac_optimization_chromaticity_chart.set_series(
     label='ON Cy'
 )
 self.vac_optimization_chromaticity_chart.lines["ON_Cy"].set_color('red')
+
+# y축 autoscale with margin 1.1
+all_y = np.concatenate([
+    np.asarray(cx_off, dtype=np.float64),
+    np.asarray(cx_on,  dtype=np.float64),
+    np.asarray(cy_off, dtype=np.float64),
+    np.asarray(cy_on,  dtype=np.float64),
+])
+all_y = all_y[np.isfinite(all_y)]
+if all_y.size > 0:
+    ymin = np.min(all_y)
+    ymax = np.max(all_y)
+    center = 0.5*(ymin+ymax)
+    half = 0.5*(ymax-ymin)
+    # half==0일 수도 있으니 최소폭을 조금 만들어주자
+    if half <= 0:
+        half = max(0.001, abs(center)*0.05)
+    half *= 1.1  # 10% margin
+    new_min = center - half
+    new_max = center + half
+
+    ax_chr = self.vac_optimization_chromaticity_chart.ax
+    cs.MatFormat_Axis(ax_chr, min_val=np.float64(new_min),
+                                max_val=np.float64(new_max),
+                                tick_interval=None,
+                                axis='y')
+    ax_chr.relim(); ax_chr.autoscale_view(scalex=False, scaley=False)
+    self.vac_optimization_chromaticity_chart.canvas.draw()
