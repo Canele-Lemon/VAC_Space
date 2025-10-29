@@ -348,7 +348,7 @@ class Widget_vacspace(QWidget):
 
         def _after_off(store_off):
             self._off_store = store_off
-            logging.debug(f"VAC OFF 측정 결과:\n{self._off_store}")
+            # logging.debug(f"VAC OFF 측정 결과:\n{self._off_store}")
             self._step_done(1)
             logging.info("[MES] VAC OFF 상태 측정 완료")
             
@@ -385,6 +385,10 @@ class Widget_vacspace(QWidget):
         if vac_data is None:
             logging.error(f"{panel}+{fr} 조합으로 매칭되는 VAC Data가 없습니다 - 최적화 루프 종료")
             return
+        vac_data_dict = json.loads(vac_data)
+        lut_dict_plot = {key.replace("channel", "_"): v for key, v in vac_data_dict.items() if "channel" in key
+        }
+        self._update_lut_chart_and_table(lut_dict_plot)
         self._step_done(2)
         
         # # [ADD] 런타임 X(256×18) 생성 & 스키마 디버그 로깅
@@ -427,10 +431,10 @@ class Widget_vacspace(QWidget):
             self._step_done(3)
             # 캐시 보관 (TV 원 키명 유지)
             self._vac_dict_cache = vac_dict
-            lut_dict_plot = {key.replace("channel", "_"): v
-                            for key, v in vac_dict.items() if "channel" in key
-            }
-            self._update_lut_chart_and_table(lut_dict_plot)
+            # lut_dict_plot = {key.replace("channel", "_"): v
+            #                 for key, v in vac_dict.items() if "channel" in key
+            # }
+            # self._update_lut_chart_and_table(lut_dict_plot)
 
             # ── ON 세션 시작 전: ON 시리즈 전부 리셋 ──
             self.vac_optimization_gamma_chart.reset_on()
@@ -448,11 +452,11 @@ class Widget_vacspace(QWidget):
             def _after_on(store_on):
                 self._step_done(4)
                 self._on_store = store_on
-                logging.debug(f"VAC ON 측정 결과:\n{self._on_store}")
+                # logging.debug(f"VAC ON 측정 결과:\n{self._on_store}")
                 
                 self._step_start(5)
                 self._spec_thread = SpecEvalThread(self._off_store, self._on_store, thr_gamma=0.05, thr_c=0.003, parent=self)
-                self._spec_thread.finished.connect(lambda ok, metrics: self._on_spec_eval_done(ok, metrics, iter_idx=1, max_iters=2))
+                self._spec_thread.finished.connect(lambda ok, metrics: self._on_spec_eval_done(ok, metrics, iter_idx=1, max_iters=6))
                 self._spec_thread.start()
 
             # ── ON 측정 세션 시작 ──
@@ -570,14 +574,22 @@ class Widget_vacspace(QWidget):
         #    Gamma: 1..254 유효, Cx/Cy: 0..255
         d_targets = self._build_delta_targets_from_stores(self._off_store, self._on_store)
         # d_targets = {"Gamma":(256,), "Cx":(256,), "Cy":(256,)}, 값 = (ON - OFF)
-
+        thr_c = 0.003
+        thr_gamma = 0.03
+        
+        for g in range(256):
+            if (abs(d_targets["Cx"][g]) <= thr_c and abs(d_targets["Cy"][g]) <= thr_c and abs(d_targets["Gamma"][g]) <= thr_gamma):
+                d_targets["Cx"][g] = 0.0
+                d_targets["Cy"][g] = 0.0
+                d_targets["Gamma"][g] = 0.0
+                
         # 4) 결합 선형계
         #    ΔY ≈ [A_Gamma; A_Cx; A_Cy] · Δh
         #    여기서 A_* shape = (256, 6K). Δh shape = (6K,)
         #    wG, wC는 가중치 (Gamma 신뢰도 낮을수록 wG 줄이기)
+        wCx = 0.05
+        wCy = 0.5
         wG = 1.0
-        wCx = 1.0
-        wCy = 1.0
         A_cat = np.vstack([
             wG * self.A_Gamma,
             wCx * self.A_Cx,
@@ -1227,7 +1239,17 @@ class Widget_vacspace(QWidget):
                 
     def _ensure_row_count(self, table, row_idx):
         if table.rowCount() <= row_idx:
+            old_rows = table.rowCount()
             table.setRowCount(row_idx + 1)
+
+            # 새로 열린 구간에 대해서 header label 채우기
+            vh = table.verticalHeader()
+            for r in range(old_rows, row_idx + 1):
+                vh_item = vh.model().headerData(r, Qt.Vertical)
+                # headerData가 비어있을 때만 세팅 (중복세팅 방지)
+                if vh_item is None or str(vh_item) == "":
+                    vh.setSectionResizeMode(r, QHeaderView.Fixed)  # optional: 높이 고정 유지
+                    table.setVerticalHeaderItem(r, QTableWidgetItem(str(r)))
 
     def _set_item(self, table, row, col, value):
         self._ensure_row_count(table, row)
@@ -1237,7 +1259,7 @@ class Widget_vacspace(QWidget):
             table.setItem(row, col, item)
         item.setText("" if value is None else str(value))
 
-        table.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+        table.scrollToItem(item, QAbstractItemView.PositionAtTop)
         
     def _set_item_with_spec(self, table, row, col, value, *, is_spec_ok: bool):
         self._ensure_row_count(table, row)
@@ -1404,7 +1426,7 @@ class Widget_vacspace(QWidget):
                 logging.warning("[SPEC(thread)] evaluation failed — treating as not passed.")
 
             # 결과 표/차트 갱신
-            self._update_spec_views(self._off_store, self._on_store)
+            self._update_spec_views(iter_idx, self._off_store, self._on_store)
 
             if spec_ok:
                 # ✅ 통과: Step5 = complete
@@ -1426,7 +1448,7 @@ class Widget_vacspace(QWidget):
         finally:
             self._spec_thread = None
             
-    def _update_spec_views(self, off_store, on_store, thr_gamma=0.05, thr_c=0.003):
+    def _update_spec_views(self, iter_idx, off_store, on_store, thr_gamma=0.05, thr_c=0.003):
         """
         요구하신 6개 위젯을 모두 갱신:
         1) vac_table_chromaticityDiff  (ΔCx/ΔCy/ΔGamma pass/total)
@@ -1480,21 +1502,71 @@ class Widget_vacspace(QWidget):
         _set_text(tbl_ch, 1, 1, f"{ok_cx}/{tot_cx}")   # 2행,2열 ΔCx
         _set_text(tbl_ch, 2, 1, f"{ok_cy}/{tot_cy}")   # 3행,2열 ΔCy
         _set_text(tbl_ch, 3, 1, f"{ok_g}/{tot_g}")     # 4행,2열 ΔGamma
+        
+        logging.debug(f"{iter_idx}차 보정 결과: Cx:{ok_cx}/{tot_cx}, Cy:{ok_cy}/{tot_cy}, Gamma:{ok_g}/{tot_g}")
 
         # ===== 2) ChromaticityDiff 차트: Cx/Cy vs gray (OFF/ON) =====
         x = np.arange(256)
+        # 1) 먼저 데이터 넣기 (색/스타일 우리가 직접 세팅)
         self.vac_optimization_chromaticity_chart.set_series(
-            "OFF_Cx", x, cx_off, marker=None, linestyle='-', label='OFF Cx'
+            "OFF_Cx", x, cx_off,
+            marker=None,
+            linestyle='--',
+            label='OFF Cx'
         )
+        self.vac_optimization_chromaticity_chart.lines["OFF_Cx"].set_color('orange')
+
         self.vac_optimization_chromaticity_chart.set_series(
-            "ON_Cx",  x, cx_on,  marker=None, linestyle='--', label='ON Cx'
+            "ON_Cx", x, cx_on,
+            marker=None,
+            linestyle='-',
+            label='ON Cx'
         )
+        self.vac_optimization_chromaticity_chart.lines["ON_Cx"].set_color('orange')
+
         self.vac_optimization_chromaticity_chart.set_series(
-            "OFF_Cy", x, cy_off, marker=None, linestyle='-', label='OFF Cy'
+            "OFF_Cy", x, cy_off,
+            marker=None,
+            linestyle='--',
+            label='OFF Cy'
         )
+        self.vac_optimization_chromaticity_chart.lines["OFF_Cy"].set_color('green')
+
         self.vac_optimization_chromaticity_chart.set_series(
-            "ON_Cy",  x, cy_on,  marker=None, linestyle='--', label='ON Cy'
+            "ON_Cy", x, cy_on,
+            marker=None,
+            linestyle='-',
+            label='ON Cy'
         )
+        self.vac_optimization_chromaticity_chart.lines["ON_Cy"].set_color('green')
+        
+        # y축 autoscale with margin 1.1
+        all_y = np.concatenate([
+            np.asarray(cx_off, dtype=np.float64),
+            np.asarray(cx_on,  dtype=np.float64),
+            np.asarray(cy_off, dtype=np.float64),
+            np.asarray(cy_on,  dtype=np.float64),
+        ])
+        all_y = all_y[np.isfinite(all_y)]
+        if all_y.size > 0:
+            ymin = np.min(all_y)
+            ymax = np.max(all_y)
+            center = 0.5*(ymin+ymax)
+            half = 0.5*(ymax-ymin)
+            # half==0일 수도 있으니 최소폭을 조금 만들어주자
+            if half <= 0:
+                half = max(0.001, abs(center)*0.05)
+            half *= 1.1  # 10% margin
+            new_min = center - half
+            new_max = center + half
+
+            ax_chr = self.vac_optimization_chromaticity_chart.ax
+            cs.MatFormat_Axis(ax_chr, min_val=np.float64(new_min),
+                                        max_val=np.float64(new_max),
+                                        tick_interval=None,
+                                        axis='y')
+            ax_chr.relim(); ax_chr.autoscale_view(scalex=False, scaley=False)
+            self.vac_optimization_chromaticity_chart.canvas.draw()
 
         # ===== 3) GammaLinearity 표: 88~232, 8gray 블록 평균 슬로프 =====
         def _normalized_luminance(lv_vec):
@@ -1558,22 +1630,56 @@ class Widget_vacspace(QWidget):
         _set_text(tbl_gl, 1, 2, f"{avg_on:.6f}")   # 2행,3열 ON  평균 기울기
 
         # ===== 4) GammaLinearity 차트: 블록 중심 x (= g+4), dot+line =====
+        # 라인 세팅
         self.vac_optimization_gammalinearity_chart.set_series(
             "OFF_slope8",
-            mids_off,          # 예: [92,100,108,...,228]
+            mids_off,
             slopes_off,
             marker='o',
             linestyle='-',
             label='OFF slope(8)'
         )
+        off_ln = self.vac_optimization_gammalinearity_chart.lines["OFF_slope8"]
+        off_ln.set_color('black')
+        off_ln.set_markersize(3)   # 기존보다 작게 (기본이 6~8 정도일 가능성)
+
         self.vac_optimization_gammalinearity_chart.set_series(
             "ON_slope8",
             mids_on,
             slopes_on,
             marker='o',
-            linestyle='--',
+            linestyle='-',
             label='ON slope(8)'
         )
+        on_ln = self.vac_optimization_gammalinearity_chart.lines["ON_slope8"]
+        on_ln.set_color('red')
+        on_ln.set_markersize(3)
+
+        # y축 autoscale with margin 1.1
+        all_slopes = np.concatenate([
+            np.asarray(slopes_off, dtype=np.float64),
+            np.asarray(slopes_on,  dtype=np.float64),
+        ])
+        all_slopes = all_slopes[np.isfinite(all_slopes)]
+        if all_slopes.size > 0:
+            ymin = np.min(all_slopes)
+            ymax = np.max(all_slopes)
+            center = 0.5*(ymin+ymax)
+            half = 0.5*(ymax-ymin)
+            if half <= 0:
+                half = max(0.001, abs(center)*0.05)
+            half *= 1.1  # 10% margin
+            new_min = center - half
+            new_max = center + half
+
+            ax_slope = self.vac_optimization_gammalinearity_chart.ax
+            cs.MatFormat_Axis(ax_slope,
+                            min_val=np.float64(new_min),
+                            max_val=np.float64(new_max),
+                            tick_interval=None,
+                            axis='y')
+            ax_slope.relim(); ax_slope.autoscale_view(scalex=False, scaley=False)
+            self.vac_optimization_gammalinearity_chart.canvas.draw()
 
         # ===== 5) ColorShift(4종) 표 & 6) 묶음 막대 =====
         # store['colorshift'][role]에는 op.colorshift_patterns 순서대로 (x,y,u′,v′)가 append되어 있음
@@ -1586,15 +1692,22 @@ class Widget_vacspace(QWidget):
             arr = []
             for nm in want_names:
                 idx = name_to_idx.get(nm, None)
-                if idx is None: arr.append(np.nan); continue
+                if idx is None: 
+                    arr.append(np.nan)
+                    continue
                 if idx >= len(state_store['colorshift']['main']) or idx >= len(state_store['colorshift']['sub']):
-                    arr.append(np.nan); continue
-                _, _, u0, v0 = state_store['colorshift']['main'][idx]  # 정면
-                _, _, u6, v6 = state_store['colorshift']['sub'][idx]   # 측면
-                if not all(np.isfinite([u0,v0,u6,v6])):
-                    arr.append(np.nan); continue
+                    arr.append(np.nan)
+                    continue
+                lv0, u0, v0 = state_store['colorshift']['main'][idx]  # 정면
+                lv6, u6, v6 = state_store['colorshift']['sub'][idx]   # 측면
+                
+                if not all(np.isfinite([u0, v0, u6, v6])):
+                    arr.append(np.nan)
+                    continue
+                
                 d = float(np.sqrt((u6-u0)**2 + (v6-v0)**2))
                 arr.append(d)
+            
             return np.array(arr, dtype=np.float64)  # [DarkSkin, LightSkin, Asian, Western]
 
         duv_off = _delta_uv_for_state(off_store)
@@ -2357,30 +2470,3 @@ class Widget_vacspace(QWidget):
         # 1.3 OFF 측정 세션 시작
         logging.info("[MES] VAC OFF 상태 측정 시작")
         self._run_off_baseline_then_on()
-
-class SessionProfile:
-    def __init__(self, legend_text, cie_label, table_cols, ref_store=None):
-        """
-        table_cols: OFF -> {"lv":0,"cx":1,"cy":2,"gamma":3}
-                    ON  -> {"lv":4,"cx":5,"cy":6,"gamma":7,"d_cx":8,"d_cy":9,"d_gamma":10}
-        ref_store : OFF 세션 저장 버퍼(ON/보정Δ 계산용). OFF에서는 None.
-        """
-        self.legend_text = legend_text
-        self.cie_label = cie_label
-        self.table_cols = table_cols
-        self.ref_store = ref_store
-
-위는 현재까지 작성된 최적화 루프 코드입니다. 다음을 수정하고 싶은 사항입니다:
-
-1. VAC OFF 감마 찍힐 때 첫번째~세번째 행이 보이면서 이동하도록. 지금은 세번째 행만 보이면서 이동함
-2. 측정 gamma 차트 라인 색깔 검은색으로. 지금은 회색임
-3. vac_table_opt_mes_results_main, vac_table_opt_mes_results_sub 테이블 vertical 행 제목 0부터 시작되도록 
-4. LUT 그래프 업데이트되는 타이밍 Reading 후 말고 DB에서 VAC 데이터 받아온 후 or 보정 후로 바꾸기.
-5. 평가 Cx/Cy 그래프 y축 레인지 최대/최소값에 맞춰 조절되도록 할것. (마진 1.1) 현재는 0~1인데 차이 안보임.. 
-그리고 OFF *라인을 점선으로 ON *라인을 실선으로. * Cx / * Cy 끼리는 색깔 동일하게 할 것. 현재는 OFF Cx 파랑실선, ON Cx는 주황점선, OFF Cy는 초록실선, ON Cy는 빨간점선인데 이걸 -> OFF Cx 주황점선, ON Cx는 주황실선, OFF Cy는 초록점선, ON Cy는 빨간실선
-6. 평가 slope 그래프 y축 레인지 최대/최소값에 맞춰 조절되도록 할것. (마진 1.1). 그리고 dot 크기 너무 큼. 좀 더 줄여주세요. OFF slope 라인은 검은 실선, ON slope 라인은 빨간 실선으로 할 것
-7. 평가 color shift bar차트 색상 변경 필요. 현재는 VAC OFF는 파랑, VAC ON은 주황인데 VAC OFF는 회색, VAC ON은 빨간색으로 바꿔주세요.
-8. 측정 color shift cie1976 차트 ON plot 데이터 보정후 재측정때마다 초기화되는거 맞나요?
-9. 평가 slope 표에 업데이트되는 평균 기울기 계산이 틀린거 같습니다. 88~232 gray 범위 8step 마다 계산한 기울기 값들의 평균을 계산해야 합니다.
-(88-96,96-104,104-112,112-120,120-128,128-136,136-144,144-152,152-160,160-168,168-176,176-184,184-192,192-200,200-208,208-216,216-224,224-232 사이 기울기값들의 평균)
-
