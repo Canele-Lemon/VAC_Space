@@ -1,14 +1,34 @@
-def _ensure_row_count(self, table, row_idx):
-    # 기존 동작
-    if table.rowCount() <= row_idx:
-        old_rows = table.rowCount()
-        table.setRowCount(row_idx + 1)
+x = np.arange(256)
 
-        # 새로 열린 구간에 대해서 header label 채우기
-        vh = table.verticalHeader()
-        for r in range(old_rows, row_idx + 1):
-            vh_item = vh.model().headerData(r, Qt.Vertical)
-            # headerData가 비어있을 때만 세팅 (중복세팅 방지)
-            if vh_item is None or str(vh_item) == "":
-                vh.setSectionResizeMode(r, QHeaderView.Fixed)  # optional: 높이 고정 유지
-                table.setVerticalHeaderItem(r, QTableWidgetItem(str(r)))
+# 1) 먼저 데이터 넣기 (색/스타일 우리가 직접 세팅)
+self.vac_optimization_chromaticity_chart.set_series(
+    "OFF_Cx", x, cx_off,
+    marker=None,
+    linestyle='--',
+    label='OFF Cx'
+)
+self.vac_optimization_chromaticity_chart.lines["OFF_Cx"].set_color('orange')
+
+self.vac_optimization_chromaticity_chart.set_series(
+    "ON_Cx", x, cx_on,
+    marker=None,
+    linestyle='-',
+    label='ON Cx'
+)
+self.vac_optimization_chromaticity_chart.lines["ON_Cx"].set_color('orange')
+
+self.vac_optimization_chromaticity_chart.set_series(
+    "OFF_Cy", x, cy_off,
+    marker=None,
+    linestyle='--',
+    label='OFF Cy'
+)
+self.vac_optimization_chromaticity_chart.lines["OFF_Cy"].set_color('green')
+
+self.vac_optimization_chromaticity_chart.set_series(
+    "ON_Cy", x, cy_on,
+    marker=None,
+    linestyle='-',
+    label='ON Cy'
+)
+self.vac_optimization_chromaticity_chart.lines["ON_Cy"].set_color('red')
