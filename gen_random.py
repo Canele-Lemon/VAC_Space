@@ -1,297 +1,298 @@
+
+import csv
 import os
-import pandas as pd
 import numpy as np
-from scipy.interpolate import PchipInterpolator  # monotone-ish 1D spline
+import matplotlib.pyplot as plt
+from numpy.polynomial.chebyshev import chebval
 
-# ===== 사용자 설정 =====
-ref_dir = r"D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\Gen VAC\Random VAC\3. Perturbation\Ref"
-output_dir = r"D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\Gen VAC\Random VAC\3. Perturbation\CSV\임시"
-os.makedirs(output_dir, exist_ok=True)
+# ---- 설정 ----
+XMAX = 4095.0
+NUM_LUTS = 350
+GRAY_LEVELS = np.arange(0, XMAX + 1)
+CONTROL_X = np.array([0, 512, 1024, 1536, 2048, 2560, 3072, 3584, 4095], dtype=float)
+SAVE_DIR = r"D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\Gen VAC\Random VAC\2. Monotonic\CSV"
 
-NUM_SAMPLE = 100
 
-# 저/중/고 계조에서 얼마나 크게 움직일지 (상대 변화량 최대치)
-LOW_RATE  = 0.10
-MID_RATE  = 0.05
-HIGH_RATE = 0.02
 
-# gray 구간 나눔 (12bit gray 기준)
-def _zone_rate(gray12):
-    if gray12 <= 1023:
-        return LOW_RATE
-    elif gray12 <= 3071:
-        return MID_RATE
+# -----------------------------
+# 1) 기존: 제약을 만족하는 offsets 생성
+# -----------------------------
+def generate_offsets_with_constraints(control_x):
+    # control_x: [0,512,1024,1536,2048,2560,3072,3584,4095]
+    idx_peak = 4
+    n = len(control_x)
+    offsets = np.zeros(n, dtype=float)
+
+    bounds = np.minimum(control_x, 4095 - control_x)
+
+    offsets[0] = 0.0
+    offsets[8] = 0.0
+
+    # 512 in [256,512] (또는 bound 좁으면 bound로)
+    lo_512, hi_512 = 256.0, min(512.0, bounds[1]) # bounds[1]은 LUT가 0~4095 범위를 벗어나지 않도록 제한
+    offsets[1] = np.random.uniform(min(lo_512, hi_512), hi_512)
+
+    # 2048의 피크값
+    peak_upper = min(1800.0, bounds[idx_peak])
+    peak_lower = max(offsets[1], 600.0)
+    if peak_lower > peak_upper:
+        peak_lower = min(peak_upper, offsets[1])
+    peak = np.random.uniform(peak_lower, peak_upper)
+
+    # 512→2048 단조 증가 분배
+    inc_total = max(0.0, peak - offsets[1])
+    w_inc = np.random.random(3); w_inc = w_inc / (w_inc.sum() or 1.0)
+    inc_steps = inc_total * np.cumsum(w_inc)
+    offsets[2] = offsets[1] + inc_steps[0]
+    offsets[3] = offsets[1] + inc_steps[1]
+    offsets[4] = offsets[1] + inc_steps[2]
+
+    for i in [2,3,4]:
+        offsets[i] = min(offsets[i], bounds[i])
+        offsets[i] = max(offsets[i], offsets[i-1])  # 비감소
+
+    # 2048→4095 단조 감소 분배 (마지막은 0)
+    dec_total = offsets[4]
+    w_dec = np.random.random(4); w_dec = w_dec / (w_dec.sum() or 1.0)
+    dec_cum = dec_total * np.cumsum(w_dec)
+    offsets[5] = max(offsets[4] - dec_cum[0], 0.0)
+    offsets[6] = max(offsets[4] - dec_cum[1], 0.0)
+    offsets[7] = max(offsets[4] - dec_cum[2], 0.0)
+    offsets[8] = 0.0
+
+    for i in [5,6,7]:
+        offsets[i] = min(offsets[i], bounds[i])
+        offsets[i] = min(offsets[i], offsets[i-1])  # 비증가
+
+    offsets = np.clip(offsets, 0, bounds)
+
+    # 구조 검증
+    if not (256.0 - 1e-6 <= offsets[1] <= 512.0 + 1e-6):
+        return None
+    if not (offsets[1] <= offsets[2] <= offsets[3] <= offsets[4] + 1e-6):
+        return None
+    if not (offsets[4] >= offsets[5] >= offsets[6] >= offsets[7] >= offsets[8] - 1e-6):
+        return None
+
+    print("Generated offsets at control points:")
+    for i, (x, off) in enumerate(zip(control_x, offsets)):
+        print(f"  Point {i}: Gray Level = {x:.0f}, Offset = {off:.2f}")
+
+    return offsets
+
+# ----------------------------------------
+# 2) Zigzag 방지 보정: Δoffset 클리핑 (선형 보간용)
+# ----------------------------------------
+def enforce_no_zigzag(offsets, control_x, eps=1.0):
+    """
+    선형보간에서 기울기 음수 방지:
+      - Low:  Δoffset <= Δx
+      - High: Δoffset >= -Δx
+    ⇒  -Δx+eps ≤ Δoffset ≤ Δx-eps 로 클립
+    그리고 512→2048 비감소, 2048→4095 비증가를 다시 보정.
+    """
+    off = offsets.copy()
+    dx = np.diff(control_x)  # 전 구간 512, 마지막만 494
+    delta = np.diff(off)
+
+    # 구간별 허용 범위
+    low_bound  = -dx + eps
+    high_bound =  dx - eps
+    delta_clipped = np.clip(delta, low_bound, high_bound)
+
+    # 누적 재구성
+    new_off = np.zeros_like(off)
+    new_off[0] = off[0]
+    for i in range(1, len(off)):
+        new_off[i] = new_off[i-1] + delta_clipped[i-1]
+
+    # 구조(봉우리) 재보정: 512→2048 비감소, 2048→4095 비증가
+    # 상승 구간
+    for i in [2,3,4]:
+        new_off[i] = max(new_off[i], new_off[i-1])
+    # 하강 구간
+    for i in [6,7,8]:
+        new_off[i] = min(new_off[i], new_off[i-1])
+    # 2560 지점은 피크(2048) 이하로
+    new_off[5] = min(new_off[5], new_off[4])
+
+    # 경계/특수점 재설정
+    bounds = np.minimum(control_x, 4095 - control_x)
+    new_off = np.clip(new_off, 0, bounds)
+    new_off[0] = 0.0
+    new_off[-1] = 0.0
+    new_off[1] = np.clip(new_off[1], 256.0, min(512.0, bounds[1]))
+
+    return new_off
+
+# ----------------------------------------
+# 3) LUT 생성(선형 보간만) + 플롯
+# ----------------------------------------
+def generate_linear_LUTs_no_zigzag(gray_levels=4096):
+    control_x = np.array([0, 512, 1024, 1536, 2048, 2560, 3072, 3584, 4095], dtype=float)
+
+    # 유효 offsets 생성
+    for _ in range(1000):
+        offsets = generate_offsets_with_constraints(control_x)
+        if offsets is not None:
+            break
     else:
-        return HIGH_RATE
+        raise RuntimeError("Failed to sample offsets.")
 
-# per-step 최대 증가량 제한 (banding 방지)
-MAX_STEP = 4  # 한 gray 증가할 때 LUT 값이 이 값보다 많이 점프하지 않도록 clamp
+    # Zigzag 방지 보정
+    offsets = enforce_no_zigzag(offsets, control_x, eps=1.0)
 
-# coarse anchor(저주파용). 끝점(0,4095)는 반드시 포함해야 monotone/경계조건 보존 쉬움
-COARSE_GRAY = np.array([
-    0,
-    512,
-    1024,
-    1536,
-    2048,
-    2560,
-    3072,
-    3584,
-    4095
-], dtype=np.int32)
+    # Low / High 제어점
+    cy_low  = control_x - offsets
+    cy_high = control_x + offsets
 
-# --------------------------------------------------------------------------------
-# helper 1: 단조 enforce (y[i] >= y[i-1])
-def enforce_monotone(arr):
-    out = np.asarray(arr, dtype=np.int32).copy()
-    for i in range(1, len(out)):
-        if out[i] < out[i-1]:
-            out[i] = out[i-1]
-    return out
+    # 선형 보간 LUT
+    x_full = np.arange(gray_levels)
+    lut_low  = np.interp(x_full, control_x, cy_low)
+    lut_high = np.interp(x_full, control_x, cy_high)
 
-# helper 2: per-step slope 제한
-def enforce_max_step(arr, max_step=4):
-    out = np.asarray(arr, dtype=np.int32).copy()
-    for i in range(1, len(out)):
-        allowed = out[i-1] + max_step
-        if out[i] > allowed:
-            out[i] = allowed
-    return out
+    # 정수 클립
+    lut_low  = np.clip(lut_low,  0, 4095).astype(int)
+    lut_high = np.clip(lut_high, 0, 4095).astype(int)
 
-# helper 3: Low < High 보정
-def enforce_low_lt_high(low_arr, high_arr):
-    low_arr  = np.asarray(low_arr,  dtype=np.int32).copy()
-    high_arr = np.asarray(high_arr, dtype=np.int32).copy()
-    # 조건이 깨지면 High를 살짝 올리거나, 최소 +1이라도 띄워줌
-    for i in range(len(low_arr)):
-        if high_arr[i] <= low_arr[i]:
-            high_arr[i] = low_arr[i] + 1
-    return low_arr, high_arr
+    return control_x.astype(int), cy_low.astype(int), cy_high.astype(int), lut_low, lut_high, offsets
 
-# helper 4: coarse anchor 값을 만들 때, RGB를 어느 정도 같이 움직이게 하는 생성기
-def build_coarse_variant(base_vals_at_coarse, lut_type_group="low_or_high"):
+
+# -----------------------------
+# 다항식 피팅 함수
+# -----------------------------
+def fit_endpoint_constrained_poly(cx, cy, deg=4):
     """
-    base_vals_at_coarse: shape (len(COARSE_GRAY), 3) = [R,G,B] at those coarse gray idx
-                         (12bit 범위 값: 0~4095)
-    lut_type_group: "low" or "high" or "low_or_high" (그룹 구분용, rate는 zone에 따라 다시 계산)
-
-    return:
-        variant_vals_coarse: same shape, perturbed but still int-ish (float 중간 계산 후 round)
+    엔드포인트 고정: y(0)=0, y(XMAX)=XMAX 를 보장하는 형태
+    y(x) = x + w(x) * sum_{k=0..deg} a_k T_k(t),  w(x)=x*(XMAX-x),  t = 2x/XMAX - 1
+    -> a_k를 최소자승으로 추정
     """
+    cx = np.asarray(cx, dtype=float)
+    cy = np.asarray(cy, dtype=float)
 
-    # RGB 동조 방향(같이 들리냐/같이 내려앉냐)
-    # ex) -1이면 전체적으로 살짝 낮추는 쪽, +1이면 살짝 올리는 쪽
-    group_dir = np.random.choice([-1, 1])
+    # 타깃을 y - x 로 옮겨놓고, 가중 w(x)로 나눌 수 없으니 디자인행렬에 w(x)를 곱해준다.
+    # 목표:  (y - x) ≈ w(x) * sum a_k T_k(t)
+    t = 2.0*cx/XMAX - 1.0               # [-1,1]로 정규화된 x
+    w = cx*(XMAX - cx)                  # 엔드포인트 제약을 보장하는 가중
+    rhs = cy - cx                       # 타깃 벡터
 
-    # 각 채널별로 약간의 개별성 부여 (0.8~1.2 배 같은 느낌)
-    channel_jitter = {
-        "R": np.random.uniform(0.8, 1.2),
-        "G": np.random.uniform(0.8, 1.2),
-        "B": np.random.uniform(0.8, 1.2),
-    }
+    # 디자인 행렬: Phi[i,k] = w(x_i) * T_k(t_i)
+    Phi = np.zeros((len(cx), deg+1), dtype=float)
+    # 수치안정: chebval은 T_0..T_deg 값을 한 번에 계산하기 어려우니 반복
+    for k in range(deg+1):
+        # T_k(t) 값
+        Tk = np.cos(k*np.arccos(np.clip(t, -1, 1)))  # 체비셰프 정의 이용
+        Phi[:, k] = w * Tk
 
-    # coarse 지점마다 perturbation
-    out = np.zeros_like(base_vals_at_coarse, dtype=np.float32)  # (Ncoarse,3)
-    for i, gray12 in enumerate(COARSE_GRAY):
-        # 구간별 scale (저계조는 크게, 고계조는 작게)
-        rate_here = _zone_rate(gray12)
+    # 최소자승 해 a = argmin ||Phi a - rhs||_2
+    a, *_ = np.linalg.lstsq(Phi, rhs, rcond=None)
 
-        # 각 채널에 대해 적용
-        for c_idx, ch in enumerate(["R","G","B"]):
-            base_v = float(base_vals_at_coarse[i, c_idx])
-            # perturb 비율
-            # factor = 1 + direction * jitter * random(0~rate)
-            factor = 1.0 + group_dir * channel_jitter[ch] * np.random.uniform(0.0, rate_here)
-            new_v = base_v * factor
+    def y_poly(x):
+        x = np.asarray(x, dtype=float)
+        tt = 2.0*x/XMAX - 1.0
+        ww = x*(XMAX - x)
+        # sum a_k T_k(tt)
+        # chebval로 한 번에: chebval(tt, a) = sum a_k T_k(tt)
+        q = chebval(tt, a)
+        return x + ww * q
 
-            # 범위 클램프
-            new_v = np.clip(new_v, 0.0, 4095.0)
+    return a, y_poly
 
-            out[i, c_idx] = new_v
+# -----------------------------
+# CSV 저장 함수
+# -----------------------------
+def save_lut_to_csv(filename, gray_levels, lut_low, lut_high):
+    with open(filename, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        # 첫 번째 행: 제목
+        writer.writerow(['Gray Level', 'R_Low', 'R_High', 'G_Low', 'G_High', 'B_Low', 'B_High'])
+        # 데이터 행: R/G/B 동일하게 저장
+        for g, low, high in zip(gray_levels, lut_low, lut_high):
+            writer.writerow([g, low, high, low, high, low, high])    
 
-    # 첫/끝점 고정 강제: gray=0 -> 0, gray=4095 -> 4095 근처 유지
-    #   low/high LUT들 모두 HW에서 보통 0 -> 0, 4095 -> 4095 근처라는 가정이 있다면
-    #   여기서도 맞춰줍니다.
-    out[0, :]     = [0.0, 0.0, 0.0]
-    out[-1, :]    = [4095.0, 4095.0, 4095.0]
+# -----------------------------
+# LUT 생성 및 저장
+# -----------------------------
+def generate_and_save_LUTs(start_idx=201, num_luts=100):
+    for i in range(start_idx, start_idx + num_luts):
+        # offsets 생성
+        for _ in range(1000):
+            offsets = generate_offsets_with_constraints(CONTROL_X)
+            if offsets is not None:
+                break
+        else:
+            raise RuntimeError(f"Failed to sample offsets for LUT {i}")
+        
+        offsets = enforce_no_zigzag(offsets, CONTROL_X)
 
-    return np.round(out).astype(np.int32)
+        # 선형 LUT 생성
+        cy_low  = CONTROL_X - offsets
+        cy_high = CONTROL_X + offsets
+        lut_low_linear  = np.interp(GRAY_LEVELS, CONTROL_X, cy_low)
+        lut_high_linear = np.interp(GRAY_LEVELS, CONTROL_X, cy_high)
+        lut_low_linear  = np.clip(np.round(lut_low_linear),  0, 4095).astype(int)
+        lut_high_linear = np.clip(np.round(lut_high_linear), 0, 4095).astype(int)
 
-# helper 5: coarse → dense(256 anchor gray들) 보간
-def spline_expand_to_256(coarse_gray, coarse_rgb_vals):
-    """
-    coarse_gray: (Nc,)
-    coarse_rgb_vals: (Nc,3)  int32-ish [R,G,B] at those coarse_gray
-
-    return:
-      dense_gray_256: (256,) 12bit gray indices subsampled every ~16
-      dense_vals_256: (256,3) at those 256 grays, using PCHIP
-    """
-    # we'll reuse the 16-step sampled grid similar to original:
-    dense_gray_256 = np.round(np.linspace(0, 4095, 256)).astype(np.int32)
-
-    dense_vals_256 = np.zeros((256,3), dtype=np.float32)
-    for c_idx in range(3):
-        # monotone-ish spline per channel
-        spl = PchipInterpolator(coarse_gray, coarse_rgb_vals[:, c_idx])
-        dense_vals_256[:, c_idx] = spl(dense_gray_256)
-
-    # 클램프
-    dense_vals_256 = np.clip(np.round(dense_vals_256), 0, 4095).astype(np.int32)
-    # 첫/끝 보정
-    dense_vals_256[0,:]   = [0,0,0]
-    dense_vals_256[-1,:]  = [4095,4095,4095]
-
-    return dense_gray_256, dense_vals_256
-
-# helper 6: dense 256 anchor → full 4096 LUT (선형 보간)
-def expand_256_to_4096(dense_gray_256, dense_vals_256):
-    """
-    dense_gray_256: (256,) 12bit gray indices
-    dense_vals_256: (256,3) R,G,B
-    return:
-      full_gray_4096: (4096,)
-      full_vals_4096: (4096,3)
-    """
-    full_gray = np.arange(0, 4096, dtype=np.int32)
-    full_vals = np.zeros((4096,3), dtype=np.float32)
-
-    for c_idx in range(3):
-        # piecewise-linear
-        full_vals[:, c_idx] = np.interp(
-            full_gray,
-            dense_gray_256.astype(np.float32),
-            dense_vals_256[:, c_idx].astype(np.float32)
-        )
-
-    full_vals = np.clip(np.round(full_vals), 0, 4095).astype(np.int32)
-    # 강제 경계
-    full_vals[0,:]    = [0,0,0]
-    full_vals[-1,:]   = [4095,4095,4095]
-
-    return full_gray, full_vals
-
-# helper 7: 후처리 전체 파이프라인 (monotone, step limit, low<high)
-def postprocess_full_lut(low_rgb_4096, high_rgb_4096):
-    """
-    low_rgb_4096 : (4096,3)  R,G,B
-    high_rgb_4096: (4096,3)  R,G,B
-
-    return (low_pp, high_pp) processed
-    """
-    low_pp  = np.zeros_like(low_rgb_4096,  dtype=np.int32)
-    high_pp = np.zeros_like(high_rgb_4096, dtype=np.int32)
-
-    for c_idx in range(3):
-        # 1) monotone
-        lo = enforce_monotone(low_rgb_4096[:, c_idx])
-        hi = enforce_monotone(high_rgb_4096[:, c_idx])
-
-        # 2) step 제한
-        lo = enforce_max_step(lo, MAX_STEP)
-        hi = enforce_max_step(hi, MAX_STEP)
-
-        # 임시 저장
-        low_pp[:,  c_idx] = lo
-        high_pp[:, c_idx] = hi
-
-    # 3) Low < High 조건 (채널별)
-    for c_idx in range(3):
-        lo, hi = enforce_low_lt_high(low_pp[:, c_idx], high_pp[:, c_idx])
-        low_pp[:,  c_idx] = lo
-        high_pp[:, c_idx] = hi
-
-    # 4) 경계값 다시 강제
-    low_pp[0,:]   = [0,0,0]
-    high_pp[0,:]  = np.maximum(low_pp[0,:] + 1, [1,1,1])
-    low_pp[-1,:]  = [4095,4095,4095]
-    high_pp[-1,:] = np.maximum(low_pp[-1,:] + 1, [4095,4095,4095])
-
-    high_pp = np.clip(high_pp, 0, 4095)
-    return low_pp, high_pp
+        # 다항식 LUT 생성
+        _, y_poly_low = fit_endpoint_constrained_poly(CONTROL_X, cy_low)
+        _, y_poly_high = fit_endpoint_constrained_poly(CONTROL_X, cy_high)
+        lut_low_poly  = np.clip(np.round(y_poly_low(GRAY_LEVELS)),  0, 4095).astype(int)
+        lut_high_poly = np.clip(np.round(y_poly_high(GRAY_LEVELS)), 0, 4095).astype(int)
+        
+        # 파일 저장
+        filename_linear = os.path.join(SAVE_DIR, f"LUT_Monotonic_Linear_{i}.csv")
+        filename_poly   = os.path.join(SAVE_DIR, f"LUT_Monotonic_Polyfit_{i}.csv")
+        
+        save_lut_to_csv(filename_linear, GRAY_LEVELS, lut_low_linear, lut_high_linear)
+        save_lut_to_csv(filename_poly, GRAY_LEVELS, lut_low_poly, lut_high_poly)
 
 
-# ================= 메인 루프 =================
-for file_name in os.listdir(ref_dir):
-    if not file_name.endswith(".csv"):
-        continue
 
-    file_path = os.path.join(ref_dir, file_name)
+# -----------------------------
+# 실행
+# -----------------------------
+generate_and_save_LUTs()
 
-    # 구분자 자동 감지 (탭 or 콤마)
-    with open(file_path, "r", encoding="utf-8") as ftmp:
-        first_line = ftmp.readline()
-    sep_guess = "\t" if "\t" in first_line else ","
 
-    df = pd.read_csv(file_path, sep=sep_guess)
 
-    # 기대 컬럼:
-    # Gray Level, R_Low, R_High, G_Low, G_High, B_Low, B_High
-    gray_levels = df['Gray Level'].values.astype(np.int32)
 
-    # 원본 LUT 전체 4096개 값
-    R_low_base  = df['R_Low' ].values.astype(np.int32)
-    R_high_base = df['R_High'].values.astype(np.int32)
-    G_low_base  = df['G_Low' ].values.astype(np.int32)
-    G_high_base = df['G_High'].values.astype(np.int32)
-    B_low_base  = df['B_Low' ].values.astype(np.int32)
-    B_high_base = df['B_High'].values.astype(np.int32)
 
-    # coarse 지점에서의 원본 값 뽑기
-    # (COARSE_GRAY는 gray_levels와 동일 스케일(0~4095)라 가정)
-    # 우리가 읽은 ref CSV가 정확히 gray=0..4095 순서라고 가정
-    coarse_idx = COARSE_GRAY  # 이미 정수 인덱스
-    base_low_coarse  = np.stack([
-        R_low_base [coarse_idx],
-        G_low_base [coarse_idx],
-        B_low_base [coarse_idx]
-    ], axis=1)  # shape (Nc,3) but actually (Nc,RGB) -> we'll transpose later if needed
-    # 위는 (Nc,3) = [R,G,B] 맞추고 싶으니 transpose 살짝 조정
-    # 현재 stack은 (3,Nc) -> axis=1 해서 (Nc,3) 됨. OK.
+# # ===== 사용 예시: 기존 9포인트에서 다항식 피팅 =====
+# cx, cy_low, cy_high, lut_low, lut_high, offsets = generate_linear_LUTs_no_zigzag()
+# # cx, cy_low, cy_high 는 이전 셀(혹은 사용자 코드)에서 나온 9포인트를 사용
+# # 예: cx, cy_low, cy_high = np.array([...]), np.array([...]), np.array([...])
 
-    base_high_coarse = np.stack([
-        R_high_base[coarse_idx],
-        G_high_base[coarse_idx],
-        B_high_base[coarse_idx]
-    ], axis=1)
+# deg = 4  # 필요시 3~6 사이로 바꿔 보세요
+# a_low,  y_low_poly  = fit_endpoint_constrained_poly(cx, cy_low,  deg=deg)
+# a_high, y_high_poly = fit_endpoint_constrained_poly(cx, cy_high, deg=deg)
 
-    # 샘플 생성
-    for sample_num in range(1, NUM_SAMPLE+1):
+# # 곡선 샘플링 & 플롯
+# x_full = np.arange(0, int(XMAX)+1)
+# y_low_fit  = np.clip(y_low_poly(x_full),  0, XMAX)
+# y_high_fit = np.clip(y_high_poly(x_full), 0, XMAX)
 
-        # ── 1) coarse 레벨에서 RGB 동조 perturbation 주기 (low, high 따로)
-        pert_low_coarse  = build_coarse_variant(base_low_coarse,  lut_type_group="low")
-        pert_high_coarse = build_coarse_variant(base_high_coarse, lut_type_group="high")
+# plt.figure(figsize=(10,6))
+# plt.plot(x_full, x_full, '--', color='gray', label='y = x')
+# # plt.plot(x_full, y_low_fit,  label=f'Low fit (deg={deg})')
+# # plt.plot(x_full, y_high_fit, label=f'High fit (deg={deg})')
 
-        # ── 2) coarse → 256 anchor (monotone-ish spline)
-        dense_gray_256_low,  dense_vals_256_low  = spline_expand_to_256(COARSE_GRAY, pert_low_coarse)
-        dense_gray_256_high, dense_vals_256_high = spline_expand_to_256(COARSE_GRAY, pert_high_coarse)
+# plt.plot(x_full, lut_low,  label='Linear Low LUT', linestyle='--')
+# plt.plot(x_full, lut_high, label='Linear High LUT', linestyle='--')
+# plt.plot(x_full, y_low_fit,  label='Polyfit Low LUT', linewidth=2)
+# plt.plot(x_full, y_high_fit, label='Polyfit High LUT', linewidth=2)
 
-        # ── 3) 256 anchor → full 4096 선형 보간
-        full_gray_low,  full_vals_low  = expand_256_to_4096(dense_gray_256_low,  dense_vals_256_low)
-        full_gray_high, full_vals_high = expand_256_to_4096(dense_gray_256_high, dense_vals_256_high)
 
-        # full_vals_* shape: (4096,3) = [R,G,B]
+# # 원래 9포인트 표시
+# plt.scatter(cx, cy_low,  label='Low 9pts',  zorder=3)
+# plt.scatter(cx, cy_high, label='High 9pts', zorder=3)
 
-        # ── 4) 후처리: monotone, step limit, Low<High, 경계강제
-        low_pp, high_pp = postprocess_full_lut(full_vals_low, full_vals_high)
-        # low_pp[:,0]=R_low, low_pp[:,1]=G_low, low_pp[:,2]=B_low
-        # high_pp[:,0]=R_high, ...
+# plt.title('Endpoint-constrained Chebyshev polynomial fitting')
+# plt.xlabel('Input Gray Level'); plt.ylabel('Output Gray Level')
+# plt.grid(True); plt.legend(); plt.tight_layout()
+# plt.show()
 
-        # 최종 DataFrame 생성 (4096행)
-        out_df = pd.DataFrame({
-            "Gray Level": full_gray_low,  # 0..4095
-            "R_Low":      low_pp[:,0],
-            "R_High":     high_pp[:,0],
-            "G_Low":      low_pp[:,1],
-            "G_High":     high_pp[:,1],
-            "B_Low":      low_pp[:,2],
-            "B_High":     high_pp[:,2],
-        })
+# # === 계수 확인 (사실상 함수식) ===
+# print("Low-fit Chebyshev coeffs a_k:", a_low)
+# print("High-fit Chebyshev coeffs a_k:", a_high)
+# print("Model: y(x) = x + x*(4095-x) * sum_k a_k * T_k( 2x/4095 - 1 )")
 
-        # ── 5) 저장
-        ref_base_name = os.path.splitext(file_name)[0]
-        out_file_name = f"LUT_Perturbation_smooth_{ref_base_name}_{sample_num:03d}.csv"
-        out_path = os.path.join(output_dir, out_file_name)
-        out_df.to_csv(out_path, index=False)
-
-print("[✅] 모든 LUT perturbation (저주파+공분산+스무딩) 생성 완료")
