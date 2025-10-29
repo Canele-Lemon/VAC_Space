@@ -1,3 +1,52 @@
+class Widget_vacspace(QWidget):
+    def __init__(self, parent=None):
+        super(Widget_vacspace, self).__init__(parent)
+        self.ui = Ui_vacspaceForm()
+        self.ui.setupUi(self)
+
+        self.ui.vac_btn_startOptimization.clicked.connect(self.start_VAC_optimization)
+        self._vac_dict_cache = None
+        
+        self.vac_optimization_gamma_chart = GammaChart(self.ui.vac_chart_gamma_3)
+        self.vac_optimization_cie1976_chart = CIE1976Chart(self.ui.vac_chart_colorShift_2)
+        self.vac_optimization_lut_chart = LUTChart(target_widget=self.ui.vac_graph_rgbLUT_4)
+
+        self.vac_optimization_chromaticity_chart = XYChart(
+            target_widget=self.ui.vac_chart_chromaticityDiff,
+            x_label='Gray Level', y_label='Cx/Cy',
+            x_range=(0, 256), y_range=(0, 1),
+            x_tick=64, y_tick=0.25,
+            title=None, title_color='#595959',
+            legend=True   # ← 변경
+        )
+        self.vac_optimization_gammalinearity_chart = XYChart(
+            target_widget=self.ui.vac_chart_gammaLinearity,
+            x_label='Gray Level',
+            y_label='Slope',
+            x_range=(0, 256),
+            y_range=(0, 1),
+            x_tick=64,
+            y_tick=0.25,
+            title=None,
+            title_color='#595959',
+            legend=False
+        )
+        self.vac_optimization_colorshift_chart = BarChart(
+            target_widget=self.ui.vac_chart_colorShift_3,
+            title='Skin Color Shift',
+            x_labels=['DarkSkin','LightSkin','Asian','Western'],
+            y_label='Δu′v′',
+            y_range=(0, 0.08), y_tick=0.02,
+            series_labels=('VAC OFF','VAC ON'),
+            spec_line=0.04
+        )
+
+        self.expanded = True
+        self.expand_VAC_Optimization_Result()
+        self.ui.vac_btn_JSONdownload.setEnabled(False)
+        
+        ###########################################################################################    
+    
     def _load_jacobian_artifacts(self):
         """
         jacobian_().pkl 파일을 불러와서 artifacts 딕셔너리로 반환
@@ -424,6 +473,69 @@
         logging.info("[LUT LOADING] DB fetch LUT TV Writing 시작")
         self._write_vac_to_tv(vac_data, on_finished=_after_write)
         
+    def _debug_log_knot_update(self, iter_idx, knots, delta_h, lut256_before, lut256_after):
+        """
+        iter_idx        : 현재 iteration 번호 (1, 2, ...)
+        knots           : self._jac_artifacts["knots"]  # 길이 K, 예: [0,8,16,...,255]
+        delta_h         : (6K,) 이번 iteration에서 solve한 Δh
+        lut256_before   : dict of 6채널 256길이 LUT (보정 전, float32)
+        lut256_after    : dict of 6채널 256길이 LUT (보정 후, float32)
+
+        이걸 로그에 예쁘게 찍어 분석용으로 쓸 수 있게 해 준다.
+        """
+        try:
+            K = len(knots)
+            # 채널 분해
+            dh_RL = delta_h[0*K : 1*K]
+            dh_GL = delta_h[1*K : 2*K]
+            dh_BL = delta_h[2*K : 3*K]
+            dh_RH = delta_h[3*K : 4*K]
+            dh_GH = delta_h[4*K : 5*K]
+            dh_BH = delta_h[5*K : 6*K]
+
+            def _summ(ch_name, dh_vec):
+                # dh_vec 길이 K
+                # 상위 몇 개만 큰 변화 순으로 보여주면 어디가 움직였는지 직관적으로 파악 가능
+                mag = np.abs(dh_vec)
+                top_idx = np.argsort(mag)[::-1][:5]  # 변화량 큰 상위 5개 knot
+                msg_lines = [f"    {ch_name} top5 |knot(gray)->Δh|:"]
+                for i in top_idx:
+                    msg_lines.append(
+                        f"      knot#{i:02d} (gray≈{knots[i]:3d}) : Δh={dh_vec[i]:+.4f}"
+                    )
+                return "\n".join(msg_lines)
+
+            logging.info("======== [CORR DEBUG] Iter %d Knot Δh ========\n%s\n%s\n%s\n%s\n%s\n%s",
+                iter_idx,
+                _summ("R_Low ", dh_RL),
+                _summ("G_Low ", dh_GL),
+                _summ("B_Low ", dh_BL),
+                _summ("R_High", dh_RH),
+                _summ("G_High", dh_GH),
+                _summ("B_High", dh_BH),
+            )
+
+            # LUT 전/후 차이도 간단 비교 (예: High 채널만 대표로)
+            def _lut_diff_stats(name):
+                before = np.asarray(lut256_before[name], dtype=np.float32)
+                after  = np.asarray(lut256_after[name],  dtype=np.float32)
+                diff   = after - before
+                return (float(np.min(diff)),
+                        float(np.max(diff)),
+                        float(np.mean(diff)),
+                        float(np.std(diff)))
+
+            for ch in ["R_Low","G_Low","B_Low","R_High","G_High","B_High"]:
+                dmin, dmax, dmean, dstd = _lut_diff_stats(ch)
+                logging.debug(
+                    "[CORR DEBUG] Iter %d %s LUT256 delta stats: "
+                    "min=%+.4f max=%+.4f mean=%+.4f std=%.4f",
+                    iter_idx, ch, dmin, dmax, dmean, dstd
+                )
+
+        except Exception:
+            logging.exception("[CORR DEBUG] knot update logging failed")
+        
     def _run_correction_iteration(self, iter_idx, max_iters=2, lambda_ridge=1e-3):
         logging.info(f"[CORR] iteration {iter_idx} start")
         self._step_start(2)
@@ -454,6 +566,7 @@
             "B_High": self._down4096_to_256(vac_lut_4096["B_High"]),
         }
         # lut256[...] 은 여전히 0~4095 스케일 (12bit 값) 상태입니다.
+        lut256_before = {k: v.copy() for k, v in lut256.items()}
 
         # 3) Δ 목표(white/main 기준): OFF vs ON 차이
         #    Gamma: 1..254 유효, Cx/Cy: 0..255
@@ -464,17 +577,19 @@
         #    ΔY ≈ [A_Gamma; A_Cx; A_Cy] · Δh
         #    여기서 A_* shape = (256, 6K). Δh shape = (6K,)
         #    wG, wC는 가중치 (Gamma 신뢰도 낮을수록 wG 줄이기)
-        wG, wC = 2.0, 1.0
+        wG = 1.0
+        wCx = 1.0
+        wCy = 1.0
         A_cat = np.vstack([
             wG * self.A_Gamma,
-            wC * self.A_Cx,
-            wC * self.A_Cy
+            wCx * self.A_Cx,
+            wCy * self.A_Cy
         ]).astype(np.float32)  # (256*3, 6K)
 
         b_cat = -np.concatenate([
             wG * d_targets["Gamma"],
-            wC * d_targets["Cx"],
-            wC * d_targets["Cy"]
+            wCx * d_targets["Cx"],
+            wCy * d_targets["Cy"]
         ]).astype(np.float32)  # (256*3,)
 
         # 유효치 마스크(특히 gamma의 NaN에서 온 0 처리 등)
@@ -488,7 +603,17 @@
         rhs = A_use.T @ b_use            # (6K,)
         ATA[np.diag_indices_from(ATA)] += float(lambda_ridge)
         delta_h = np.linalg.solve(ATA, rhs).astype(np.float32)  # (6K,)
+        
+        # --------- NEW: knot 변화 디버그 로그 (solve 직후) -------------
+        K = len(self._jac_artifacts["knots"])
+        knots = np.asarray(self._jac_artifacts["knots"], dtype=np.int32)
 
+        # corr_* 계산 전이지만, delta_h만으로 어떤 knot(=제어점)가 얼마나 움직이려 하는지 볼 수 있음
+        # 다만 사용자 눈에는 실제 LUT 변화(Low/High 등)도 궁금하니,
+        # 일단 여기서는 delta_h만 먼저 저장해 두고,
+        # lut256_after를 만든 뒤에 한 번에 찍을게요.
+        # --------------------------------------------------------------
+        
         # 6) knot delta → per-gray 보정곡선(256포인트)로 전개
         #    delta_h 해석:
         #    [R_Low_knots(0:K),
@@ -496,8 +621,7 @@
         #     B_Low_knots(2K:3K),
         #     R_High_knots(3K:4K),
         #     G_High_knots(4K:5K),
-        #     B_High_knots(5K:6K)]
-        K = len(self._jac_artifacts["knots"])
+        #     B_High_knots(5K:6K)]        
         Phi = self._stack_basis(self._jac_artifacts["knots"])  # (256,K)
 
         idx0 = 0
@@ -529,6 +653,19 @@
         for ch in lut256_new:
             self._enforce_monotone(lut256_new[ch])
             lut256_new[ch] = np.clip(lut256_new[ch], 0, 4095)
+            
+        # --------- NEW: 여기서 디버그 로그 호출 -------------
+        try:
+            self._debug_log_knot_update(
+                iter_idx=iter_idx,
+                knots=knots,
+                delta_h=delta_h,
+                lut256_before=lut256_before,
+                lut256_after=lut256_new,
+            )
+        except Exception:
+            logging.exception("[CORR DEBUG] _debug_log_knot_update failed")
+        # ----------------------------------------------------
 
         # (선택) Low ≤ High 제약 등 추가하려면 여기에서 lut256_new["R_Low"][g] <= lut256_new["R_High"][g] 식으로 보정 가능
 
@@ -876,28 +1013,32 @@
     def _consume_colorshift_pair(self, patch_name, results):
         """
         results: {
-            'main': (x, y, lv, cct, duv)  또는  None,
-            'sub' : (x, y, lv, cct, duv)  또는  None
+            'main': (x, y, lv, cct, duv)  또는  None,   # main = 0°
+            'sub' : (x, y, lv, cct, duv)  또는  None    # sub  = 60°
         }
         """
         s = self._sess
         store = s['store']
         profile: SessionProfile = s['profile']
 
-        # 현재 세션 상태 문자열
+        # 현재 세션 상태 문자열 ('VAC OFF...' 이면 OFF, 아니면 ON)
         state = 'OFF' if profile.legend_text.startswith('VAC OFF') else 'ON'
 
-        # 현재 패턴의 row index = cs_idx (op.colorshift_patterns 순서 그대로)
+        # 이 측정 패턴의 row index (op.colorshift_patterns 순서 그대로)
         row_idx = s['cs_idx']
 
-        # 미리 테이블 핸들 가져오기
+        # 이 테이블: vac_table_opt_mes_results_colorshift
         tbl_cs_raw = self.ui.vac_table_opt_mes_results_colorshift
 
-        # main/sub 측정 결과 기록하고 차트 갱신 (기존 코드 유지)
+        # ------------------------------------------------
+        # 1) main / sub 결과 변환해서 store에 넣고 차트 갱신
+        #    store['colorshift'][role][row_idx] = (Lv, u', v')
+        # ------------------------------------------------
         for role in ('main', 'sub'):
             res = results.get(role, None)
             if res is None:
-                store['colorshift'][role].append((np.nan, np.nan, np.nan, np.nan))
+                # 측정 실패 시 해당 row에 placeholder 저장
+                store['colorshift'][role].append((np.nan, np.nan, np.nan))
                 continue
 
             x, y, lv, cct, duv_unused = res
@@ -905,94 +1046,89 @@
             # xy -> u' v'
             u_p, v_p = cf.convert_xyz_to_uvprime(float(x), float(y))
 
-            # store에 누적 (x,y,u',v')
-            store['colorshift'][role].append((float(x), float(y), float(u_p), float(v_p)))
+            # store에 (Lv, u', v') 저장
+            store['colorshift'][role].append((
+                float(lv),
+                float(u_p),
+                float(v_p),
+            ))
 
-            # 차트 갱신 (기존)
+            # 차트 갱신 (vac_optimization_cie1976_chart 는 u' v' scatter)
             self.vac_optimization_cie1976_chart.add_point(
                 state=state,
-                role=role,
+                role=role,      # 'main' or 'sub'
                 u_p=float(u_p),
                 v_p=float(v_p)
             )
 
-        # ============================
-        # [ADD] 표 업데이트 로직
-        # ============================
-        #
-        # 요구사항 정리:
-        #   - VAC OFF 세션이면:
-        #         2열,3열,4열에 main 계측값의 Lv / u' / v'를 쓴다
-        #   - VAC ON (또는 보정 이후 세션) 이면:
-        #         5열,6열,7열에 main 계측값의 Lv / u' / v'를 쓴다
-        #         그리고 8열에는 du'v' = main과 sub의 거리
-        #
-        #   du'v' = sqrt((u_sub-u_main)^2 + (v_sub-v_main)^2)
-        #
-        #   row는 현재 cs_idx 인덱스
-        #
-        #   sub 결과가 없으면 du'v'는 "" 로 둔다.
+        # ------------------------------------------------
+        # 2) 표 업데이트
+        #    OFF 세션:
+        #        2열,3열,4열 ← main의 Lv / u' / v'
+        #    ON/CORR 세션:
+        #        5열,6열,7열 ← main의 Lv / u' / v'
+        #        8열        ← du'v' (sub vs main 거리)
+        # ------------------------------------------------
 
-        # table helper (이미 클래스에 있는 것 그대로 재사용)
-        def _safe_set_item(table, r, c, text):
-            self._set_item(table, r, c, text if text is not None else "")
-
-        # main/sub 최신 측정값 꺼내기
-        # 방금 append 했으므로 store['colorshift'][role][row_idx] 가 방금 결과
+        # 이제 방금 append한 값들을 row_idx에서 꺼냄
         main_ok = row_idx < len(store['colorshift']['main'])
         sub_ok  = row_idx < len(store['colorshift']['sub'])
 
-        main_entry = store['colorshift']['main'][row_idx] if main_ok else (np.nan, np.nan, np.nan, np.nan)
-        sub_entry  = store['colorshift']['sub'][row_idx]  if sub_ok  else (np.nan, np.nan, np.nan, np.nan)
+        if main_ok:
+            lv_main, up_main, vp_main = store['colorshift']['main'][row_idx]
+        else:
+            lv_main, up_main, vp_main = (np.nan, np.nan, np.nan)
 
-        # main_entry = (x, y, u', v')
-        x_m, y_m, u_m, v_m = main_entry
-        # sub_entry = (x, y, u', v')
-        x_s, y_s, u_s, v_s = sub_entry
+        if sub_ok:
+            lv_sub, up_sub, vp_sub = store['colorshift']['sub'][row_idx]
+        else:
+            lv_sub, up_sub, vp_sub = (np.nan, np.nan, np.nan)
 
-        # Lv은 results 딕셔너리에서 직접 가져오는 게 더 정확 (store에는 x,y,u',v'만 넣었기 때문)
-        # 방금 측정한 results['main'] / results['sub']에서 lv를 다시 읽는다.
-        lv_m = np.nan
-        lv_s = np.nan
-        if 'main' in results and results['main'] is not None:
-            _, _, lv_tmp, _, _ = results['main']
-            lv_m = float(lv_tmp)
-        if 'sub' in results and results['sub'] is not None:
-            _, _, lv_tmp2, _, _ = results['sub']
-            lv_s = float(lv_tmp2)
+        # 테이블에 안전하게 set 하는 helper
+        def _safe_set_item(table, r, c, text):
+            self._set_item(table, r, c, text if text is not None else "")
 
         if profile.legend_text.startswith('VAC OFF'):
-            # OFF 세션 → 2~4열 업데이트 (row=row_idx)
-            #  2열: Lv(main)
-            #  3열: u'(main)
-            #  4열: v'(main)
-            txt_lv = f"{lv_m:.6f}" if np.isfinite(lv_m) else ""
-            txt_u  = f"{u_m:.6f}"  if np.isfinite(u_m)  else ""
-            txt_v  = f"{v_m:.6f}"  if np.isfinite(v_m)  else ""
+            # ---------- VAC OFF ----------
+            # row_idx 행의
+            #   col=1 → Lv(main)
+            #   col=2 → u'(main)
+            #   col=3 → v'(main)
 
-            _safe_set_item(tbl_cs_raw, row_idx, 1, txt_lv)
-            _safe_set_item(tbl_cs_raw, row_idx, 2, txt_u)
-            _safe_set_item(tbl_cs_raw, row_idx, 3, txt_v)
+            txt_lv_off = f"{lv_main:.6f}" if np.isfinite(lv_main) else ""
+            txt_u_off  = f"{up_main:.6f}"  if np.isfinite(up_main)  else ""
+            txt_v_off  = f"{vp_main:.6f}"  if np.isfinite(vp_main)  else ""
+
+            _safe_set_item(tbl_cs_raw, row_idx, 1, txt_lv_off)
+            _safe_set_item(tbl_cs_raw, row_idx, 2, txt_u_off)
+            _safe_set_item(tbl_cs_raw, row_idx, 3, txt_v_off)
 
         else:
-            # ON 세션 (VAC ON 또는 CORR 이후 세션 포함)
-            # 5~7열: Lv(main), u'(main), v'(main)
-            txt_lv_on = f"{lv_m:.6f}" if np.isfinite(lv_m) else ""
-            txt_u_on  = f"{u_m:.6f}"  if np.isfinite(u_m)  else ""
-            txt_v_on  = f"{v_m:.6f}"  if np.isfinite(v_m)  else ""
+            # ---------- VAC ON (또는 CORR 이후) ----------
+            # row_idx 행의
+            #   col=4 → Lv(main)
+            #   col=5 → u'(main)
+            #   col=6 → v'(main)
+            #   col=7 → du'v' = sqrt((u'_sub - u'_main)^2 + (v'_sub - v'_main)^2)
+
+            txt_lv_on = f"{lv_main:.6f}" if np.isfinite(lv_main) else ""
+            txt_u_on  = f"{up_main:.6f}"  if np.isfinite(up_main)  else ""
+            txt_v_on  = f"{vp_main:.6f}"  if np.isfinite(vp_main)  else ""
 
             _safe_set_item(tbl_cs_raw, row_idx, 4, txt_lv_on)
             _safe_set_item(tbl_cs_raw, row_idx, 5, txt_u_on)
             _safe_set_item(tbl_cs_raw, row_idx, 6, txt_v_on)
 
-            # 8열: du'v' = 거리(main vs sub)
-            duv = ""
-            if np.isfinite(u_m) and np.isfinite(v_m) and np.isfinite(u_s) and np.isfinite(v_s):
-                dist = np.sqrt((u_s - u_m)**2 + (v_s - v_m)**2)
-                duv = f"{dist:.6f}"
+            # du'v' 계산
+            # 엑셀식: =SQRT( (60deg_u' - 0deg_u')^2 + (60deg_v' - 0deg_v')^2 )
+            # 여기서 main=0°, sub=60°
+            duv_txt = ""
+            if np.isfinite(up_main) and np.isfinite(vp_main) and np.isfinite(up_sub) and np.isfinite(vp_sub):
+                dist = np.sqrt((up_sub - up_main)**2 + (vp_sub - vp_main)**2)
+                duv_txt = f"{dist:.6f}"
 
-            _safe_set_item(tbl_cs_raw, row_idx, 7, duv)
-
+            _safe_set_item(tbl_cs_raw, row_idx, 7, duv_txt)
+        
     def _finalize_session(self):
         s = self._sess
         profile: SessionProfile = s['profile']
@@ -2223,3 +2359,519 @@
         # 1.3 OFF 측정 세션 시작
         logging.info("[MES] VAC OFF 상태 측정 시작")
         self._run_off_baseline_then_on()
+
+class BarChart:
+    def __init__(self, target_widget, title='Grouped Bars',
+                 x_labels=None, y_label='Value',
+                 y_range=(0, 0.08), y_tick=0.02,
+                 series_labels=('VAC OFF','VAC ON'),
+                 spec_line=None):
+        self.x_labels = x_labels or []
+        self.y_label = y_label
+        self.y_range = y_range
+        self.y_tick = y_tick
+        self.series_labels = series_labels
+        self.spec_line = spec_line
+
+        self.fig, self.ax = plt.subplots()
+        self.canvas = FigureCanvas(self.fig)
+        target_widget.addWidget(self.canvas)
+
+        cs.MatFormat_ChartArea(self.fig, left=0.12, right=0.96, top=0.9, bottom=0.18)
+        cs.MatFormat_FigArea(self.ax)
+        cs.MatFormat_ChartTitle(self.ax, title)
+        cs.MatFormat_AxisTitle(self.ax, self.y_label, axis='y')
+        cs.MatFormat_Axis(self.ax, self.y_range[0], self.y_range[1], self.y_tick, axis='y')
+        self.ax.set_xticks(np.arange(len(self.x_labels)))
+        self.ax.set_xticklabels(self.x_labels, fontsize=9, color='#595959', rotation=0)
+        self.ax.tick_params(axis='x', length=0)
+        self.ax.legend(fontsize=8)
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._bars = None
+        self.canvas.draw()
+
+    def update_grouped(self, data_off, data_on):
+        """data_off/on: 길이=len(x_labels)"""
+        self.ax.clear()
+        # 스타일 재적용
+        cs.MatFormat_FigArea(self.ax)
+        cs.MatFormat_ChartTitle(self.ax, self.ax.get_title())
+        cs.MatFormat_AxisTitle(self.ax, self.y_label, axis='y')
+        cs.MatFormat_Axis(self.ax, self.y_range[0], self.y_range[1], self.y_tick, axis='y')
+        x = np.arange(len(self.x_labels))
+        width = 0.38
+        b1 = self.ax.bar(x - width/2, data_off, width, label=self.series_labels[0])
+        b2 = self.ax.bar(x + width/2, data_on,  width, label=self.series_labels[1])
+        if self.spec_line is not None:
+            self.ax.axhline(self.spec_line, linestyle='--', linewidth=0.8, color='red')
+        self.ax.set_xticks(x)
+        self.ax.set_xticklabels(self.x_labels, fontsize=9, color='#595959')
+        self.ax.legend(fontsize=8, loc='upper right')
+        self.canvas.draw()
+
+class GammaChart:
+    _PAT_COLORS = {'white':'gray', 'red':'red', 'green':'green', 'blue':'blue'}
+
+    def __init__(self, target_widget, title='Gamma',
+                 left=0.10, right=0.95, top=0.95, bottom=0.10,
+                 x_tick=64):
+        from modules import chart_style as cs
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+
+        self.fig, (self.ax_main, self.ax_sub) = plt.subplots(2, 1, sharex=True)
+        self.canvas = FigureCanvas(self.fig)
+        target_widget.addWidget(self.canvas)
+        self.fig.subplots_adjust(hspace=0.2)
+
+        # 공통 서식 (cs 모듈만 사용)
+        for i, ax in enumerate((self.ax_main, self.ax_sub)):
+            cs.MatFormat_FigArea(ax)
+
+            # 제목/축제목
+            cs.MatFormat_ChartTitle(ax, title=('Gamma' if i == 0 else None), color='#595959')
+            if i == 1:
+                cs.MatFormat_AxisTitle(ax, axis_title='Gray Level', axis='x', color='#595959', fontsize=9)
+            else:
+                cs.MatFormat_AxisTitle(ax, axis_title='', axis='x', show_labels=False)
+            cs.MatFormat_AxisTitle(ax, axis_title='Luminance (nit)', axis='y', color='#595959', fontsize=9)
+
+            # 축 범위/틱: x는 0~255, y는 0~1로 초기화
+            cs.MatFormat_Axis(ax, min_val=0,   max_val=255, tick_interval=x_tick,
+                              axis='x', tick_color='#bfbfbf', label_color='#595959', label_fontsize=9)
+            cs.MatFormat_Axis(ax, min_val=0.0, max_val=1.0,  tick_interval=None,
+                              axis='y', tick_color='#bfbfbf', label_color='#595959', label_fontsize=9)
+
+            cs.MatFormat_Gridline(ax, linestyle='--')
+
+        # 시리즈
+        lw = 0.8
+        self._lines, self._data = {}, {}
+        for role, ax in (('main', self.ax_main), ('sub', self.ax_sub)):
+            for pat, col in self._PAT_COLORS.items():
+                k_off = ('OFF', role, pat)
+                ln_off, = ax.plot([], [], linestyle='--', color=col, linewidth=lw, label=f'OFF {role} {pat}')
+                self._lines[k_off] = ln_off; self._data[k_off] = {'x':[], 'y':[]}
+
+                k_on = ('ON', role, pat)
+                ln_on, = ax.plot([], [], linestyle='-', color=col, linewidth=lw, label=f'ON {role} {pat}')
+                self._lines[k_on] = ln_on; self._data[k_on] = {'x':[], 'y':[]}
+
+        self._update_legends()
+        self.canvas.draw_idle()
+
+    def reset_on(self):
+        """ON 시리즈만 리셋."""
+        for key, ln in self._lines.items():
+            if key[0] == 'ON':
+                self._data[key]['x'].clear()
+                self._data[key]['y'].clear()
+                ln.set_data([], [])
+        self._autoscale()
+        self._update_legends()
+        self.canvas.draw_idle()
+
+    def add_point(self, *, state: str, role: str, pattern: str, gray: int, luminance: float):
+        key = (state, role, pattern)
+        if key not in self._lines:
+            return
+        self._data[key]['x'].append(int(gray))
+        self._data[key]['y'].append(float(luminance))
+        self._lines[key].set_data(self._data[key]['x'], self._data[key]['y'])
+        self._autoscale(lazy_role=role)
+        self._update_legends()
+        self.canvas.draw_idle()
+
+    def _autoscale(self, lazy_role=None):
+        # 데이터가 1을 넘을 때만 y 상한 확장. 축 갱신도 cs.MatFormat_Axis로 통일.
+        from modules import chart_style as cs
+        roles = [lazy_role] if lazy_role in ('main', 'sub') else ('main', 'sub')
+        for role, ax in (('main', self.ax_main), ('sub', self.ax_sub)):
+            if role not in roles:
+                continue
+            ys = []
+            for (state, r, pat), ln in self._lines.items():
+                if r == role and len(ln.get_xdata()) and len(ln.get_ydata()):
+                    ys.extend(ln.get_ydata())
+            ymax = max(ys) if ys else 1.0
+            upper = 1.0 if ymax <= 1.0 else ymax * 1.05
+            cs.MatFormat_Axis(ax, min_val=0.0, max_val=upper, tick_interval=None,
+                              axis='y', tick_color='#bfbfbf', label_color='#595959', label_fontsize=9)
+
+    def _update_legends(self):
+        for ax in (self.ax_main, self.ax_sub):
+            handles, labels = [], []
+            for (state, role, pat), ln in self._lines.items():
+                if ln.axes is ax and ln.get_xdata() and ln.get_ydata():
+                    handles.append(ln); labels.append(ln.get_label())
+            if handles:
+                ax.legend(handles, labels, fontsize=8, loc='upper left')
+            else:
+                leg = ax.get_legend()
+                if leg: leg.remove()
+
+class CIE1976Chart:
+    """
+    - state: 'OFF' (레퍼런스, 빨강) / 'ON' (최적화/보정, 초록)
+    - role:  'main' (0°) / 'sub' (60°)  → 마커: main=o, sub=s (hollow)
+    - 배경 이미지/BT.709/DCI/CIE1976 등온선은 항상 표시
+    - reset_on(): 'ON' 시리즈만 리셋
+    - add_point(state, role, u_p, v_p): 한 점 추가 (각 세션/그레이별 누적)
+    """
+    def __init__(self, target_widget, title="Color Shift",
+                 left_margin=0.10, right_margin=0.95, top_margin=0.95, bottom_margin=0.10):
+
+        self.fig, self.ax = plt.subplots()
+        self.canvas = FigureCanvas(self.fig)
+        target_widget.addWidget(self.canvas)
+
+        # ── 배경 이미지 ──
+        try:
+            image_path = cf.get_normalized_path(
+                __file__, '..','..','..', 'resources/images/pictures', 'cie1976 (2).png'
+            )
+            if os.path.exists(image_path):
+                img = plt.imread(image_path, format='png')
+                self.ax.imshow(img, extent=[0, 0.70, 0, 0.60])
+        except Exception as e:
+            print(f"[CIE1976] BG load fail: {e}")
+
+        # ── 서식(기존과 동일) ──
+        # cs.MatFormat_ChartArea(self.fig, left=left_margin, right=right_margin,top=top_margin, bottom=bottom_margin)
+        cs.MatFormat_FigArea(self.ax)
+        cs.MatFormat_ChartTitle(self.ax, title=title, color='#595959')
+        cs.MatFormat_AxisTitle(self.ax, axis_title="u`", axis='x')
+        cs.MatFormat_AxisTitle(self.ax, axis_title="v`", axis='y')
+        cs.MatFormat_Axis(self.ax, min_val=0, max_val=0.7, tick_interval=0.1, axis='x')
+        cs.MatFormat_Axis(self.ax, min_val=0, max_val=0.6, tick_interval=0.1, axis='y')
+        cs.MatFormat_Gridline(self.ax, linestyle='--')
+
+        # ── 레퍼런스 경계 ──
+        try:
+            BT709_u, BT709_v = cf.convert2DlistToPlot(op.BT709_uvprime)
+            self.ax.plot(BT709_u, BT709_v, color='black', linestyle='--', linewidth=0.8, label="BT.709")
+        except Exception as e:
+            print(f"[CIE1976] BT.709 plot fail: {e}")
+        try:
+            DCI_u, DCI_v = cf.convert2DlistToPlot(op.DCI_uvprime)
+            self.ax.plot(DCI_u, DCI_v, color='black', linestyle='-', linewidth=0.8, label="DCI")
+        except Exception as e:
+            print(f"[CIE1976] DCI plot fail: {e}")
+        try:
+            CIE1976_u = [r[1] for r in op.CIE1976_uvprime]
+            CIE1976_v = [r[2] for r in op.CIE1976_uvprime]
+            self.ax.plot(CIE1976_u, CIE1976_v, color='black', linestyle='-', linewidth=0.3)  # label=None
+        except Exception as e:
+            print(f"[CIE1976] iso plot fail: {e}")
+
+        # ── 데이터 시리즈: (state, role) ──
+        # 색: OFF=red, ON=green / 마커: main='o', sub='s' / hollow
+        ms = 3.5
+        self.lines = {
+            ('OFF', 'main'): self.ax.plot([], [], 'o',
+                                          markersize=ms,
+                                          markerfacecolor='none',
+                                          markeredgecolor='red', linewidth=0)[0],
+            ('OFF', 'sub'):  self.ax.plot([], [], 'o',
+                                          markersize=ms,
+                                          markerfacecolor='none',
+                                          markeredgecolor='green', linewidth=0)[0],
+            ('ON', 'main'):  self.ax.plot([], [], 'o',
+                                          markersize=ms,
+                                          markerfacecolor='red',
+                                          markeredgecolor='red', linewidth=0)[0],
+            ('ON', 'sub'):   self.ax.plot([], [], 'o',
+                                          markersize=ms,
+                                          markerfacecolor='green',
+                                          markeredgecolor='green', linewidth=0)[0],
+        }
+        self.data = {k: {'u': [], 'v': []} for k in self.lines.keys()}
+        self._update_legend()
+
+    # ── public API ──
+    def reset_on(self):
+        """ON(보정/적용) 시리즈만 초기화; OFF(레퍼런스)는 유지."""
+        for k in (('ON', 'main'), ('ON', 'sub')):
+            self.data[k]['u'].clear()
+            self.data[k]['v'].clear()
+            self.lines[k].set_data([], [])
+        self._update_legend()
+        self.canvas.draw_idle()
+
+    def add_point(self, *, state: str, role: str, u_p: float, v_p: float):
+        """
+        사용처 예:
+          self.vac_optimization_cie1976_chart.add_point(
+              state=('OFF' or 'ON'), role=('main' or 'sub'), u_p=..., v_p=...
+          )
+        """
+        key = (state, role)
+        if key not in self.lines:
+            return
+        self.data[key]['u'].append(float(u_p))
+        self.data[key]['v'].append(float(v_p))
+        self.lines[key].set_data(self.data[key]['u'], self.data[key]['v'])
+        self.lines[key].set_label(f"{state} {role}")
+        self._update_legend()
+        self.canvas.draw_idle()
+
+    # ── internals ──
+    def _update_legend(self):
+        handles, labels = [], []
+        for ln in self.ax.lines:
+            lb = ln.get_label()
+            if lb in ("BT.709", "DCI"):
+                handles.append(ln)
+                labels.append(lb)
+        for k in (('OFF', 'main'), ('OFF', 'sub'), ('ON', 'main'), ('ON', 'sub')):
+            ln = self.lines.get(k)
+            if ln and ln.get_xdata() and ln.get_ydata():
+                handles.append(ln)
+                labels.append(ln.get_label())
+        if handles:
+            self.ax.legend(handles, labels, fontsize=8, loc='lower right')
+        else:
+            leg = self.ax.get_legend()
+            if leg:
+                leg.remove()
+
+class LUTChart:
+    def __init__(self, target_widget, title='TV LUT (12-bit)',
+                 left=0.10, right=0.95, top=0.95, bottom=0.10,
+                 x_tick=512, y_tick=512):
+        self.fig, self.ax = plt.subplots()
+        self.canvas = FigureCanvas(self.fig)
+        target_widget.addWidget(self.canvas)
+
+        # ── CIE와 동일한 포맷 적용 ──
+        # cs.MatFormat_ChartArea(self.fig, left=left, right=right, top=top, bottom=bottom)
+        cs.MatFormat_FigArea(self.ax)
+        cs.MatFormat_ChartTitle(self.ax, title=title, color='#595959')
+        cs.MatFormat_AxisTitle(self.ax, axis_title='Gray Level (12-bit)', axis='x')
+        cs.MatFormat_AxisTitle(self.ax, axis_title='Input Level', axis='y')
+        cs.MatFormat_Axis(self.ax, min_val=0, max_val=4095, tick_interval=x_tick, axis='x')
+        cs.MatFormat_Axis(self.ax, min_val=0, max_val=4095, tick_interval=y_tick, axis='y')
+        cs.MatFormat_Gridline(self.ax, linestyle='--')
+
+        self._lines = {}
+        self.canvas.draw_idle()
+
+    def reset_and_plot(self, lut_dict: dict):
+        """
+        lut_dict = {
+          "R_Low":[4096], "R_High":[4096],
+          "G_Low":[4096], "G_High":[4096],
+          "B_Low":[4096], "B_High":[4096],
+        }
+        """
+        # 기존 라인 제거
+        for ln in list(self._lines.values()):
+            try: ln.remove()
+            except Exception: pass
+        self._lines.clear()
+
+        xs = np.arange(4096)
+        styles = {
+            'R_Low':  dict(color='red',   ls='--', label='R Low'),
+            'R_High': dict(color='red',   ls='-',  label='R High'),
+            'G_Low':  dict(color='green', ls='--', label='G Low'),
+            'G_High': dict(color='green', ls='-',  label='G High'),
+            'B_Low':  dict(color='blue',  ls='--', label='B Low'),
+            'B_High': dict(color='blue',  ls='-',  label='B High'),
+        }
+        ymax = 0.0
+        for k, st in styles.items():
+            ys = np.asarray(lut_dict.get(k, []), dtype=float).ravel()
+            if ys.size != 4096:
+                print(f"[LUTChartVAC] {k} length invalid: {ys.size}")
+                continue
+            ln, = self.ax.plot(xs, ys, **st)
+            self._lines[k] = ln
+            if ys.size:
+                m = np.nanmax(ys)
+                if np.isfinite(m): ymax = max(ymax, float(m))
+
+        # 축/범례 갱신
+        self.ax.set_xlim(0, 4095)
+        self.ax.set_ylim(0, max(4095.0, ymax*1.05 if ymax>0 else 4095.0))
+        if self._lines:
+            self.ax.legend([ln for ln in self._lines.values()],
+                           [ln.get_label() for ln in self._lines.values()],
+                           fontsize=8, loc='upper left')
+        else:
+            leg = self.ax.get_legend()
+            if leg: leg.remove()
+
+        self.canvas.draw_idle()
+
+class XYChart:
+    def __init__(self, target_widget, x_label='X', y_label='Y',
+                 x_range=(0, 100), y_range=(0, 100), x_tick=10, y_tick=10,
+                 title=None, title_color='#333333', legend=True,
+                 multi_axes=False, num_axes=2, layout='vertical', share_x=True):
+        
+        self.multi_axes = multi_axes
+        self.lines = {}
+        self.data = {}
+        
+        if self.multi_axes:
+            if layout == 'vertical':
+                self.fig, axes = plt.subplots(num_axes, 1, sharex=share_x)
+            else:
+                self.fig, axes = plt.subplots(1, num_axes, sharex=share_x)   
+
+            self.axes = list(axes) if isinstance(axes, (list, tuple, np.ndarray)) else [axes]
+            self.ax = self.axes[0]  # 기본 축
+        else:
+            self.fig, self.ax = plt.subplots()
+            self.axes = [self.ax]
+
+        self.canvas = FigureCanvas(self.fig)
+        target_widget.addWidget(self.canvas)
+
+        # 스타일 초기화
+        self._init_style(title, title_color, x_label, y_label, x_range, y_range, x_tick, y_tick)
+
+        if legend:
+            for ax in self.axes:
+                cs.MatFormat_Legend(ax, position='upper left', fontsize=8)
+
+        self.canvas.draw()
+
+    def _init_style(self, title, title_color, x_label, y_label, x_range, y_range, x_tick, y_tick):
+        cs.MatFormat_ChartArea(self.fig, left=0.20, right=0.92, top=0.90, bottom=0.15)
+        for i, ax in enumerate(self.axes):
+            cs.MatFormat_FigArea(ax)
+            if i == 0:
+                cs.MatFormat_ChartTitle(ax, title=title, color=title_color)
+
+            cs.MatFormat_AxisTitle(ax, axis_title=x_label, axis='x', show_labels=(i == len(self.axes) - 1))
+            cs.MatFormat_AxisTitle(ax, axis_title=y_label, axis='y')
+            cs.MatFormat_Axis(ax, min_val=x_range[0], max_val=x_range[1], tick_interval=x_tick, axis='x')
+            cs.MatFormat_Axis(ax, min_val=y_range[0], max_val=y_range[1], tick_interval=y_tick, axis='y')
+            cs.MatFormat_Gridline(ax)
+
+    def add_line(self, key, color='blue', linestyle='-', marker=None, label=None, axis_index=0):
+        if axis_index >= len(self.axes):
+            print(f"[XYChart] Invalid axis index: {axis_index}")
+            return
+
+        axis = self.axes[axis_index]
+        line, = axis.plot([], [], color=color, linestyle=linestyle, marker=marker, label=label or key)
+        self.lines[key] = line
+        self.data[key] = {'x': [], 'y': []}
+
+    def update(self, key, x, y):
+        if key not in self.lines:
+            print(f"[XYChart] Line '{key}' not found.")
+            return
+
+        self.data[key]['x'].append(x)
+        self.data[key]['y'].append(y)
+        self.lines[key].set_data(self.data[key]['x'], self.data[key]['y'])
+
+        axis = self.lines[key].axes
+        axis.relim()
+        axis.autoscale_view()
+        axis.legend(fontsize=9)
+        self.canvas.draw()
+
+    def set_label(self, key, label):
+        if key in self.lines:
+            self.lines[key].set_label(label)
+            self.lines[key].axes.legend(fontsize=9)
+            
+    def update_legend(self):
+        for ax in self.axes:
+            handles, labels = ax.get_legend_handles_labels()
+
+            def _has_data(h):
+                # Line2D가 아닐 수도 있으니 방어적으로
+                getx = getattr(h, "get_xdata", None)
+                gety = getattr(h, "get_ydata", None)
+                if callable(getx) and callable(gety):
+                    x = np.asarray(getx())
+                    y = np.asarray(gety())
+                    return x.size > 0 and y.size > 0
+                return False
+
+            filtered_pairs = [(h, l) for h, l in zip(handles, labels) if _has_data(h)]
+            leg = ax.get_legend()
+
+            if filtered_pairs:
+                fh, fl = zip(*filtered_pairs)
+                ax.legend(fh, fl, loc='upper right', fontsize=8)
+            else:
+                if leg is not None:
+                    leg.remove()
+                
+    def set_series(self, key, x_list, y_list, *, marker=None, linestyle='-', label=None, axis_index=0):
+        """한 번에 x/y 전체를 세팅 (배치 갱신)"""
+        # 1) 1D 배열로 강제 + 길이 체크
+        x_arr = np.asarray(x_list).reshape(-1)
+        y_arr = np.asarray(y_list).reshape(-1)
+        if x_arr.size != y_arr.size:
+            print(f"[XYChart] set_series: length mismatch (x={x_arr.size}, y={y_arr.size})")
+            return
+
+        # 2) 라인 생성(없으면)
+        if key not in self.lines:
+            axis = self.axes[axis_index]
+            line, = axis.plot([], [], linestyle=linestyle, marker=marker, label=label or key)
+            self.lines[key] = line
+            self.data[key] = {'x': [], 'y': []}
+
+        # 3) 데이터 반영 (list→array여도 OK)
+        self.data[key]['x'] = x_arr.tolist()
+        self.data[key]['y'] = y_arr.tolist()
+
+        ln = self.lines[key]
+        if marker is not None: ln.set_marker(marker)
+        ln.set_linestyle(linestyle)
+        if label is not None: ln.set_label(label)
+        ln.set_data(self.data[key]['x'], self.data[key]['y'])
+
+        ax = ln.axes
+        ax.relim(); ax.autoscale_view()
+        self.update_legend()
+        self.canvas.draw()
+
+    def clear_series(self, key=None):
+        """특정 시리즈만(또는 전체) 클리어"""
+        if key is None:
+            for k in list(self.lines.keys()):
+                self.clear_series(k)
+            return
+        if key in self.lines:
+            self.data[key]['x'].clear()
+            self.data[key]['y'].clear()
+            self.lines[key].set_data([], [])
+            self.update_legend()
+            self.canvas.draw()
+
+class SessionProfile:
+    def __init__(self, legend_text, cie_label, table_cols, ref_store=None):
+        """
+        table_cols: OFF -> {"lv":0,"cx":1,"cy":2,"gamma":3}
+                    ON  -> {"lv":4,"cx":5,"cy":6,"gamma":7,"d_cx":8,"d_cy":9,"d_gamma":10}
+        ref_store : OFF 세션 저장 버퍼(ON/보정Δ 계산용). OFF에서는 None.
+        """
+        self.legend_text = legend_text
+        self.cie_label = cie_label
+        self.table_cols = table_cols
+        self.ref_store = ref_store
+
+위는 현재까지 작성된 최적화 루프 코드입니다. 다음을 수정하고 싶은 사항입니다:
+
+1. VAC OFF 감마 찍힐 때 첫번째~세번째 행이 보이면서 이동하도록. 지금은 세번째 행만 보이면서 이동함
+2. 측정 gamma 차트 라인 색깔 검은색으로. 지금은 회색임
+3. vac_table_opt_mes_results_main, vac_table_opt_mes_results_sub 테이블 vertical 행 제목 0부터 시작되도록 
+4. LUT 그래프 업데이트되는 타이밍 Reading 후 말고 DB에서 VAC 데이터 받아온 후 or 보정 후로 바꾸기.
+5. 평가 Cx/Cy 그래프 y축 레인지 최대/최소값에 맞춰 조절되도록 할것. (마진 1.1) 현재는 0~1인데 차이 안보임.. 
+그리고 OFF *라인을 점선으로 ON *라인을 실선으로. * Cx / * Cy 끼리는 색깔 동일하게 할 것. 현재는 OFF Cx 파랑실선, ON Cx는 주황점선, OFF Cy는 초록실선, ON Cy는 빨간점선인데 이걸 -> OFF Cx 주황점선, ON Cx는 주황실선, OFF Cy는 초록점선, ON Cy는 빨간실선
+6. 평가 slope 그래프 y축 레인지 최대/최소값에 맞춰 조절되도록 할것. (마진 1.1). 그리고 dot 크기 너무 큼. 좀 더 줄여주세요. OFF slope 라인은 검은 실선, ON slope 라인은 빨간 실선으로 할 것
+7. 평가 color shift bar차트 색상 변경 필요. 현재는 VAC OFF는 파랑, VAC ON은 주황인데 VAC OFF는 회색, VAC ON은 빨간색으로 바꿔주세요.
+8. 측정 color shift cie1976 차트 ON plot 데이터 보정후 재측정때마다 초기화되는거 맞나요?
+9. 평가 slope 표에 업데이트되는 평균 기울기 계산이 틀린거 같습니다. 88~232 gray 범위 8step 마다 계산한 기울기 값들의 평균을 계산해야 합니다.
+(88-96,96-104,104-112,112-120,120-128,128-136,136-144,144-152,152-160,160-168,168-176,176-184,184-192,192-200,200-208,208-216,216-224,224-232 사이 기울기값들의 평균)
+
