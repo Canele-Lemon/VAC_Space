@@ -1,153 +1,135 @@
-# lut_build_high_from_knots_csv_keep_low_gray_plot.py
-# - Low: 기존 CSV에서 그대로 사용 (4096포인트)
-# - High: HIGH_KNOT_CSV의 (Gray8, Gray12, R_High, G_High, B_High) 34점 → 선형 보간
-# - 첫 열: GrayLevel_window (0~4095)
-# - 출력 열: GrayLevel_window, R_Low,R_High,G_Low,G_High,B_Low,B_High
-# - 그래프: 34포인트 vs 보간 결과 비교 표시
+# build_287_luts_named.py
+# LUT_1_R+10_G+10_B+10.csv 방식으로 저장
 
+import os
 import numpy as np
 import pandas as pd
-import os
-import matplotlib.pyplot as plt
 
-# =======================
+# =========================
 # 경로/설정
-# =======================
-INPUT_LOW_CSV   = r"./your_low_lut_4096.csv"
-HIGH_KNOT_CSV   = r"./high_knots_values.csv"
-OUTPUT_PATH     = r"./LUT_full_4096_high_from_knots_with_gray.csv"
+# =========================
+INPUT_LOW_CSV   = r"./your_low_lut_4096.csv"        # 기존 Low 채널 CSV
+HIGH_KNOT_CSV   = r"./high_knots_34pts.csv"         # (8bit_gray, 12bit_gray, R_High, G_High, B_High)
+OUTPUT_DIR      = r"./LUT_SWEEP_287"                # 출력 폴더
+BASE_NAME       = "LUT_1"                           # 기준 LUT 이름 (고정)
 
 FULL_POINTS = 4096
-EXPECTED_COUNT = 34
-ENFORCE_MONOTONE = True
 EPS_HIGH_OVER_LOW = 1
+ENFORCE_MONOTONE = True
 
-LOW_COLS = ["R_Low", "G_Low", "B_Low"]
-FORCE_FIRST_ZERO_IDX = 0
-FORCE_4095_IDXS = [32, 33]
+OFFSETS = list(range(-100, 101, 5))  # -100~100 step 5
+CHANNEL_COMBOS = {
+    "R":   ("R_High",),
+    "G":   ("G_High",),
+    "B":   ("B_High",),
+    "RG":  ("R_High", "G_High"),
+    "RB":  ("R_High", "B_High"),
+    "GB":  ("G_High", "B_High"),
+    "RGB": ("R_High", "G_High", "B_High"),
+}
 
-# =======================
+# =========================
 # 유틸
-# =======================
-def _enforce_monotone(arr: np.ndarray) -> np.ndarray:
-    a = np.asarray(arr, dtype=float).copy()
+# =========================
+def _enforce_monotone(a):
+    a = np.asarray(a, float).copy()
     for i in range(1, a.size):
-        if a[i] < a[i-1]:
-            a[i] = a[i-1]
+        if a[i] < a[i - 1]:
+            a[i] = a[i - 1]
     return a
 
-def _clip_round_12bit(arr: np.ndarray) -> np.ndarray:
-    a = np.clip(np.rint(arr), 0, FULL_POINTS - 1)
-    return a.astype(np.uint16)
+def _clip_round_12bit(a):
+    return np.clip(np.rint(a), 0, 4095).astype(np.uint16)
 
-def _validate_low_csv(df_low: pd.DataFrame):
-    for c in LOW_COLS:
-        if c not in df_low.columns:
-            raise ValueError(f"입력 Low CSV에 '{c}' 열이 필요합니다.")
-    if len(df_low) != FULL_POINTS:
-        raise ValueError(f"입력 Low CSV 행 수={len(df_low)} (4096이어야 합니다).")
-
-def _validate_knots(gray12: np.ndarray, gray8: np.ndarray):
-    if len(gray12) != EXPECTED_COUNT:
-        raise ValueError(f"CSV 제어점 개수={len(gray12)} (예상 {EXPECTED_COUNT})")
-    if not np.all(np.diff(gray12) >= 0):
-        raise ValueError("Gray12는 오름차순이어야 합니다.")
-
-def _apply_edge_value_rules(r_vals, g_vals, b_vals):
-    def fix(v):
-        v = np.asarray(v, dtype=float).copy()
-        if 0 <= FORCE_FIRST_ZERO_IDX < v.size:
-            v[FORCE_FIRST_ZERO_IDX] = 0.0
-        for idx in FORCE_4095_IDXS:
-            if 0 <= idx < v.size:
-                v[idx] = 4095.0
-        return np.clip(v, 0, FULL_POINTS-1)
-    return fix(r_vals), fix(g_vals), fix(b_vals)
-
-def _interp_to_4096(gray12_knots: np.ndarray, values: np.ndarray) -> np.ndarray:
+def _interp_to_4096(x_small, y_small):
     x_big = np.arange(FULL_POINTS, dtype=float)
-    return np.interp(x_big, gray12_knots.astype(float), values.astype(float))
+    return np.interp(x_big, x_small.astype(float), y_small.astype(float))
 
-# =======================
-# 메인
-# =======================
-def main(show_plot=True):
-    # 1) Low CSV
-    df_low = pd.read_csv(INPUT_LOW_CSV)
-    _validate_low_csv(df_low)
-    R_low = df_low["R_Low"].to_numpy(float)
-    G_low = df_low["G_Low"].to_numpy(float)
-    B_low = df_low["B_Low"].to_numpy(float)
-    if ENFORCE_MONOTONE:
-        R_low = _enforce_monotone(R_low)
-        G_low = _enforce_monotone(G_low)
-        B_low = _enforce_monotone(B_low)
+def _make_filename(base_name, channels, offset):
+    """예: LUT_1_R+10_G+10.csv"""
+    parts = [base_name]
+    for ch in ("R_High", "G_High", "B_High"):
+        if ch in channels:
+            c = ch[0]  # R/G/B
+            parts.append(f"{c}{offset:+d}")
+    return "_".join(parts) + ".csv"
 
-    # 2) High KNOT CSV
-    df_k = pd.read_csv(HIGH_KNOT_CSV)
-    required_cols = ["Gray8", "Gray12", "R_High", "G_High", "B_High"]
-    for c in required_cols:
-        if c not in df_k.columns:
-            raise ValueError(f"HIGH_KNOT_CSV에 '{c}' 열이 필요합니다.")
+# =========================
+# 데이터 로드
+# =========================
+def load_low_curves(path):
+    df = pd.read_csv(path)
+    return (
+        df["R_Low"].to_numpy(float),
+        df["G_Low"].to_numpy(float),
+        df["B_Low"].to_numpy(float),
+    )
 
-    df_k = df_k.sort_values(["Gray12", "Gray8"]).reset_index(drop=True)
-    gray8  = df_k["Gray8"].to_numpy(int)
-    gray12 = df_k["Gray12"].to_numpy(int)
-    Rv     = df_k["R_High"].to_numpy(float)
-    Gv     = df_k["G_High"].to_numpy(float)
-    Bv     = df_k["B_High"].to_numpy(float)
-    _validate_knots(gray12, gray8)
-    Rv, Gv, Bv = _apply_edge_value_rules(Rv, Gv, Bv)
+def load_high_knots(path):
+    df = pd.read_csv(path)
+    gray12 = df.iloc[:, 1].to_numpy(float)
+    RH = df.iloc[:, 2].to_numpy(float)
+    GH = df.iloc[:, 3].to_numpy(float)
+    BH = df.iloc[:, 4].to_numpy(float)
+    return gray12, {"R_High": RH, "G_High": GH, "B_High": BH}
 
-    # 3) 보간
-    R_high = _interp_to_4096(gray12, Rv)
-    G_high = _interp_to_4096(gray12, Gv)
-    B_high = _interp_to_4096(gray12, Bv)
-    if ENFORCE_MONOTONE:
-        R_high = _enforce_monotone(R_high)
-        G_high = _enforce_monotone(G_high)
-        B_high = _enforce_monotone(B_high)
+# =========================
+# 메인 로직
+# =========================
+def build_and_save_all():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # High >= Low + EPS
-    R_high = np.maximum(R_high, R_low + EPS_HIGH_OVER_LOW)
-    G_high = np.maximum(G_high, G_low + EPS_HIGH_OVER_LOW)
-    B_high = np.maximum(B_high, B_low + EPS_HIGH_OVER_LOW)
+    R_low, G_low, B_low = load_low_curves(INPUT_LOW_CSV)
+    gray12, base_high_knots = load_high_knots(HIGH_KNOT_CSV)
 
-    # 4) 저장
-    out_df = pd.DataFrame({
-        "GrayLevel_window": np.arange(FULL_POINTS, dtype=np.uint16),
-        "R_Low":  _clip_round_12bit(R_low),
-        "R_High": _clip_round_12bit(R_high),
-        "G_Low":  _clip_round_12bit(G_low),
-        "G_High": _clip_round_12bit(G_high),
-        "B_Low":  _clip_round_12bit(B_low),
-        "B_High": _clip_round_12bit(B_high),
-    })
-    os.makedirs(os.path.dirname(OUTPUT_PATH) or ".", exist_ok=True)
-    out_df.to_csv(OUTPUT_PATH, index=False)
-    print(f"[✅] Saved: {os.path.abspath(OUTPUT_PATH)}")
+    total = 0
+    for combo_name, channels in CHANNEL_COMBOS.items():
+        for offset in OFFSETS:
+            # 각 채널별 knot 준비
+            knots_vals = {}
+            for ch in ("R_High", "G_High", "B_High"):
+                vals = base_high_knots[ch].copy()
+                if ch in channels:
+                    vals = np.clip(vals + offset, 0, 4095)
+                knots_vals[ch] = vals
 
-    # 5) 시각화 (plt)
-    if show_plot:
-        plt.figure(figsize=(10,6))
-        plt.plot(np.arange(FULL_POINTS), R_high, color='red',  label='R_High (interp)')
-        plt.plot(np.arange(FULL_POINTS), G_high, color='green',label='G_High (interp)')
-        plt.plot(np.arange(FULL_POINTS), B_high, color='blue', label='B_High (interp)')
+            # 4096포인트 보간
+            R_high = _interp_to_4096(gray12, knots_vals["R_High"])
+            G_high = _interp_to_4096(gray12, knots_vals["G_High"])
+            B_high = _interp_to_4096(gray12, knots_vals["B_High"])
 
-        # Knot 포인트 표시
-        plt.scatter(gray12, Rv, color='red', marker='o', edgecolors='k', s=30, label='R_High knots')
-        plt.scatter(gray12, Gv, color='green', marker='o', edgecolors='k', s=30, label='G_High knots')
-        plt.scatter(gray12, Bv, color='blue', marker='o', edgecolors='k', s=30, label='B_High knots')
+            # 단조/제약
+            if ENFORCE_MONOTONE:
+                R_high = _enforce_monotone(R_high)
+                G_high = _enforce_monotone(G_high)
+                B_high = _enforce_monotone(B_high)
 
-        plt.title("High LUT (34 knots → 4096 interp)")
-        plt.xlabel("Gray Level (12bit)")
-        plt.ylabel("Signal Value (12bit)")
-        plt.xlim(0, FULL_POINTS-1)
-        plt.ylim(0, FULL_POINTS-1)
-        plt.legend(fontsize=8)
-        plt.grid(True, linestyle="--", alpha=0.5)
-        plt.tight_layout()
-        plt.show()
+            R_high = np.maximum(R_high, R_low + EPS_HIGH_OVER_LOW)
+            G_high = np.maximum(G_high, G_low + EPS_HIGH_OVER_LOW)
+            B_high = np.maximum(B_high, B_low + EPS_HIGH_OVER_LOW)
+
+            R_high = _clip_round_12bit(R_high)
+            G_high = _clip_round_12bit(G_high)
+            B_high = _clip_round_12bit(B_high)
+
+            out_df = pd.DataFrame({
+                "GrayLevel_window": np.arange(FULL_POINTS, dtype=np.uint16),
+                "R_Low":  _clip_round_12bit(R_low),
+                "R_High": R_high,
+                "G_Low":  _clip_round_12bit(G_low),
+                "G_High": G_high,
+                "B_Low":  _clip_round_12bit(B_low),
+                "B_High": B_high,
+            })
+
+            # 파일명 생성
+            fname = _make_filename(BASE_NAME, channels, offset)
+            out_path = os.path.join(OUTPUT_DIR, fname)
+            out_df.to_csv(out_path, index=False)
+            total += 1
+
+    print(f"[✅] LUT 생성 완료 — 총 {total}개 파일 생성됨 (예상 287)")
+    print(f"[📂] 경로: {os.path.abspath(OUTPUT_DIR)}")
 
 if __name__ == "__main__":
-    main(show_plot=True)
+    build_and_save_all()
