@@ -1,4 +1,3 @@
-    #################################################################################################
     #┌──────────────────────────────────────────────────────────────────────────────────────────────┐
     #│                                  - VAC Optimization Loop -                                   │
         self.ui.vac_btn_startOptimization.clicked.connect(self.start_VAC_optimization)
@@ -2758,17 +2757,6 @@
         """
         ============================== 메인 엔트리: 버튼 이벤트 연결용 ==============================
         전체 Flow:
-        1. TV setting > VAC OFF → 측정 + UI 업데이트
-
-        2. TV setting > VAC ON → DB에서 모델/주사율 매칭 VAC Data 가져와 TV에 writing → 측정 + UI 업데이트
-
-        3. 측정 결과 평가: 스펙 OK면 종료, NG면 자코비안 행렬을 통해 LUT 보정
-        
-        4. 보정 LUT TV에 Writing → 측정 + UI 업데이트
-
-        5. 측정 결과 평가: 스펙 OK면 종료, NG면 자코비안 행렬을 통해 LUT 보정
-        
-        스펙 OK가 나올때까지 LUT 보정 반복...
         """
         base = cf.get_normalized_path(__file__, '..', '..', 'resources/images/pictures')
         self.process_complete_pixmap = QPixmap(os.path.join(base, 'process_complete.png'))
@@ -2809,4 +2797,3 @@
         self._run_off_baseline_then_on()
     #│                                                                                              │
     #└──────────────────────────────────────────────────────────────────────────────────────────────┘
-    #################################################################################################
