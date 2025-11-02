@@ -1,49 +1,5 @@
     #┌──────────────────────────────────────────────────────────────────────────────────────────────┐
-    #│                                  - VAC Optimization Loop -                                   │
-        self.ui.vac_btn_startOptimization.clicked.connect(self.start_VAC_optimization)
-        self._vac_dict_cache = None
-        
-        self._off_store = {'gamma': {'main': {'white':{},'red':{},'green':{},'blue':{}}, 
-                                     'sub': {'white':{},'red':{},'green':{},'blue':{}}},
-                            'colorshift': {'main': [], 'sub': []}}
-        self._on_store  = {'gamma': {'main': {'white':{},'red':{},'green':{},'blue':{}}, 
-                                     'sub': {'white':{},'red':{},'green':{},'blue':{}}},
-                            'colorshift': {'main': [], 'sub': []}}
-        
-        self.vac_optimization_gamma_chart = GammaChart(self.ui.vac_chart_gamma_3)
-        self.vac_optimization_cie1976_chart = CIE1976Chart(self.ui.vac_chart_colorShift_2)
-        self.vac_optimization_lut_chart = LUTChart(target_widget=self.ui.vac_graph_rgbLUT_4)
-
-        self.vac_optimization_chromaticity_chart = XYChart(
-            target_widget=self.ui.vac_chart_chromaticityDiff,
-            x_label='Gray Level', y_label='Cx/Cy',
-            x_range=(0, 256), y_range=(0, 1),
-            x_tick=64, y_tick=0.25,
-            title=None, title_color='#595959',
-            legend=True   # ← 변경
-        )
-        self.vac_optimization_gammalinearity_chart = XYChart(
-            target_widget=self.ui.vac_chart_gammaLinearity,
-            x_label='Gray Level',
-            y_label='Slope',
-            x_range=(0, 256),
-            y_range=(0, 1),
-            x_tick=64,
-            y_tick=0.25,
-            title=None,
-            title_color='#595959',
-            legend=False
-        )
-        self.vac_optimization_colorshift_chart = BarChart(
-            target_widget=self.ui.vac_chart_colorShift_3,
-            title='Skin Color Shift',
-            x_labels=['DarkSkin','LightSkin','Asian','Western'],
-            y_label='Δu′v′',
-            y_range=(0, 0.08), y_tick=0.02,
-            series_labels=('VAC OFF','VAC ON'),
-            spec_line=0.04
-        )
-    
+    #│                                  - VAC Optimization Loop -                                   │    
     def _load_jacobian_artifacts(self):
         """
         jacobian_().pkl 파일을 불러와서 artifacts 딕셔너리로 반환
