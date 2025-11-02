@@ -53,38 +53,6 @@
         logging.info(f"[Jacobian] {comp} A 행렬 shape: {A.shape}") 
         return A
     
-    def _load_prediction_models(self):
-        """
-        hybrid_*_model.pkl 파일들을 불러와서 self.models_Y0_bundle에 저장.
-        (Gamma / Cx / Cy)
-        """
-        model_names = {
-            "Gamma": "hybrid_Gamma_model.pkl",
-            "Cx": "hybrid_Cx_model.pkl",
-            "Cy": "hybrid_Cy_model.pkl",
-        }
-
-        models_dir = cf.get_normalized_path(__file__, '.', 'models')
-        bundle = {}
-
-        for key, fname in model_names.items():
-            path = os.path.join(models_dir, fname)
-            if not os.path.exists(path):
-                logging.error(f"[PredictModel] 모델 파일을 찾을 수 없습니다: {path}")
-                raise FileNotFoundError(f"Missing model file: {path}")
-            try:
-                model = joblib.load(path)
-                bundle[key] = model
-                logging.info(f"[PredictModel] {key} 모델 로드 완료: {fname}")
-            except Exception as e:
-                logging.exception(f"[PredictModel] {key} 모델 로드 중 오류: {e}")
-                raise
-
-        self.models_Y0_bundle = bundle
-        logging.info("[PredictModel] 모든 예측 모델 로드 완료")
-        logging.debug(f"[PredictModel] keys: {list(bundle.keys())}")
-        return bundle
-    
     def _set_vac_active(self, enable: bool) -> bool:
         try:
             logging.debug("현재 VAC 적용 상태를 확인합니다.")
@@ -200,9 +168,6 @@
                         raise ValueError(f"{k}: 4096 길이 필요 (현재 {arr.shape})")
                     od[k] = np.clip(arr.astype(int), 0, 4095).tolist()
 
-        # -------------------------------
-        # 포맷터
-        # -------------------------------
         def _fmt_inline_list(lst):
             # [\t1,\t2,\t...\t]
             return "[\t" + ",\t".join(str(int(x)) for x in lst) + "\t]"
@@ -254,9 +219,6 @@
             "BchannelLow","BchannelHigh",
         }
 
-        # -------------------------------
-        # 본문 생성
-        # -------------------------------
         keys = list(od.keys())
         lines = ["{"]
 
@@ -345,26 +307,6 @@
         }
         self._update_lut_chart_and_table(lut_dict_plot)
         self._step_done(2)
-        
-        # # [ADD] 런타임 X(256×18) 생성 & 스키마 디버그 로깅
-        # try:
-        #     X_runtime, lut256_norm, ctx = self._build_runtime_X_from_db_json(vac_data)
-        #     self._debug_log_runtime_X(X_runtime, ctx, tag="[RUNTIME X from DB+UI]")
-        # except Exception as e:
-        #     logging.exception("[RUNTIME X] build/debug failed")
-        #     # 여기서 실패하면 예측/최적화 전에 스키마 문제로 조기 중단하도록 권장
-        #     return
-        
-        # # ✅ 0) OFF 끝났고, 여기서 1차 예측 최적화 먼저 수행
-        # logging.info("[PredictOpt] 예측 기반 1차 최적화 시작")
-        # vac_data_by_predict, _lut4096_dict = self._predictive_first_optimize(
-        #     vac_data, n_iters=2, wG=0.4, wC=1.0, lambda_ridge=1e-3
-        # )
-        # if vac_data_by_predict is None:
-        #     logging.warning("[PredictOpt] 실패 → 원본 DB LUT로 진행")
-        #     vac_data_by_predict = vac_data
-        # else:
-        #     logging.info("[PredictOpt] 1차 최적화 LUT 생성 완료 → UI 업데이트 반영됨")
 
         # TV 쓰기 완료 시 콜백
         def _after_write(ok, msg):
