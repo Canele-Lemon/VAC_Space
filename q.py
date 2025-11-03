@@ -6,26 +6,29 @@ import numpy as np
 import pandas as pd
 import datetime
 
-# ------------------------------------------------------------
-# 경로 설정 & VACDataset import
-# ------------------------------------------------------------
 CURRENT_DIR  = os.path.dirname(os.path.abspath(__file__))          # .../module/scripts
 PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))    # .../module
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 from scripts.VAC_dataset import VACDataset
 
+# ------------------------------------------------------------
+# 그레이별 자코비안 J_g 추정 스크립트 (White 패턴, High 3채널)
+# X = [ΔR_H, ΔG_H, ΔB_H, panel_onehot..., frame_rate, model_year, gray_norm, LUT_j] 
+# Y = [ΔCx, ΔCy, ΔGamma]
+# 해법: 가중 리지 최소자승  J = (X^T W X + λI)^{-1} X^T W Y
+# ------------------------------------------------------------
 
-# ------------------------------------------------------------
-# PK 파서: "2456-2677,!2456" 같은 표현 지원
-#   - "a": 단일 PK
-#   - "a-b": 범위
-#   - "!a", "!a-b": 제외
-# ------------------------------------------------------------
+
+
 def parse_pks(spec: str):
     """
+    PK 파서: "a-b", "!a", "!a-b" 같은 표현 지원
+    - "a": 단일 PK
+    - "a-b": 범위
+    - "!a", "!a-b": 제외
+    
     예:
       "2456-2677,!2456" -> [2457, 2458, ..., 2677]
       "2457,2459-2461"  -> [2457,2459,2460,2461]
@@ -62,17 +65,11 @@ def parse_pks(spec: str):
     result = sorted(p for p in include if p not in exclude)
     return result
 
-
-# ------------------------------------------------------------
-# WHITE 패턴, High 3채널 기준 X,Y3 생성
-#   X : VACDataset.build_white_y0_delta() 기반 feature
-#   Y3: [dCx, dCy, dGamma] (세 컴포넌트 교집합만 사용)
-# ------------------------------------------------------------
 def build_white_X_Y3(pk_list, ref_pk):
     """
     X, Y3, groups, idx_gray, ds 를 반환
-    - X   : (N, Dx) feature (ΔR_H,ΔG_H,ΔB_H,..., gray_norm, LUT_j)
-    - Y3  : (N, 3)  = [dCx, dCy, dGamma]
+    - X : (N, 12) feature (ΔR_H, ΔG_H, ΔB_H, panel_onehot, frame_rate, model_year, gray_norm, LUT_j)
+    - Y3 : (N, 3)  = [dCx, dCy, dGamma]
     - groups : (N,) pk ID
     - idx_gray : X에서 gray_norm 컬럼 인덱스
     - ds : VACDataset 인스턴스
@@ -151,11 +148,9 @@ def build_white_X_Y3(pk_list, ref_pk):
     return X, Y3, groups, idx_gray, ds
 
 
-# ------------------------------------------------------------
-# 가중 리지 최소자승
-# ------------------------------------------------------------
 def solve_weighted_ridge(X, Y, lam=1e-3, w=None):
     """
+    가중 리지 최소자승
     (X^T W X + lam I)^{-1} X^T W Y  계산
     X: (n, d), Y: (n, k), w: (n,) or None
     반환: (coef, A)
@@ -183,17 +178,15 @@ def solve_weighted_ridge(X, Y, lam=1e-3, w=None):
     return coef, A
 
 
-# ------------------------------------------------------------
-# gray별 자코비안 추정
-# ------------------------------------------------------------
 def estimate_jacobians_per_gray(pk_list, ref_pk, lam=1e-3,
                                 delta_window=None, gauss_sigma=None,
                                 min_samples=3):
     """
-    각 gray g=0..255에 대해 J_g(3x3) 추정
-      - 입력: 스윕 VACDataset
-      - delta_window: ||Δx|| ≤ window 필터 (선택)
-      - gauss_sigma : 가우시안 가중치 σ (선택), w = exp(-||Δx||^2 / σ^2)
+    gray별 자코비안 추정 : 각 그레이 g=0..255에 대해 J_g(3x3) 추정
+    - 입력은 VACDataset 기반 스윕 데이터
+    - delta_window: ||Δx|| ≤ window 필터 (선택)
+    - gauss_sigma: 가우시안 가중치 σ (선택), w = exp(-||Δx||^2 / σ^2)
+    
     반환:
       jac: dict[g] = { "J":(3,3), "n":n_samples, "cond":condition_number }
       df : CSV로 저장하기 편한 DataFrame
@@ -246,11 +239,10 @@ def estimate_jacobians_per_gray(pk_list, ref_pk, lam=1e-3,
     df = pd.DataFrame(rows).sort_values("gray")
     return jac, df
 
-
-# ------------------------------------------------------------
-# 출력 파일 경로 자동 생성
-# ------------------------------------------------------------
 def make_default_paths(ref_pk, lam, delta_window, gauss_sigma):
+    """
+    출력 파일 경로 자동 생성
+    """
     os.makedirs("artifacts", exist_ok=True)
     tag = f"ref{ref_pk}_lam{lam}"
     if delta_window is not None:
@@ -263,9 +255,6 @@ def make_default_paths(ref_pk, lam, delta_window, gauss_sigma):
     return out_csv, out_npy
 
 
-# ------------------------------------------------------------
-# main: 실행 시 CSV + NPY(보정용 번들) 생성
-# ------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description="그레이별 자코비안 Jg 추정 (White, High 채널)")
     ap.add_argument("--pks", type=str, required=True,
@@ -351,3 +340,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+이게 알려주신 코드인데, 질문이 있습니다.
+
+1. 학습에 사용될 pk 정보는 어디에 있는 건가요? 
+2. Jg란 보정을 할 deltaLUT 값을 의미하는 건가요? 
+3. Jg를 계산하는 수식이 궁금해요.
