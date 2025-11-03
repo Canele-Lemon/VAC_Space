@@ -78,8 +78,7 @@ class VACDataset(Dataset):
 
         return np.asarray(row, dtype=np.float32)
 
-    def build_white_y0_delta(self, component='dGamma',
-                             feature_channels=('R_High','G_High','B_High')):
+    def build_white_y0_delta(self, component='dGamma'):
         """
         White 패턴만 선택, y = dGamma/dCx/dCy (target - ref).
         X는 raw ΔLUT(High 3채널) + 메타 + gray_norm(+ pattern onehot=White) + LUT index
@@ -99,9 +98,7 @@ class VACDataset(Dataset):
                 y_val = y_vec[g]
                 if not np.isfinite(y_val):
                     continue
-                feat_row = self._build_features_for_gray(
-                    X_dict=Xd, gray=g, feature_channels=feature_channels
-                )
+                feat_row = self._build_features_for_gray(X_dict=Xd, gray=g)
                 X_rows.append(feat_row)
                 y_vals.append(float(y_val))
                 groups.append(pk)
@@ -117,8 +114,7 @@ class VACDataset(Dataset):
 
 if __name__ == "__main__":
     ds = VACDataset(pk_list=[2635], ref_vac_info_pk=2582)
-    X_mat, y_vec, groups = ds.build_white_y0_delta(component='dCx',
-                                                   feature_channels=('R_High','G_High','B_High'))
+    X_mat, y_vec, groups = ds.build_white_y0_delta(component='dCx')
 
     print("X_mat shape:", X_mat.shape)
     print("y_vec shape:", y_vec.shape)
@@ -129,12 +125,37 @@ if __name__ == "__main__":
         print("X:", X_mat[i])
         print("y:", y_vec[i])
 
-이렇게 했는데도 
-Traceback (most recent call last):
-  File "d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module\scripts\VAC_dataset.py", line 120, in <module>
-    X_mat, y_vec, groups = ds.build_white_y0_delta(component='dCx',
-  File "d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module\scripts\VAC_dataset.py", line 102, in build_white_y0_delta
-    feat_row = self._build_features_for_gray(
-TypeError: VACDataset._build_features_for_gray() got an unexpected keyword argument 'feature_channels'
+이렇게 했을 때 아래처럼 출력되는데
 
-이런 에러가 떠요
+X_mat shape: (256, 12)
+y_vec shape: (256,)
+
+--- row 0 ---
+X: [ 0.  0.  0.  0.  0.  0.  0.  1. 60. 26.  0.  0.]
+y: -0.00019998848
+
+--- row 1 ---
+X: [0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00
+ 0.000000e+00 0.000000e+00 1.000000e+00 6.000000e+01 2.600000e+01
+ 3.921569e-03 0.000000e+00]
+y: 9.998679e-05
+
+--- row 2 ---
+X: [9.000000e+00 0.000000e+00 9.000000e+00 0.000000e+00 0.000000e+00
+ 0.000000e+00 0.000000e+00 1.000000e+00 6.000000e+01 2.600000e+01
+ 7.843138e-03 1.600000e+01]
+y: 0.0015999973
+
+--- row 3 ---
+X: [2.1000000e+01 0.0000000e+00 2.1000000e+01 0.0000000e+00 0.0000000e+00
+ 0.0000000e+00 0.0000000e+00 1.0000000e+00 6.0000000e+01 2.6000000e+01
+ 1.1764706e-02 3.6000000e+01]
+y: 0.002000004
+
+--- row 4 ---
+X: [3.0000000e+01 0.0000000e+00 3.0000000e+01 0.0000000e+00 0.0000000e+00
+ 0.0000000e+00 0.0000000e+00 1.0000000e+00 6.0000000e+01 2.6000000e+01
+ 1.5686275e-02 5.2000000e+01]
+y: -0.0028000027
+
+실제 자코비안 학습때는 이 row 하나하나 학습하면서 델타 LUT에 따른 색좌표/감마 변화를 학습하는 건가요?
