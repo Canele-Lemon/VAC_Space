@@ -1,58 +1,353 @@
+# estimate_jacobian.py
+import os
+import sys
+import argparse
+import numpy as np
+import pandas as pd
+import datetime
+
+# ------------------------------------------------------------
+# 경로 설정 & VACDataset import
+# ------------------------------------------------------------
+CURRENT_DIR  = os.path.dirname(os.path.abspath(__file__))          # .../module/scripts
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))    # .../module
+if PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from scripts.VAC_dataset import VACDataset
+
+
+# ------------------------------------------------------------
+# PK 파서: "2456-2677,!2456" 같은 표현 지원
+#   - "a": 단일 PK
+#   - "a-b": 범위
+#   - "!a", "!a-b": 제외
+# ------------------------------------------------------------
+def parse_pks(spec: str):
+    """
+    예:
+      "2456-2677,!2456" -> [2457, 2458, ..., 2677]
+      "2457,2459-2461"  -> [2457,2459,2460,2461]
+    """
+    tokens = [t.strip() for t in spec.split(",") if t.strip()]
+    include = set()
+    exclude = set()
+
+    for tok in tokens:
+        is_excl = tok.startswith("!")
+        if is_excl:
+            tok = tok[1:].strip()
+            if not tok:
+                continue
+
+        # 범위 또는 단일
+        if "-" in tok:
+            a_str, b_str = tok.split("-", 1)
+            a = int(a_str.strip())
+            b = int(b_str.strip())
+            lo, hi = min(a, b), max(a, b)
+            rng = range(lo, hi + 1)
+            if is_excl:
+                exclude.update(rng)
+            else:
+                include.update(rng)
+        else:
+            v = int(tok)
+            if is_excl:
+                exclude.add(v)
+            else:
+                include.add(v)
+
+    result = sorted(p for p in include if p not in exclude)
+    return result
+
+
+# ------------------------------------------------------------
+# WHITE 패턴, High 3채널 기준 X,Y3 생성
+#   X : VACDataset.build_white_y0_delta() 기반 feature
+#   Y3: [dCx, dCy, dGamma] (세 컴포넌트 교집합만 사용)
+# ------------------------------------------------------------
 def build_white_X_Y3(pk_list, ref_pk):
+    """
+    X, Y3, groups, idx_gray, ds 를 반환
+    - X   : (N, Dx) feature (ΔR_H,ΔG_H,ΔB_H,..., gray_norm, LUT_j)
+    - Y3  : (N, 3)  = [dCx, dCy, dGamma]
+    - groups : (N,) pk ID
+    - idx_gray : X에서 gray_norm 컬럼 인덱스
+    - ds : VACDataset 인스턴스
+    """
     ds = VACDataset(pk_list=pk_list, ref_vac_info_pk=ref_pk)
 
+    # component별로 한 번씩 빌드
     X_cx, y_cx, g_cx = ds.build_white_y0_delta(component='dCx')
     X_cy, y_cy, g_cy = ds.build_white_y0_delta(component='dCy')
     X_ga, y_ga, g_ga = ds.build_white_y0_delta(component='dGamma')
 
-    # gray_norm 컬럼 인덱스
-    K = len(ds.samples[0]["X"]["meta"]["panel_maker"])
-    idx_gray_cx = 3 + K + 2
-    idx_gray_cy = 3 + K + 2
-    idx_gray_ga = 3 + K + 2
+    # gray_norm 컬럼 위치 (VACDataset 피처 정의 기준)
+    K = len(ds.samples[0]["X"]["meta"]["panel_maker"])  # panel one-hot 길이
+    idx_gray = 3 + K + 2  # [ΔR,ΔG,ΔB]=3 + panel(K) + frame_rate + model_year
 
-    def keys_from(X, groups, idx_gray):
+    def make_dict(X, y, groups, name):
+        """
+        (pk, gray) -> (X_row, y_val) 또는 y_val 만 저장하는 dict 구성
+        """
         gray_norm = X[:, idx_gray]
-        gray_idx = np.clip(np.round(gray_norm * 255).astype(int), 0, 255)
-        # 키 = (pk, gray) 튜플 리스트
-        return [(int(pk), int(g)) for pk, g in zip(groups.astype(np.int64), gray_idx)]
+        gray_idx  = np.clip(np.round(gray_norm * 255).astype(int), 0, 255)
 
-    keys_cx = keys_from(X_cx, g_cx, idx_gray_cx)
-    keys_cy = keys_from(X_cy, g_cy, idx_gray_cy)
-    keys_ga = keys_from(X_ga, g_ga, idx_gray_ga)
+        dX = {}
+        dY = {}
+        for i in range(len(y)):
+            key = (int(groups[i]), int(gray_idx[i]))  # (pk, gray)
+            # X는 첫 컴포넌트(dCx)에서만 저장, 나머지는 y만 저장
+            if name == "dCx":
+                if key not in dX:
+                    dX[key] = X[i].copy()
+            dY[key] = float(y[i])
+        return dX, dY
 
-    # 세 집합의 교집합 (튜플 기반이므로 안전)
-    common = sorted(set(keys_cx) & set(keys_cy) & set(keys_ga))
-    if not common:
-        raise RuntimeError("세 컴포넌트의 (pk, gray) 교집합이 비어 있습니다.")
+    dict_X, dict_cx = make_dict(X_cx, y_cx, g_cx, name="dCx")
+    _,       dict_cy = make_dict(X_cy, y_cy, g_cy, name="dCy")
+    _,       dict_ga = make_dict(X_ga, y_ga, g_ga, name="dGamma")
 
-    # 공통 키 → 각 배열의 인덱스 매핑
-    idx_map_cx = {k:i for i,k in enumerate(keys_cx)}
-    idx_map_cy = {k:i for i,k in enumerate(keys_cy)}
-    idx_map_ga = {k:i for i,k in enumerate(keys_ga)}
+    # 세 컴포넌트 모두 존재하는 (pk,gray) 교집합만
+    keys_common = sorted(
+        set(dict_X.keys()) &
+        set(dict_cx.keys()) &
+        set(dict_cy.keys()) &
+        set(dict_ga.keys())
+    )
+    if not keys_common:
+        raise RuntimeError("세 컴포넌트(dCx/dCy/dGamma)의 (pk,gray) 교집합이 비어 있습니다.")
 
-    idx_cx = np.array([idx_map_cx[k] for k in common], dtype=np.int64)
-    idx_cy = np.array([idx_map_cy[k] for k in common], dtype=np.int64)
-    idx_ga = np.array([idx_map_ga[k] for k in common], dtype=np.int64)
+    X_rows, Y_rows, group_rows = [], [], []
+    for (pk, gray) in keys_common:
+        # gray 구간 필터: 2~253 (양 끝은 자코비안 크게 의미 없음 / Gamma NaN 등)
+        if gray < 2 or gray > 253:
+            continue
 
-    # 동일 순서로 정렬
-    X = X_cx[idx_cx].astype(np.float32)  # X는 동일 형태라 CX 기준으로 택일
-    y_cx_sel = y_cx[idx_cx].astype(np.float32)
-    y_cy_sel = y_cy[idx_cy].astype(np.float32)
-    y_ga_sel = y_ga[idx_ga].astype(np.float32)
+        x_row = dict_X[(pk, gray)]
+        y_row = np.array([
+            dict_cx[(pk, gray)],
+            dict_cy[(pk, gray)],
+            dict_ga[(pk, gray)]
+        ], dtype=np.float32)
 
-    # g=2..253 & 세 타깃 finite
-    gray_norm = X[:, 3 + K + 2]
-    gray_idx  = np.clip(np.round(gray_norm * 255).astype(int), 0, 255)
-    Y3 = np.stack([y_cx_sel, y_cy_sel, y_ga_sel], axis=1)
+        # 타깃이 모두 finite일 때만 사용
+        if not np.isfinite(y_row).all():
+            continue
 
-    core_mask = (gray_idx >= 2) & (gray_idx <= 253) & np.isfinite(Y3).all(axis=1)
-    X  = X[core_mask]
-    Y3 = Y3[core_mask]
+        X_rows.append(x_row)
+        Y_rows.append(y_row)
+        group_rows.append(pk)
 
-    # groups는 공통 키의 pk를 사용, core_mask로 다시 필터
-    groups_all = np.array([pk for pk, _g in common], dtype=np.int64)
-    groups = groups_all[core_mask]
+    if not X_rows:
+        raise RuntimeError("유효한 (pk,gray) 샘플이 없습니다. NaN 필터/gray 범위를 확인하세요.")
 
-    idx_gray = 3 + K + 2
+    X = np.vstack(X_rows).astype(np.float32)
+    Y3 = np.vstack(Y_rows).astype(np.float32)
+    groups = np.asarray(group_rows, dtype=np.int64)
+
     return X, Y3, groups, idx_gray, ds
+
+
+# ------------------------------------------------------------
+# 가중 리지 최소자승
+# ------------------------------------------------------------
+def solve_weighted_ridge(X, Y, lam=1e-3, w=None):
+    """
+    (X^T W X + lam I)^{-1} X^T W Y  계산
+    X: (n, d), Y: (n, k), w: (n,) or None
+    반환: (coef, A)
+      - coef: (d, k)
+      - A   : (d, d)
+    """
+    if w is not None:
+        w = np.asarray(w, dtype=np.float64).reshape(-1)
+        sw = np.sqrt(w).reshape(-1, 1)
+        Xw = X * sw
+        Yw = Y * sw
+    else:
+        Xw, Yw = X, Y
+
+    d = X.shape[1]
+    XtX = Xw.T @ Xw
+    XtY = Xw.T @ Yw
+    A = XtX + lam * np.eye(d, dtype=X.dtype)
+
+    try:
+        coef = np.linalg.solve(A, XtY)
+    except np.linalg.LinAlgError:
+        coef = np.linalg.pinv(A) @ XtY
+
+    return coef, A
+
+
+# ------------------------------------------------------------
+# gray별 자코비안 추정
+# ------------------------------------------------------------
+def estimate_jacobians_per_gray(pk_list, ref_pk, lam=1e-3,
+                                delta_window=None, gauss_sigma=None,
+                                min_samples=3):
+    """
+    각 gray g=0..255에 대해 J_g(3x3) 추정
+      - 입력: 스윕 VACDataset
+      - delta_window: ||Δx|| ≤ window 필터 (선택)
+      - gauss_sigma : 가우시안 가중치 σ (선택), w = exp(-||Δx||^2 / σ^2)
+    반환:
+      jac: dict[g] = { "J":(3,3), "n":n_samples, "cond":condition_number }
+      df : CSV로 저장하기 편한 DataFrame
+    """
+    X, Y3, groups, idx_gray, ds = build_white_X_Y3(pk_list, ref_pk)
+
+    # 디자인행렬: 첫 3열이 ΔR_H, ΔG_H, ΔB_H
+    dRGB = X[:, :3]
+    gray_norm = X[:, idx_gray]
+    gray_idx = np.clip(np.round(gray_norm * 255).astype(int), 0, 255)
+
+    # |Δx| 기반 magnitude 필터
+    if delta_window is not None:
+        mag = np.linalg.norm(dRGB, axis=1)
+        mask_mag = mag <= float(delta_window)
+    else:
+        mag = np.linalg.norm(dRGB, axis=1)
+        mask_mag = np.ones(len(dRGB), dtype=bool)
+
+    jac, rows = {}, []
+    for g in range(256):
+        m = (gray_idx == g) & mask_mag
+        n = int(m.sum())
+        if n < min_samples:
+            continue
+
+        Xg = dRGB[m, :]   # (n,3)
+        Yg = Y3[m, :]     # (n,3)
+
+        # 가우시안 가중치 (Δx 크기 기반)
+        if gauss_sigma is not None and gauss_sigma > 0:
+            w = np.exp(-(np.linalg.norm(Xg, axis=1) ** 2) / (gauss_sigma ** 2))
+        else:
+            w = None
+
+        J, A = solve_weighted_ridge(Xg, Yg, lam=lam, w=w)  # J:(3,3) 열=R,G,B / 행= Cx,Cy,Gamma
+        cond = np.linalg.cond(A)
+
+        jac[g] = {"J": J.astype(np.float32), "n": n, "cond": float(cond)}
+
+        rows.append({
+            "gray": g,
+            "n_samples": n,
+            "cond": float(cond),
+            "J_Cx_R": float(J[0, 0]), "J_Cx_G": float(J[0, 1]), "J_Cx_B": float(J[0, 2]),
+            "J_Cy_R": float(J[1, 0]), "J_Cy_G": float(J[1, 1]), "J_Cy_B": float(J[1, 2]),
+            "J_Gam_R": float(J[2, 0]), "J_Gam_G": float(J[2, 1]), "J_Gam_B": float(J[2, 2]),
+        })
+
+    df = pd.DataFrame(rows).sort_values("gray")
+    return jac, df
+
+
+# ------------------------------------------------------------
+# 출력 파일 경로 자동 생성
+# ------------------------------------------------------------
+def make_default_paths(ref_pk, lam, delta_window, gauss_sigma):
+    os.makedirs("artifacts", exist_ok=True)
+    tag = f"ref{ref_pk}_lam{lam}"
+    if delta_window is not None:
+        tag += f"_dw{float(delta_window)}"
+    if gauss_sigma is not None:
+        tag += f"_gs{float(gauss_sigma)}"
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_csv = os.path.join("artifacts", f"jacobians_white_high_{tag}_{ts}.csv")
+    out_npy = os.path.join("artifacts", f"jacobian_bundle_{tag}_{ts}.npy")
+    return out_csv, out_npy
+
+
+# ------------------------------------------------------------
+# main: 실행 시 CSV + NPY(보정용 번들) 생성
+# ------------------------------------------------------------
+def main():
+    ap = argparse.ArgumentParser(description="그레이별 자코비안 Jg 추정 (White, High 채널)")
+    ap.add_argument("--pks", type=str, required=True,
+                    help="스윕에 사용된 VAC_SET_Info PK 목록(콤마 구분). 예: \"2456-2677,!2456\"")
+    ap.add_argument("--ref", type=int, required=True,
+                    help="참조 VAC_Info PK (예: 2582)")
+    ap.add_argument("--lam", type=float, default=1e-3, help="리지 λ")
+    ap.add_argument("--delta-window", type=float, default=None,
+                    help="|Δx| ≤ window 필터 (예: 50). 미지정 시 필터 없음")
+    ap.add_argument("--gauss-sigma", type=float, default=None,
+                    help="가우시안 가중 σ (예: 30). 미지정 시 가중치 없음")
+    ap.add_argument("--min-samples", type=int, default=3,
+                    help="그레이별 최소 샘플 수")
+    ap.add_argument("--out-csv", type=str, default=None,
+                    help="출력 CSV 경로(미지정 시 artifacts/ 아래 자동 생성)")
+    ap.add_argument("--out-npy", type=str, default=None,
+                    help="자코비안 번들 .npy 경로(미지정 시 artifacts/ 아래 자동 생성)")
+
+    args = ap.parse_args()
+
+    pk_list = parse_pks(args.pks)
+    if not pk_list:
+        raise SystemExit("ERROR: --pks 결과가 비었습니다. 예: --pks \"2456-2677,!2456\"")
+
+    print("[INFO] 사용할 PK 목록:", pk_list)
+    print(f"[INFO] ref_pk={args.ref}, lam={args.lam}, "
+          f"delta_window={args.delta_window}, gauss_sigma={args.gauss_sigma}")
+
+    jac, df = estimate_jacobians_per_gray(
+        pk_list=pk_list,
+        ref_pk=args.ref,
+        lam=args.lam,
+        delta_window=args.delta_window,
+        gauss_sigma=args.gauss_sigma,
+        min_samples=args.min_samples
+    )
+
+    # 출력 경로 결정
+    out_csv, out_npy = args.out_csv, args.out_npy
+    if out_csv is None or out_npy is None:
+        auto_csv, auto_npy = make_default_paths(args.ref, args.lam,
+                                                args.delta_window, args.gauss_sigma)
+        out_csv = out_csv or auto_csv
+        out_npy = out_npy or auto_npy
+
+    # CSV 저장
+    df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+    print(f"[OK] CSV saved -> {out_csv}")
+
+    # Dense 번들(.npy) 구성: J[gray, out, in]
+    J_dense = np.full((256, 3, 3), np.nan, dtype=np.float32)
+    n_arr   = np.zeros(256, dtype=np.int32)
+    condArr = np.full(256, np.nan, dtype=np.float32)
+    for g, payload in jac.items():
+        J_dense[g, :, :] = payload["J"]
+        n_arr[g]         = int(payload["n"])
+        condArr[g]       = float(payload["cond"])
+
+    bundle = {
+        "J": J_dense,                # (256,3,3)
+        "n": n_arr,                  # (256,)
+        "cond": condArr,             # (256,)
+        "ref_pk": int(args.ref),
+        "lam": float(args.lam),
+        "delta_window": None if args.delta_window is None else float(args.delta_window),
+        "gauss_sigma": None if args.gauss_sigma is None else float(args.gauss_sigma),
+        "pk_list": pk_list,
+        "gray_used": [2, 253],       # 내부에서 사용한 gray 구간
+        "schema": "J[gray, out(Cx,Cy,Gamma), in(R_High,G_High,B_High)]",
+    }
+    np.save(out_npy, bundle, allow_pickle=True)
+    print(f"[OK] NPY saved -> {out_npy}")
+
+    # 간단 프리뷰
+    for g in (0, 32, 128, 255):
+        if 0 <= g < 256 and np.isfinite(J_dense[g]).any():
+            Jg = J_dense[g]
+            print(f"\n[g={g}] n={n_arr[g]}, cond={condArr[g]:.2e}")
+            print(" rows=[Cx,Cy,Gamma], cols=[R_High,G_High,B_High]")
+            print(Jg)
+        else:
+            print(f"\n[g={g}] no estimate (NaN or samples < min)")
+
+if __name__ == "__main__":
+    main()
