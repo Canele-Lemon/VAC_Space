@@ -29,6 +29,7 @@ class VACDataset(Dataset):
     def __init__(self, pk_list, ref_vac_info_pk=2582):
         self.pk_list = list(pk_list)
         self.ref_vac_info_pk = int(ref_vac_info_pk)
+        self.feature_channels = ('R_High','G_High','B_High')
         self.samples = []
         self._collect()
 
@@ -47,13 +48,10 @@ class VACDataset(Dataset):
     def _build_features_for_gray(self, X_dict, gray: int) -> np.ndarray:
         """
         한 행(feature) 구성:
-        [ ΔLUT_selected_channels(g), panel_onehot..., frame_rate, model_year,
-        gray_norm(=g/255), LUT_index_j(g) ]
+        [ΔR_High, ΔG_High, ΔB_High, panel_maker(one-hot), frame_rate, model_year, gray_norm(=g/255), LUT_index_j(g)]
 
-        - ΔLUT_selected_channels: self.feature_channels 순서대로, raw 12bit delta @ gray
-        - panel_onehot: meta['panel_maker']
-        - frame_rate, model_year: meta에서 그대로
-        - gray_norm: 0..1
+        - ΔR_High, ΔG_High, ΔB_High: LUT index 매핑 포인트 기준 (LUT 값)-(ref LUT 값). normalize 안함!
+        - panel_maker(one-hot), frame_rate, model_year: meta에서 그대로 가져옵니다.
         - LUT_index_j: mapping_j[gray] (0..4095), raw 그대로
         """
         # 1) 소스 참조
@@ -84,7 +82,7 @@ class VACDataset(Dataset):
                              feature_channels=('R_High','G_High','B_High')):
         """
         White 패턴만 선택, y = dGamma/dCx/dCy (target - ref).
-        X는 raw ΔLUT(High 3채널) + 메타 + gray_norm(+ pattern onehot=White).
+        X는 raw ΔLUT(High 3채널) + 메타 + gray_norm(+ pattern onehot=White) + LUT index
         """
         assert component in ('dGamma','dCx','dCy')
 
@@ -102,7 +100,7 @@ class VACDataset(Dataset):
                 if not np.isfinite(y_val):
                     continue
                 feat_row = self._build_features_for_gray(
-                    X_dict=Xd, gray=g, add_pattern=p, feature_channels=feature_channels
+                    X_dict=Xd, gray=g, feature_channels=feature_channels
                 )
                 X_rows.append(feat_row)
                 y_vals.append(float(y_val))
@@ -116,8 +114,6 @@ class VACDataset(Dataset):
     # (선택) 파이토치 호환
     def __len__(self): return len(self.samples)
     def __getitem__(self, idx): return self.samples[idx]
-
-
 
 if __name__ == "__main__":
     ds = VACDataset(pk_list=[2635], ref_vac_info_pk=2582)
@@ -133,11 +129,12 @@ if __name__ == "__main__":
         print("X:", X_mat[i])
         print("y:", y_vec[i])
 
-여기서 아래 에러가 떠요:
-PS D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module> & C:/python310/python.exe "d:/00 업무/00 가상화기술/00 색시야각 보상 최적화/VAC algorithm/module/scripts/VAC_dataset.py"
+이렇게 했는데도 
 Traceback (most recent call last):
-  File "d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module\scripts\VAC_dataset.py", line 124, in <module>
+  File "d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module\scripts\VAC_dataset.py", line 120, in <module>
     X_mat, y_vec, groups = ds.build_white_y0_delta(component='dCx',
-  File "d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module\scripts\VAC_dataset.py", line 104, in build_white_y0_delta
+  File "d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module\scripts\VAC_dataset.py", line 102, in build_white_y0_delta
     feat_row = self._build_features_for_gray(
-TypeError: VACDataset._build_features_for_gray() got an unexpected keyword argument 'add_pattern'
+TypeError: VACDataset._build_features_for_gray() got an unexpected keyword argument 'feature_channels'
+
+이런 에러가 떠요
