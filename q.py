@@ -1,11 +1,4 @@
 # estimate_jacobian.py
-# ------------------------------------------------------------
-# 그레이별 자코비안 J_g 추정 스크립트 (White 패턴, High 3채널)
-# X = [ΔR_H, ΔG_H, ΔB_H, panel_onehot..., frame_rate, model_year, gray_norm, LUT_j]
-# Y = [ΔCx, ΔCy, ΔGamma]
-# 해법: 가중 리지 최소자승  J = (X^T W X + λI)^{-1} X^T W Y
-# ------------------------------------------------------------
-
 import os
 import sys
 import argparse
@@ -13,20 +6,19 @@ import json
 import numpy as np
 import pandas as pd
 
-# --- 프로젝트 루트 기준으로 import 경로 보정 ---
-CUR = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.abspath(os.path.join(CUR, ".."))   # 필요 시 조정
-if ROOT not in sys.path:
-    sys.path.append(ROOT)
+CURRENT_DIR  = os.path.dirname(os.path.abspath(__file__))          # .../module/scripts
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))    # .../module
+if PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from scripts.VAC_dataset import VACDataset
 
-# VAC_dataset.py의 실제 위치에 맞춰 경로 수정하세요.
-# 예) module/scripts/VAC_dataset.py 라면 아래처럼:
-try:
-    from scripts.VAC_dataset import VACDataset
-except Exception:
-    # fallback: 같은 폴더에 있다면
-    from VAC_dataset import VACDataset
-
+# ------------------------------------------------------------
+# 그레이별 자코비안 J_g 추정 스크립트 (White 패턴, High 3채널)
+# X = [ΔR_H, ΔG_H, ΔB_H, panel_onehot..., frame_rate, model_year, gray_norm, LUT_j]
+# Y = [ΔCx, ΔCy, ΔGamma]
+# 해법: 가중 리지 최소자승  J = (X^T W X + λI)^{-1} X^T W Y
+# ------------------------------------------------------------
 
 def build_white_X_Y3(pk_list, ref_pk):
     """
@@ -187,4 +179,14 @@ def main():
             print(f"\n[g={g}] no estimate (samples < min or filtered)")
 
 if __name__ == "__main__":
-    main()
+    X, Y3, g_cx, idx_gray, ds = build_white_X_Y3(pk_list=[2635], ref_pk=2582)
+    for i in range(100):
+        print(Y3)
+
+여기서 아래 에러가 떠요:
+Traceback (most recent call last):
+  File "d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module\scripts\estimate_jacobian.py", line 182, in <module>
+    X, Y3, g_cx, idx_gray, ds = build_white_X_Y3(pk_list=[2635], ref_pk=2582)
+  File "d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\module\scripts\estimate_jacobian.py", line 35, in build_white_X_Y3
+    raise RuntimeError("X 행렬 형태가 일치하지 않습니다 (dCx/dCy/dGamma).")
+RuntimeError: X 행렬 형태가 일치하지 않습니다 (dCx/dCy/dGamma).
