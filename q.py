@@ -1,24 +1,27 @@
-def _load_jacobian_bundle_npy(self):
+def _load_lut_mapping_high(self):
     """
-    estimate_jacobian.py 에서 만든 npy 번들을 로드.
-    기대 구조:
-      bundle["J"]   : (256,3,3)
-      bundle["n"]   : (256,)
-      bundle["cond"]: (256,)
+    실행 py 파일 폴더에 있는 LUT_index_mapping.csv 를 읽어
+    각 gray별 High LUT index를 저장.
+    
+    CSV 예시 가정:
+        gray,R_High,G_High,B_High
+        0,0,0,0
+        1,16,16,16
+        ...
     """
-    jac_path = cf.get_normalized_path(__file__, '.', 'models', 'jacobian_dense.npy')  # 파일명은 실제꺼로 수정
-    if not os.path.exists(jac_path):
-        logging.error(f"[Jacobian] npy 파일을 찾을 수 없습니다: {jac_path}")
-        raise FileNotFoundError(f"Jacobian npy not found: {jac_path}")
+    if hasattr(self, "_lut_map_high") and self._lut_map_high is not None:
+        return  # 이미 로드됨
 
-    bundle = np.load(jac_path, allow_pickle=True).item()
-    J = np.asarray(bundle["J"], dtype=np.float32)      # (256,3,3)
-    n = np.asarray(bundle["n"], dtype=np.int32)        # (256,)
-    cond = np.asarray(bundle["cond"], dtype=np.float32)
+    csv_path = cf.get_normalized_path(__file__, '.', 'LUT_index_mapping.csv')
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"LUT_index_mapping.csv not found: {csv_path}")
 
-    self._jac_bundle = bundle
-    self._J_dense = J
-    self._J_n = n
-    self._J_cond = cond
+    df = pd.read_csv(csv_path)
 
-    logging.info(f"[Jacobian] dense J bundle loaded: {jac_path}, J.shape={J.shape}")
+    # 🔧 컬럼명은 실제 파일에 맞게 조정 필요
+    self._lut_map_high = {
+        "R": df["R_High"].to_numpy(dtype=np.int32),
+        "G": df["G_High"].to_numpy(dtype=np.int32),
+        "B": df["B_High"].to_numpy(dtype=np.int32),
+    }
+    logging.info(f"[LUT MAP] loaded {csv_path}, shape={df.shape}")
