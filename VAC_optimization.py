@@ -1,3 +1,4 @@
+    #################################################################################################
     #┌──────────────────────────────────────────────────────────────────────────────────────────────┐
     #│                                  - VAC Optimization Loop -                                   │
         self.ui.vac_btn_startOptimization.clicked.connect(self.start_VAC_optimization)
@@ -97,38 +98,6 @@
         logging.info(f"[Jacobian] {comp} A 행렬 shape: {A.shape}") 
         return A
     
-    def _load_prediction_models(self):
-        """
-        hybrid_*_model.pkl 파일들을 불러와서 self.models_Y0_bundle에 저장.
-        (Gamma / Cx / Cy)
-        """
-        model_names = {
-            "Gamma": "hybrid_Gamma_model.pkl",
-            "Cx": "hybrid_Cx_model.pkl",
-            "Cy": "hybrid_Cy_model.pkl",
-        }
-
-        models_dir = cf.get_normalized_path(__file__, '.', 'models')
-        bundle = {}
-
-        for key, fname in model_names.items():
-            path = os.path.join(models_dir, fname)
-            if not os.path.exists(path):
-                logging.error(f"[PredictModel] 모델 파일을 찾을 수 없습니다: {path}")
-                raise FileNotFoundError(f"Missing model file: {path}")
-            try:
-                model = joblib.load(path)
-                bundle[key] = model
-                logging.info(f"[PredictModel] {key} 모델 로드 완료: {fname}")
-            except Exception as e:
-                logging.exception(f"[PredictModel] {key} 모델 로드 중 오류: {e}")
-                raise
-
-        self.models_Y0_bundle = bundle
-        logging.info("[PredictModel] 모든 예측 모델 로드 완료")
-        logging.debug(f"[PredictModel] keys: {list(bundle.keys())}")
-        return bundle
-    
     def _set_vac_active(self, enable: bool) -> bool:
         try:
             logging.debug("현재 VAC 적용 상태를 확인합니다.")
@@ -174,6 +143,51 @@
         logging.info(f"VAC 적용 상태: {activated}")
                 
         return {"supported": True, "activated": activated}
+        
+    def _dev_zero_lut_from_file(self):
+        """원본 VAC JSON을 골라 6개 LUT 키만 0으로 덮어쓴 JSON을 임시파일로 저장하고 자동으로 엽니다."""
+        # 1) 원본 JSON 선택
+        fname, _ = QFileDialog.getOpenFileName(
+            self, "원본 VAC JSON 선택", "", "JSON Files (*.json);;All Files (*)"
+        )
+        if not fname:
+            return
+
+        try:
+            # 2) 순서 보존 로드
+            with open(fname, "r", encoding="utf-8") as f:
+                raw_txt = f.read()
+            vac_dict = json.loads(raw_txt, object_pairs_hook=OrderedDict)
+
+            # 3) LUT 6키를 모두 0으로 구성 (4096 포인트)
+            zeros = np.zeros(4096, dtype=np.int32)
+            zero_luts = {
+                "RchannelLow":  zeros,
+                "RchannelHigh": zeros,
+                "GchannelLow":  zeros,
+                "GchannelHigh": zeros,
+                "BchannelLow":  zeros,
+                "BchannelHigh": zeros,
+            }
+
+            vac_text = self.build_vacparam_std_format(base_vac_dict=vac_dict, new_lut_tvkeys=zero_luts)
+
+            # 5) 임시파일로 저장
+            fd, tmp_path = tempfile.mkstemp(prefix="VAC_zero_", suffix=".json")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(vac_text)
+
+            # 6) startfile
+            try:
+                os.startfile(tmp_path)
+            except Exception as e:
+                logging.warning(f"임시파일 자동 열기 실패: {e}")
+
+            QMessageBox.information(self, "완료", f"Zero-LUT JSON 임시파일 생성 및 열기 완료:\n{tmp_path}")
+
+        except Exception as e:
+            logging.exception(e)
+            QMessageBox.critical(self, "오류", f"처리 중 오류: {e}")
         
     def build_vacparam_std_format(self, base_vac_dict: dict, new_lut_tvkeys: dict = None) -> str:
         """
@@ -331,13 +345,6 @@
         )
         
     def _apply_vac_from_db_and_measure_on(self):
-        """
-        3-a) DB에서 Panel_Maker + Frame_Rate 조합인 VAC_Data 가져오기
-        3-b) TV에 쓰기 → TV에서 읽기
-            → LUT 차트 갱신(reset_and_plot)
-            → ON 시리즈 리셋(reset_on)
-            → ON 측정 세션 시작(start_viewing_angle_session)
-        """
         # 3-a) DB에서 VAC JSON 로드
         self._step_start(2)
         panel = self.ui.vac_cmb_PanelMaker.currentText().strip()
@@ -351,26 +358,6 @@
         }
         self._update_lut_chart_and_table(lut_dict_plot)
         self._step_done(2)
-        
-        # # [ADD] 런타임 X(256×18) 생성 & 스키마 디버그 로깅
-        # try:
-        #     X_runtime, lut256_norm, ctx = self._build_runtime_X_from_db_json(vac_data)
-        #     self._debug_log_runtime_X(X_runtime, ctx, tag="[RUNTIME X from DB+UI]")
-        # except Exception as e:
-        #     logging.exception("[RUNTIME X] build/debug failed")
-        #     # 여기서 실패하면 예측/최적화 전에 스키마 문제로 조기 중단하도록 권장
-        #     return
-        
-        # # ✅ 0) OFF 끝났고, 여기서 1차 예측 최적화 먼저 수행
-        # logging.info("[PredictOpt] 예측 기반 1차 최적화 시작")
-        # vac_data_by_predict, _lut4096_dict = self._predictive_first_optimize(
-        #     vac_data, n_iters=2, wG=0.4, wC=1.0, lambda_ridge=1e-3
-        # )
-        # if vac_data_by_predict is None:
-        #     logging.warning("[PredictOpt] 실패 → 원본 DB LUT로 진행")
-        #     vac_data_by_predict = vac_data
-        # else:
-        #     logging.info("[PredictOpt] 1차 최적화 LUT 생성 완료 → UI 업데이트 반영됨")
 
         # TV 쓰기 완료 시 콜백
         def _after_write(ok, msg):
@@ -432,6 +419,69 @@
         logging.info("[LUT LOADING] DB fetch LUT TV Writing 시작")
         self._write_vac_to_tv(vac_data, on_finished=_after_write)
         
+    def _debug_log_knot_update(self, iter_idx, knots, delta_h, lut256_before, lut256_after):
+        """
+        iter_idx        : 현재 iteration 번호 (1, 2, ...)
+        knots           : self._jac_artifacts["knots"]  # 길이 K, 예: [0,8,16,...,255]
+        delta_h         : (6K,) 이번 iteration에서 solve한 Δh
+        lut256_before   : dict of 6채널 256길이 LUT (보정 전, float32)
+        lut256_after    : dict of 6채널 256길이 LUT (보정 후, float32)
+
+        이걸 로그에 예쁘게 찍어 분석용으로 쓸 수 있게 해 준다.
+        """
+        try:
+            K = len(knots)
+            # 채널 분해
+            dh_RL = delta_h[0*K : 1*K]
+            dh_GL = delta_h[1*K : 2*K]
+            dh_BL = delta_h[2*K : 3*K]
+            dh_RH = delta_h[3*K : 4*K]
+            dh_GH = delta_h[4*K : 5*K]
+            dh_BH = delta_h[5*K : 6*K]
+
+            def _summ(ch_name, dh_vec):
+                # dh_vec 길이 K
+                # 상위 몇 개만 큰 변화 순으로 보여주면 어디가 움직였는지 직관적으로 파악 가능
+                mag = np.abs(dh_vec)
+                top_idx = np.argsort(mag)[::-1][:5]  # 변화량 큰 상위 5개 knot
+                msg_lines = [f"    {ch_name} top5 |knot(gray)->Δh|:"]
+                for i in top_idx:
+                    msg_lines.append(
+                        f"      knot#{i:02d} (gray≈{knots[i]:3d}) : Δh={dh_vec[i]:+.4f}"
+                    )
+                return "\n".join(msg_lines)
+
+            logging.info("======== [CORR DEBUG] Iter %d Knot Δh ========\n%s\n%s\n%s\n%s\n%s\n%s",
+                iter_idx,
+                _summ("R_Low ", dh_RL),
+                _summ("G_Low ", dh_GL),
+                _summ("B_Low ", dh_BL),
+                _summ("R_High", dh_RH),
+                _summ("G_High", dh_GH),
+                _summ("B_High", dh_BH),
+            )
+
+            # LUT 전/후 차이도 간단 비교 (예: High 채널만 대표로)
+            def _lut_diff_stats(name):
+                before = np.asarray(lut256_before[name], dtype=np.float32)
+                after  = np.asarray(lut256_after[name],  dtype=np.float32)
+                diff   = after - before
+                return (float(np.min(diff)),
+                        float(np.max(diff)),
+                        float(np.mean(diff)),
+                        float(np.std(diff)))
+
+            for ch in ["R_Low","G_Low","B_Low","R_High","G_High","B_High"]:
+                dmin, dmax, dmean, dstd = _lut_diff_stats(ch)
+                logging.debug(
+                    "[CORR DEBUG] Iter %d %s LUT256 delta stats: "
+                    "min=%+.4f max=%+.4f mean=%+.4f std=%.4f",
+                    iter_idx, ch, dmin, dmax, dmean, dstd
+                )
+
+        except Exception:
+            logging.exception("[CORR DEBUG] knot update logging failed")
+            
     def _smooth_and_monotone(self, arr, win=9):
         """
         고주파(지글지글) 제거:
@@ -1037,16 +1087,12 @@
             # ΔCx/ΔCy (ON 세션에서만; ref_store가 있을 때)                    
             if profile.ref_store is not None and 'd_cx' in cols and 'd_cy' in cols:
                 ref_main = profile.ref_store['gamma']['main']['white'].get(gray, None)
-                if ref_main is not None:
+                if ref_main is not None and np.isfinite(cx_m) and np.isfinite(cy_m):
                     _, cx_r, cy_r = ref_main
-                    if np.isfinite(cx_m):
-                        d_cx = cx_m - cx_r
-                        self._set_item_with_spec(table_inst1, gray, cols['d_cx'], f"{d_cx:.6f}",
-                                                 is_spec_ok=(abs(d_cx) <= 0.003))
-                    if np.isfinite(cy_m):
-                        d_cy = cy_m - cy_r
-                        self._set_item_with_spec(table_inst1, gray, cols['d_cy'], f"{d_cy:.6f}",
-                                                 is_spec_ok=(abs(d_cy) <= 0.003))
+                    d_cx = cx_m - cx_r
+                    d_cy = cy_m - cy_r
+                    self._set_item_with_spec(table_inst1, gray, cols['d_cx'], f"{d_cx:.6f}", is_spec_ok=(abs(d_cx) <= 0.003))
+                    self._set_item_with_spec(table_inst1, gray, cols['d_cy'], f"{d_cy:.6f}", is_spec_ok=(abs(d_cy) <= 0.003))
 
     def _trigger_colorshift_pair(self, patch_name):
         s = self._sess
@@ -1288,16 +1334,17 @@
             except Exception as e:
                 logging.exception(e)
                     
-    def _is_gray_spec_ok(self, gray:int, *, thr_gamma=0.05, thr_c=0.003) -> bool:
-        ref = self._off_store['gamma']['main']['white'].get(gray, None)
-        on  = self._on_store ['gamma']['main']['white'].get(gray, None)
+    def _is_gray_spec_ok(self, gray:int, *, thr_gamma=0.05, thr_c=0.003,
+                        off_store=None, on_store=None) -> bool:
+        off_store = off_store if off_store is not None else self._off_store
+        on_store  = on_store  if on_store  is not None else self._on_store
+        ref = off_store['gamma']['main']['white'].get(gray, None)
+        on  = on_store ['gamma']['main']['white'].get(gray, None)
         if not ref or not on:
             return True
-
         lv_r, cx_r, cy_r = ref
         lv_o, cx_o, cy_o = on
 
-        # Cx/Cy
         dCx = abs(cx_o - cx_r) if (np.isfinite(cx_o) and np.isfinite(cx_r)) else 0.0
         dCy = abs(cy_o - cy_r) if (np.isfinite(cy_o) and np.isfinite(cy_r)) else 0.0
 
@@ -1307,7 +1354,7 @@
             G_on_g  = self._gamma_from_off_norm_at_gray(self._off_lv_vec, lv_on_g=lv_o, g=gray)
             dG = abs(G_on_g - G_ref_g) if (np.isfinite(G_on_g) and np.isfinite(G_ref_g)) else 0.0
         else:
-            dG = 0.0  # 안전 폴백
+            dG = 0.0
 
         return (dCx <= thr_c) and (dCy <= thr_c) and (dG <= thr_gamma)
         
@@ -2272,121 +2319,7 @@
         idx = np.round(np.linspace(0, 4095, 256)).astype(int)
         return np.asarray(arr4096, dtype=np.float32)[idx]
 
-    def _predictive_first_optimize(self, vac_data_json, *, n_iters=2, wG=0.4, wC=1.0, lambda_ridge=1e-3):
-        """
-        DB에서 가져온 VAC JSON을 예측모델+자코비안으로 미리 n회 보정.
-        - 감마 정확도 낮음: wG(기본 0.4)로 영향 축소
-        - return: (optimized_vac_json_str, lut_dict_4096)  혹은 (None, None) 실패 시
-        """
-        try:
-            vac_dict = json.loads(vac_data_json)
 
-            # 1️⃣ 기존 그대로 — 4096→256 다운샘플 (12bit 값 그대로)
-            lut256 = {
-                "R_Low":  self._down4096_to_256_float(vac_dict["RchannelLow"]),
-                "R_High": self._down4096_to_256_float(vac_dict["RchannelHigh"]),
-                "G_Low":  self._down4096_to_256_float(vac_dict["GchannelLow"]),
-                "G_High": self._down4096_to_256_float(vac_dict["GchannelHigh"]),
-                "B_Low":  self._down4096_to_256_float(vac_dict["BchannelLow"]),
-                "B_High": self._down4096_to_256_float(vac_dict["BchannelHigh"]),
-            }
-
-            if not hasattr(self, "A_Gamma"):
-                logging.error("[PredictOpt] Jacobian not prepared.")
-                return None, None
-
-            panel, fr, model_year = self._get_ui_meta()
-
-            K   = len(self._jac_artifacts["knots"])
-            Phi = self._stack_basis(self._jac_artifacts["knots"])
-
-            # 이 변수들은 계속 12bit 스케일 유지
-            high_R = lut256["R_High"].copy()
-            high_G = lut256["G_High"].copy()
-            high_B = lut256["B_High"].copy()
-
-            for it in range(1, n_iters + 1):
-                # ✅ 2️⃣ 여기서 예측에 넘길 때만 0~1 스케일로 정규화
-                lut256_for_pred = {
-                    k: np.asarray(v, np.float32) / 4095.0 for k, v in {
-                        "R_Low": lut256["R_Low"],
-                        "G_Low": lut256["G_Low"],
-                        "B_Low": lut256["B_Low"],
-                        "R_High": high_R,
-                        "G_High": high_G,
-                        "B_High": high_B,
-                    }.items()
-                }
-
-                # ✅ 예측은 정규화된 LUT 사용
-                y_pred = self._predict_Y0W_from_models(
-                    lut256_for_pred,
-                    panel_text=panel, frame_rate=fr, model_year=model_year
-                )
-
-                # (선택) 디버그용 CSV 저장
-                self._debug_dump_predicted_Y0W(
-                    y_pred, tag=f"iter{it}_{panel}_fr{int(fr)}_my{int(model_year)%100:02d}", save_csv=True
-                )
-
-                # 이후 부분은 기존 그대로 유지
-                d_targets = self._delta_targets_vs_OFF_from_pred(y_pred, self._off_store)
-                A_cat = np.vstack([wG*self.A_Gamma, wC*self.A_Cx, wC*self.A_Cy]).astype(np.float32)
-                b_cat = -np.concatenate([wG*d_targets["Gamma"], wC*d_targets["Cx"], wC*d_targets["Cy"]]).astype(np.float32)
-                mask  = np.isfinite(b_cat)
-                A_use = A_cat[mask,:]; b_use = b_cat[mask]
-                ATA = A_use.T @ A_use
-                rhs = A_use.T @ b_use
-                ATA[np.diag_indices_from(ATA)] += float(lambda_ridge)
-                delta_h = np.linalg.solve(ATA, rhs).astype(np.float32)
-
-                dh_R = delta_h[0:K]; dh_G = delta_h[K:2*K]; dh_B = delta_h[2*K:3*K]
-                corr_R = Phi @ dh_R; corr_G = Phi @ dh_G; corr_B = Phi @ dh_B
-
-                # ✅ 보정은 12bit 스케일에서 수행
-                high_R = np.clip(self._enforce_monotone(high_R + corr_R), 0, 4095)
-                high_G = np.clip(self._enforce_monotone(high_G + corr_G), 0, 4095)
-                high_B = np.clip(self._enforce_monotone(high_B + corr_B), 0, 4095)
-
-                logging.info(f"[PredictOpt] iter {it} done. (wG={wG}, wC={wC})")
-
-            # 6) 256→4096 업샘플 (Low는 그대로, High만 갱신)
-            new_lut_4096 = {
-                "RchannelLow":  np.asarray(vac_dict["RchannelLow"], dtype=np.float32),
-                "GchannelLow":  np.asarray(vac_dict["GchannelLow"], dtype=np.float32),
-                "BchannelLow":  np.asarray(vac_dict["BchannelLow"], dtype=np.float32),
-                "RchannelHigh": self._up256_to_4096(high_R),
-                "GchannelHigh": self._up256_to_4096(high_G),
-                "BchannelHigh": self._up256_to_4096(high_B),
-            }
-            for k in new_lut_4096:
-                new_lut_4096[k] = np.clip(np.round(new_lut_4096[k]), 0, 4095).astype(np.uint16)
-
-            # 7) UI 바로 업데이트 (차트+테이블)
-            lut_plot = {
-                "R_Low":  new_lut_4096["RchannelLow"],  "R_High": new_lut_4096["RchannelHigh"],
-                "G_Low":  new_lut_4096["GchannelLow"],  "G_High": new_lut_4096["GchannelHigh"],
-                "B_Low":  new_lut_4096["BchannelLow"],  "B_High": new_lut_4096["BchannelHigh"],
-            }
-            time.sleep(5)
-            self._update_lut_chart_and_table(lut_plot)
-
-            # 8) JSON 텍스트로 재조립 (TV write용)
-            vac_json_optimized = self.build_vacparam_std_format(base_vac_dict=vac_dict, new_lut_tvkeys=new_lut_4096)
-
-            # 9) 로딩 GIF 정지/완료 아이콘
-            self._step_done(2)
-
-            return vac_json_optimized, new_lut_4096
-
-        except Exception as e:
-            logging.exception("[PredictOpt] failed")
-            # 로딩 애니 정리
-            try:
-                self._step_done(2)
-            except Exception:
-                pass
-            return None, None
         
     def _get_ui_meta(self):
         """
@@ -2485,7 +2418,29 @@
         X = np.vstack(X_rows).astype(np.float32)
         ctx = {"panel_text": panel_text, "frame_rate": frame_rate, "model_year_2digit": model_year_2digit}
         return X, lut256_norm, ctx
-        
+    
+    def _debug_dump_predicted_Y0W(self, y_pred: dict, *, tag: str = "", save_csv: bool = True):
+        """
+        예측된 'W' 패턴 256포인트 (Gamma, Cx, Cy)를 로그로 요약 + (옵션) CSV 저장
+
+        Parameters
+        ----------
+        y_pred : {"Gamma": (256,), "Cx": (256,), "Cy": (256,)}
+        tag    : 로그/파일명 식별용 태그 (예: "iter1_INX_60_Y26")
+        save_csv : True면 임시 CSV 파일로 저장 후 경로 로깅
+        """
+        import numpy as np, pandas as pd, tempfile, os, logging
+
+        # 안전 가드
+        req_keys = ("Gamma", "Cx", "Cy")
+        if not all(k in y_pred for k in req_keys):
+            logging.warning(f"[Predict/Debug] y_pred keys invalid: {list(y_pred.keys())}")
+            return
+
+        g = np.asarray(y_pred["Gamma"], dtype=np.float32)
+        cx= np.asarray(y_pred["Cx"],    dtype=np.float32)
+        cy= np.asarray(y_pred["Cy"],    dtype=np.float32)
+
         # ── 1) 통계 요약 로그
         def _stat(a, name):
             with np.errstate(invalid="ignore"):
@@ -2511,6 +2466,49 @@
                 csv_path = f.name
             logging.info(f"[Predict/Debug] Y0(W) 256pts saved → {csv_path}")
     
+    # ===== [ADD] 런타임 X 디버그 로깅 =====
+    def _debug_log_runtime_X(self, X: np.ndarray, ctx: dict, tag="[RUNTIME X]"):
+        # 기대: X.shape=(256,18)
+        try:
+            D = X.shape[1]
+        except Exception:
+            D = None
+        logging.debug(f"{tag} shape={getattr(X,'shape',None)}, dim={D}")
+        if X is None or X.shape != (256, 18):
+            logging.warning(f"{tag} 스키마 불일치: 기대 (256,18), 실제 {getattr(X,'shape',None)}")
+
+        # 컬럼 해석을 위해 인덱스 슬라이스
+        idx = {
+            "LUT": slice(0,6),
+            "panel_onehot": slice(6,11),
+            "fr": 11,
+            "my": 12,
+            "gray_norm": 13,
+            "p_oh": slice(14,18),
+        }
+
+        # 패널 원핫 합/원핫성
+        p_sum = X[:, idx["panel_onehot"]].sum(axis=1)
+        uniq = np.unique(p_sum)
+        logging.debug(f"{tag} panel_onehot sum unique: {uniq[:8]} (expect 0 or 1)")
+        logging.debug(f"{tag} ctx: panel='{ctx.get('panel_text')}', fr={ctx.get('frame_rate')}, my(2digit)={ctx.get('model_year_2digit')}")
+
+        # 샘플 행 (0, 128, -1) & tail12
+        def _fmt_row(i):
+            r = X[i]
+            lut = ", ".join(f"{v:.4f}" for v in r[idx["LUT"]])
+            tail = ", ".join(f"{v:.4f}" for v in r[-12:])
+            return f"idx={i:3d} | LUT6=[{lut}] | tail12=[{tail}]"
+        logging.debug(f"{tag} sample: {_fmt_row(0)}")
+        logging.debug(f"{tag} sample: {_fmt_row(128)}")
+        logging.debug(f"{tag} sample: {_fmt_row(255)}")
+
+        # 마지막 10개 행의 tail & 회귀 타깃이 없으니 gray_norm만 체크
+        for i in range(246, 256):
+            r = X[i]
+            tail12 = tuple(float(x) for x in r[-12:])
+            logging.debug(f"{tag} last10 idx={i:3d} | gray_norm={r[idx['gray_norm']]:.4f} | tail12={tail12}")
+        
     def _set_icon_scaled(self, label, pixmap: QPixmap):
         if not label or pixmap is None or pixmap.isNull():
             return
@@ -2604,9 +2602,6 @@
             self.A_Gamma = self._build_A_from_artifacts(artifacts, "dGamma")   # (256, 6K)
             self.A_Cx    = self._build_A_from_artifacts(artifacts, "dCx")
             self.A_Cy    = self._build_A_from_artifacts(artifacts, "dCy")
-            
-            # # 예측 모델 로드
-            # self.models_Y0_bundle = self._load_prediction_models()
 
         except FileNotFoundError as e:
             logging.error(f"[VAC Optimization] Jacobian file not found: {e}")
@@ -2628,3 +2623,10 @@
         self._run_off_baseline_then_on()
     #│                                                                                              │
     #└──────────────────────────────────────────────────────────────────────────────────────────────┘
+    #################################################################################################
+
+위 최적화 루프를 새롭게 계산한 자코비안 행렬 사용을 위해 다음과 같이 수정하려고 합니다:
+1. 새롭게 만든 자코비안행렬.npy 파일 로드 필요
+2. 한 Gray가 NG날 때마다 보정하고 TV Writing 하는 건 시간이 너무 많이 소요되므로, VAC OFF 측정 -> VAC ON 측정 -> NG인 GRAY 뽑기 -> 자코비안 행렬을 통해 NG인 Gray에서 각 Cx, Cy, Gamma를 VAC OFF와 같게 하기 위해 얼마나 옮겨야 되는지 계산 -> NG인 Gray에 매핑되는 LUT index에서의 (실행 py파일 폴더의 LUT_index_mapping.csv 파일에 저장되어 있음) R_High/G_High/B_High를 얼마나 바꿔야 하는지 계산 -> 모든 NG Gray에 대한 LUT 보정 -> TV Writing
+3. Gray 0,1,254,255는 Spec in 아니어도 괜찮음. 측정값 업데이트 시 blue/red 셀 색채우기 없이 디폴트 셀 서식 그대로 값만 업데이트 되도록 수정
+4. 0~255에 매핑되는 LUT index에서의 LUT 값은 단조증가임. 즉 i<j일때는 LUT(i)<LUT(j) 조건을 지키면서 보정되어야 함.
