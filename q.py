@@ -1,3 +1,68 @@
+def _start_fine_correction_for_ng_list(self, ng_grays, thr_gamma=0.05, thr_c=0.003):
+    """
+    batch Jacobian 보정 후, NG gray 개수가 10개 이하일 때,
+    해당 gray들만 대상으로 per-gray 보정을 수행하는 파인 튜닝 단계.
+    """
+    # unique + 정렬
+    ng_sorted = sorted({int(g) for g in ng_grays})
+    if not ng_sorted:
+        logging.info("[FINE] NG gray list empty → nothing to do")
+        return
+
+    logging.info(f"[FINE] start fine correction session for NG grays: {ng_sorted}")
+
+    # fine 모드 ON
+    self._fine_mode = True
+    self._fine_ng_list = ng_sorted
+
+    # ON 차트 초기화 (원하면 유지해도 됨)
+    self.vac_optimization_gamma_chart.reset_on()
+    self.vac_optimization_cie1976_chart.reset_on()
+
+    profile_fine = SessionProfile(
+        legend_text="CORR_FINE",
+        cie_label=None,
+        table_cols={
+            "lv":4, "cx":5, "cy":6, "gamma":7,
+            "d_cx":8, "d_cy":9, "d_gamma":10
+        },
+        ref_store=self._off_store
+    )
+
+    def _after_fine(store_corr):
+        # fine 세션에서 만들어진 ON 데이터를 on_store로 저장
+        self._step_done(4)
+        self._on_store = store_corr
+
+        # fine 모드 끝 (이후 세션은 per-gray 자동보정 안 함)
+        self._fine_mode = False
+
+        # 최종 Spec 평가 한 번 더 (추가 보정은 하지 않기 위해 max_iters=0)
+        self._step_start(5)
+        self._spec_thread = SpecEvalThread(
+            self._off_store,
+            self._on_store,
+            thr_gamma=thr_gamma,
+            thr_c=thr_c,
+            parent=self
+        )
+        self._spec_thread.finished.connect(
+            # max_iters=0 → _on_spec_eval_done 안에서 추가 보정 루프 없음
+            lambda ok, m: self._on_spec_eval_done(ok, m, iter_idx=0, max_iters=0)
+        )
+        self._spec_thread.start()
+
+    self._step_start(4)
+    self.start_viewing_angle_session(
+        profile=profile_fine,
+        gray_levels=ng_sorted,          # 🔸 NG gray만 측정
+        gamma_patterns=('white',),
+        colorshift_patterns=op.colorshift_patterns,
+        first_gray_delay_ms=3000,
+        cs_settle_ms=1000,
+        on_done=_after_fine
+    )
+
 def _on_spec_eval_done(self, spec_ok, metrics, iter_idx, max_iters):
     try:
         ng_grays = []
