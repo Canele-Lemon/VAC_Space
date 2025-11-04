@@ -1,27 +1,46 @@
 def _load_lut_mapping_high(self):
     """
-    실행 py 파일 폴더에 있는 LUT_index_mapping.csv 를 읽어
-    각 gray별 High LUT index를 저장.
-    
-    CSV 예시 가정:
-        gray,R_High,G_High,B_High
-        0,0,0,0
-        1,16,16,16
+    실행 py 파일 폴더 내 'LUT_index_mapping.csv'를 읽어
+    gray(0~255) → 12bit LUT index 매핑 배열을 로드.
+
+    CSV 예시:
+        8bit gray,12bit LUT index
+        0,0
+        1,16
         ...
+        255,4095
+
+    모든 채널(R/G/B)이 동일한 매핑을 사용하는 것으로 가정.
     """
     if hasattr(self, "_lut_map_high") and self._lut_map_high is not None:
         return  # 이미 로드됨
 
-    csv_path = cf.get_normalized_path(__file__, '.', 'LUT_index_mapping.csv')
+    # 🔹 CSV 경로: 실행 중 py 파일 기준 같은 폴더
+    csv_path = os.path.join(os.path.dirname(__file__), "LUT_index_mapping.csv")
     if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"LUT_index_mapping.csv not found: {csv_path}")
+        raise FileNotFoundError(f"[LUT MAP] LUT_index_mapping.csv not found: {csv_path}")
 
+    # 🔹 CSV 읽기
     df = pd.read_csv(csv_path)
 
-    # 🔧 컬럼명은 실제 파일에 맞게 조정 필요
+    # 🔹 컬럼명 정규화 (혹시 공백/대소문자 달라도 대응)
+    df.columns = [c.strip().lower() for c in df.columns]
+    if not ("8bit gray" in df.columns and "12bit lut index" in df.columns):
+        raise ValueError(f"[LUT MAP] Unexpected columns: {df.columns}")
+
+    # 🔹 numpy 배열로 변환
+    gray_col = df["8bit gray"].to_numpy(dtype=np.int32)
+    idx_col  = df["12bit lut index"].to_numpy(dtype=np.int32)
+
+    # 🔹 gray 순서대로 정렬 (혹시 섞여 있으면)
+    sort_idx = np.argsort(gray_col)
+    idx_col_sorted = idx_col[sort_idx]
+
+    # 🔹 모든 채널에 동일 매핑 적용
     self._lut_map_high = {
-        "R": df["R_High"].to_numpy(dtype=np.int32),
-        "G": df["G_High"].to_numpy(dtype=np.int32),
-        "B": df["B_High"].to_numpy(dtype=np.int32),
+        "R": idx_col_sorted,
+        "G": idx_col_sorted,
+        "B": idx_col_sorted,
     }
-    logging.info(f"[LUT MAP] loaded {csv_path}, shape={df.shape}")
+
+    logging.info(f"[LUT MAP] loaded {csv_path}, shape={df.shape}, range={idx_col_sorted.min()}~{idx_col_sorted.max()}")
