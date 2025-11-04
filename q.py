@@ -1,21 +1,38 @@
-if __name__ == "__main__":
-    # 직접 실행용 (명령행 인자 없이)
-    pk_list = parse_pks("2456-2677,!2456")  # ✅ 여기서 PK 지정
+def main():
+    # ========================================================================================= #
+    #                                         변수 지정                                        
+    # ========================================================================================= #
+    # 1. 학습에 사용할 PK(s)
+    pks = "2456-2677,!2456"
+    pk_list = parse_pks(pks)
+    
+    # 2. REF LUT PK
     ref_pk = 2582
+    
+    # 3. lam
+    lam = 1e-3
+    
+    # 4. delta-window
+    delta_window = 50
+    
+    # 5. gauss-sigma
+    gauss_sigma = 30
+    
+    # 6. min_samples
+    min_samples = 3
+    # ========================================================================================= #
 
     jac, df = estimate_jacobians_per_gray(
-        pk_list=pk_list,
-        ref_pk=ref_pk,
-        lam=1e-3,
-        delta_window=50,
-        gauss_sigma=30,
-        min_samples=3
-    )
-
-    out_csv, out_npy = make_default_paths(ref_pk, lam=1e-3,
-                                          delta_window=50, gauss_sigma=30)
+        pk_list=pk_list, 
+        ref_pk=ref_pk, 
+        lam=lam, 
+        delta_window=delta_window, 
+        gauss_sigma=gauss_sigma,
+        min_samples=min_samples
+        )
+    out_csv, out_npy = make_default_paths(ref_pk=ref_pk, lam=lam, delta_window=delta_window, gauss_sigma=gauss_sigma)
     df.to_csv(out_csv, index=False, encoding="utf-8-sig")
-
+    
     # NPY 저장 (J 번들)
     J_dense = np.full((256, 3, 3), np.nan, dtype=np.float32)
     n_arr   = np.zeros(256, dtype=np.int32)
