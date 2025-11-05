@@ -11,7 +11,7 @@ from itertools import product
 # =========================
 LOW_LUT_CSV   = r"D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\Gen VAC\Random VAC\4. 기준 LUT + OFFSET\기준 LUT\LUT_low_values_SIN1300.csv"
 HIGH_KNOT_CSV   = r"D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\Gen VAC\Random VAC\4. 기준 LUT + OFFSET\기준 LUT\LUT_2_high_34knots_values.csv"
-OUTPUT_DIR      = r"D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\Gen VAC\Random VAC\4. 기준 LUT + OFFSET\CSV"
+OUTPUT_DIR      = r"D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\Gen VAC\Random VAC\4. 기준 LUT + OFFSET\CSV_1105"
 BASE_NAME       = "LUT_2"
 
 FULL_POINTS = 4096
@@ -56,7 +56,7 @@ def _build_single_lut(R_OFFSET, G_OFFSET, B_OFFSET, base_name):
 
     # Locks: 0, 32, 33 → 0 / 4095 / 4095
     LOCKED = {0, 32, 33}
-    FIXED = {0:0.0, 32:4095.0, 33:4095.0}
+    FIXED = {0:0.0, 32:4092.0, 33:4095.0}
     for i,v in FIXED.items():
         Rk[i]=v; Gk[i]=v; Bk[i]=v
 
@@ -71,6 +71,10 @@ def _build_single_lut(R_OFFSET, G_OFFSET, B_OFFSET, base_name):
 
     for i,v in FIXED.items():
         Rk[i]=v; Gk[i]=v; Bk[i]=v
+        
+    for ch in (Rk, Gk, Bk):
+        if ch[31] > ch[32]:
+            ch[31] = ch[32]
 
     Rk, Gk, Bk = _enforce_monotone(Rk), _enforce_monotone(Gk), _enforce_monotone(Bk)
     Rh = np.clip(_interp_knots_to_4096(gray12, Rk), 0, 4095)
@@ -96,7 +100,7 @@ def _build_single_lut(R_OFFSET, G_OFFSET, B_OFFSET, base_name):
 # 배치 조합 루프
 # ───────────────────────
 def main():
-    offset_values = list(range(-100, 101, 5))  # -100~100 step 5 → 41개
+    offset_values = list(range(-100, 101, 10))  # -100~100 step 5 → 41개
     # 7가지 조합 (R/G/B 각각 포함여부)
     channel_combos = [
         ("R",), ("G",), ("B",),
