@@ -1,5 +1,7 @@
 def main():
-    offset_values = list(range(-900, 901, 50))  # -900~900 step 50
+    # 1) offset 범위 (원하시면 여기서 -900~900, step 50으로 바꾸면 됨)
+    offset_values = list(range(-100, 101, 10))  # 예: -100 ~ 100, step 10
+
     channel_combos = [
         ("R",), ("G",), ("B",),
         ("R","G"), ("R","B"), ("G","B"),
@@ -7,8 +9,9 @@ def main():
     ]
     base_name = BASE_NAME
 
-    # ① (R,G,B) 조합 중복 제거
+    # 2) 먼저 (R,G,B) offset 조합을 unique하게 모으기
     unique_offsets = set()
+
     for combo in channel_combos:
         for off in offset_values:
             R_off = off if "R" in combo else 0
@@ -16,18 +19,25 @@ def main():
             B_off = off if "B" in combo else 0
             unique_offsets.add((R_off, G_off, B_off))
 
-    # ② 최종 unique set 출력
+    # 혹시 offset_values에 0이 없어도 대비해서 기준 (0,0,0)은 무조건 추가
+    unique_offsets.add((0, 0, 0))
+
     print(f"[INFO] unique LUT set: {len(unique_offsets)} combinations")
 
-    # ③ 실제 LUT 생성 루프
     total = 0
     for (R_off, G_off, B_off) in sorted(unique_offsets):
         name_parts = [base_name]
-        if R_off != 0: name_parts.append(f"R{R_off:+d}")
-        if G_off != 0: name_parts.append(f"G{G_off:+d}")
-        if B_off != 0: name_parts.append(f"B{B_off:+d}")
-        if len(name_parts) == 1:  # all zero
+
+        # 기준 LUT라면 Base라는 suffix만 붙이기
+        if R_off == 0 and G_off == 0 and B_off == 0:
             name_parts.append("Base")
+        else:
+            if R_off != 0:
+                name_parts.append(f"R{R_off:+d}")
+            if G_off != 0:
+                name_parts.append(f"G{G_off:+d}")
+            if B_off != 0:
+                name_parts.append(f"B{B_off:+d}")
 
         fname = "_".join(name_parts)
         _build_single_lut(R_off, G_off, B_off, fname)
