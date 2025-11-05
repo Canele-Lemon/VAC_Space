@@ -9,18 +9,32 @@
         6) vac_chart_colorShift_3      (Grouped bars)
         """
         # ===== 공통: white/main 시리즈 추출 =====
-        def _extract_white(series_store):
+        def _extract_white(series_store, view_angle="front"):
+            """
+            Extract Lv, Cx, Cy arrays from white pattern data.
+            view_angle: "front" → use 'main' data, "side" → use 'sub' data
+            """
             lv = np.full(256, np.nan, np.float64)
             cx = np.full(256, np.nan, np.float64)
             cy = np.full(256, np.nan, np.float64)
+
+            key = "main" if view_angle == "front" else "sub"
+
             for g in range(256):
-                tup = series_store['gamma']['main']['white'].get(g, None)
+                tup = series_store['gamma'][key]['white'].get(g, None)
                 if tup:
-                    lv[g], cx[g], cy[g] = float(tup[0]), float(tup[1]), float(tup[2])
+                    lv[g] = float(tup[0])
+                    cx[g] = float(tup[1])
+                    cy[g] = float(tup[2])
+
             return lv, cx, cy
 
         lv_off, cx_off, cy_off = _extract_white(off_store)
-        lv_on , cx_on , cy_on  = _extract_white(on_store)
+        lv_on, cx_on, cy_on = _extract_white(on_store)
+
+        lv_off_side, cx_off_side, cy_off_side = _extract_white(off_store, view_angle="side")
+        lv_on_side, cx_on_side, cy_on_side = _extract_white(on_store , view_angle="side")
+
 
         # ===== 1) ChromaticityDiff 표: pass/total =====
         G_off = self._compute_gamma_series(lv_off)
@@ -196,8 +210,8 @@
 
             return np.asarray(mids, dtype=np.float64), np.asarray(slopes, dtype=np.float64)
 
-        mids_off, slopes_off = _block_slopes(lv_off, g_start=88, g_stop=232, step=8)
-        mids_on , slopes_on  = _block_slopes(lv_on , g_start=88, g_stop=232, step=8)
+        mids_off, slopes_off = _block_slopes(lv_off_side, g_start=88, g_stop=232, step=8)
+        mids_on, slopes_on = _block_slopes(lv_on_side, g_start=88, g_stop=232, step=8)
 
         avg_off = float(np.nanmean(slopes_off)) if np.isfinite(slopes_off).any() else float('nan')
         avg_on  = float(np.nanmean(slopes_on )) if np.isfinite(slopes_on ).any() else float('nan')
