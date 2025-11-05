@@ -1,92 +1,36 @@
-class ReadVACdataThread(QThread):
-    data_read = Signal(dict)
-    error_occurred = Signal(str)
+def main():
+    offset_values = list(range(-900, 901, 50))  # -900~900 step 50
+    channel_combos = [
+        ("R",), ("G",), ("B",),
+        ("R","G"), ("R","B"), ("G","B"),
+        ("R","G","B")
+    ]
+    base_name = BASE_NAME
 
-    def __init__(self, parent, vac_data_path=None, ser_tv=None, vacdataName=None):
-        super().__init__(parent)
-        self.parent = parent
-        self.vac_data_path = vac_data_path
-        self.ser_tv = ser_tv
-        self.vacdataName = vacdataName
+    # ① (R,G,B) 조합 중복 제거
+    unique_offsets = set()
+    for combo in channel_combos:
+        for off in offset_values:
+            R_off = off if "R" in combo else 0
+            G_off = off if "G" in combo else 0
+            B_off = off if "B" in combo else 0
+            unique_offsets.add((R_off, G_off, B_off))
 
-    def run(self):
-        try:
-            vac_debug_path = "/mnt/lg/cmn_data/panelcontroller/db/vac_debug"
-            self.parent.send_command(self.ser_tv, 's')
-            output = self.parent.check_directory_exists(vac_debug_path)
-            
-            if output == "exists":
-                vac_data_path = vac_debug_path
-            elif output == 'not_exists':
-                vac_data_path = "/etc/panelcontroller/db/vac"
-            else:
-                self.error_occurred.emit(f"Error checking VAC debug path: {output}")
-                return
-            
-            vacparam = self.parent.send_command(self.ser_tv, f'cat {vac_data_path}/{self.vacdataName}', output_limit=1000)
-            
-            if vacparam:
-                vacparam = self._clean_vac_output(vacparam)
-                vacparam = json.loads(vacparam)
-                self.data_read.emit(vacparam)
-            else:
-                self.error_occurred.emit("VAC data read failed: empty response")
-        except json.JSONDecodeError as e:
-            self.error_occurred.emit(f"JSON decode error while reading VAC data: {e}")
-        except Exception as e:
-            self.error_occurred.emit(f"Unexpected error while reading VAC data: {e}")
+    # ② 최종 unique set 출력
+    print(f"[INFO] unique LUT set: {len(unique_offsets)} combinations")
 
+    # ③ 실제 LUT 생성 루프
+    total = 0
+    for (R_off, G_off, B_off) in sorted(unique_offsets):
+        name_parts = [base_name]
+        if R_off != 0: name_parts.append(f"R{R_off:+d}")
+        if G_off != 0: name_parts.append(f"G{G_off:+d}")
+        if B_off != 0: name_parts.append(f"B{B_off:+d}")
+        if len(name_parts) == 1:  # all zero
+            name_parts.append("Base")
 
-    def validate_vac_data(self, vacdata):
-        if not vacdata.strip():
-            return None, "The selected file is empty."
-        
-        try:
-            vacdata_dict = json.loads(vacdata)
-        except json.JSONDecodeError as e:
-            return None, f"Invalid JSON format: {str(e)}"
-        
-        required_keys = {
-            "DRV_valc_major_ctrl": list,
-            "DRV_valc_pattern_ctrl_0": list,
-            "DRV_valc_pattern_ctrl_1": list,
-            "DRV_valc_sat_ctrl": list,
-            "DRV_valc_hpf_ctrl_0": list,
-            "DRV_valc_hpf_ctrl_1": int,
-            "RchannelLow": list,
-            "RchannelHigh": list,
-            "GchannelLow": list,
-            "GchannelHigh": list,
-            "BchannelLow": list,
-            "BchannelHigh": list
-        }
-        for key, data_type in required_keys.items():
-            if key not in vacdata_dict:
-                return None, f'Key missing error: "{key}" data is not present.'
-            if not isinstance(vacdata_dict[key], data_type):
-                return None, f'Data type error: "{key}" should be of type {data_type.__name__}. \n(※ Current type: {type(vacdata_dict[key]).__name__})'
-        
-        if len(vacdata_dict["DRV_valc_major_ctrl"]) != 2:
-            return None, 'Invalid data length for "DRV_valc_major_ctrl"'
-        if len(vacdata_dict["DRV_valc_pattern_ctrl_0"]) != 2:
-            return None, 'Invalid data length for "DRV_valc_pattern_ctrl_0"'
-        if len(vacdata_dict["DRV_valc_pattern_ctrl_1"]) != 8 or not all(len(sublist) == 16 for sublist in vacdata_dict["DRV_valc_pattern_ctrl_1"]):
-            return None, 'Invalid data length for "DRV_valc_pattern_ctrl_1"'
-        if len(vacdata_dict["DRV_valc_sat_ctrl"]) != 16:
-            return None, 'Invalid data length for "DRV_valc_sat_ctrl"'
-        if len(vacdata_dict["DRV_valc_hpf_ctrl_0"]) != 16:
-            return None, 'Invalid data length for "DRV_valc_hpf_ctrl_0"'
-        if len(vacdata_dict["RchannelLow"]) != 4096:
-            return None, 'Invalid data length for "RchannelLow"'
-        if len(vacdata_dict["RchannelHigh"]) != 4096:
-            return None, 'Invalid data length for "RchannelHigh"'
-        if len(vacdata_dict["GchannelLow"]) != 4096:
-            return None, 'Invalid data length for "GchannelLow"'
-        if len(vacdata_dict["GchannelHigh"]) != 4096:
-            return None, 'Invalid data length for "GchannelHigh"'
-        if len(vacdata_dict["BchannelLow"]) != 4096:
-            return None, 'Invalid data length for "BchannelLow"'
-        if len(vacdata_dict["BchannelHigh"]) != 4096:
-            return None, 'Invalid data length for "BchannelHigh"'
-    
-        return vacdata_dict, None
+        fname = "_".join(name_parts)
+        _build_single_lut(R_off, G_off, B_off, fname)
+        total += 1
+
+    print(f"\n[총 {total}개 LUT 생성 완료 ✅]")
