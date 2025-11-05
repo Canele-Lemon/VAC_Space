@@ -1,19 +1,11 @@
-def _after_off(store_off):
-    self._off_store = store_off
-    lv_off = np.zeros(256, dtype=np.float64)
-    for g in range(256):
-        tup = store_off['gamma']['main']['white'].get(g, None)
-        lv_off[g] = float(tup[0]) if tup else np.nan
+if pattern == 'white':
+    is_on_session = (profile.ref_store is not None)
+    is_fine_mode = getattr(self, "_fine_mode", False)
 
-    # 기존: 전체 gamma series
-    self._gamma_off_vec = self._compute_gamma_series(lv_off)
-
-    # ★추가: 이후 ΔGamma 스펙 평가용으로 OFF 휘도 벡터 / max 저장
-    self._lv_off_vec = lv_off.copy()
-    try:
-        self._lv_off_max = float(np.nanmax(lv_off[1:]))  # 0gray는 빼고 최대값
-    except (ValueError, TypeError):
-        self._lv_off_max = float('nan')
-
-    self._step_done(1)
-    ...
+    # ★ ON 세션의 0gray(main) 휘도 저장 → 이후 정규화에 사용
+    if is_on_session:
+        ref_store = profile.ref_store
+        # main role 기준으로 0gray 휘도 사용
+        lv0_main, _, _ = store['gamma']['main']['white'].get(0, (np.nan, np.nan, np.nan))
+        if np.isfinite(lv0_main):
+            self._on_lv0_current = float(lv0_main)
