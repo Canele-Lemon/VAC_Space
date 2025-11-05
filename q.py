@@ -1,339 +1,157 @@
-def _update_spec_views(self, iter_idx, off_store, on_store, thr_gamma=0.05, thr_c=0.003):
-    """
-    결과 표/차트 갱신
-    1) vac_table_chromaticityDiff  (ΔCx/ΔCy/ΔGamma pass/total)
-    2) vac_chart_chromaticityDiff  (Cx,Cy vs gray: OFF/ON)
-    3) vac_table_gammaLinearity    (OFF/ON, 88~232 구간별 슬로프 평균)
-    4) vac_chart_gammaLinearity    (8gray 블록 평균 슬로프 dot+line)
-    5) vac_table_colorShift_3      (4 skin 패턴 Δu′v′, OFF/ON, 평균)
-    6) vac_chart_colorShift_3      (Grouped bars)
-    """
+vac write가 잘 안되는 경우가 있어서, _write_vac_to_tv를 강화하려고 해요
 
-    # ===== 공통: white 시리즈 추출 (정면 / 측면) =====
-    def _extract_white(series_store, view_angle="front"):
-        """
-        Extract Lv, Cx, Cy arrays from white pattern data.
-        view_angle: "front" → use 'main' data, "side" → use 'sub' data
-        """
-        lv = np.full(256, np.nan, np.float64)
-        cx = np.full(256, np.nan, np.float64)
-        cy = np.full(256, np.nan, np.float64)
+    def _apply_vac_from_db_and_measure_on(self):
+        self._step_start(2)
+        
+        # panel = self.ui.vac_cmb_PanelMaker.currentText().strip()
+        # fr = self.ui.vac_cmb_FrameRate.currentText().strip()
+        # vac_pk, vac_version, vac_data = self._fetch_vac_by_model(panel, fr)
+        # if vac_data is None:
+        #     logging.error(f"[DB] {panel}+{fr} 조합으로 매칭되는 VAC Data가 없습니다 - 최적화 루프 종료")
+        #     return
 
-        key = "main" if view_angle == "front" else "sub"
+        vac_version, vac_data = self._fetch_vac_by_vac_info_pk(2582)
+        if vac_data is None:
+            logging.error("[DB] VAC 데이터 로딩 실패 - 최적화 루프 종료")
+            return
 
-        for g in range(256):
-            tup = series_store['gamma'][key]['white'].get(g, None)
-            if tup:
-                lv[g] = float(tup[0])
-                cx[g] = float(tup[1])
-                cy[g] = float(tup[2])
+        vac_dict = json.loads(vac_data)
+        self._vac_dict_cache = vac_dict
+        lut_dict_plot = {key.replace("channel", "_"): v for key, v in vac_dict.items() if "channel" in key}
+        self._update_lut_chart_and_table(lut_dict_plot)
+        self._step_done(2)
 
-        return lv, cx, cy
+        def _after_write(ok, msg):
+            if not ok:
+                logging.error(f"[VAC Writing] DB fetch VAC 데이터 Writing 실패: {msg} - 최적화 루프 종료")
+                return
+            
+            logging.info(f"[VAC Writing] DB fetch VAC 데이터 Writing 완료: {msg}")
+            logging.info("[VAC Reading] VAC Reading 시작")
+            self._read_vac_from_tv(_after_read)
 
-    # 정면 기준 (chromaticity / gamma spec)
-    lv_off, cx_off, cy_off = _extract_white(off_store, view_angle="front")
-    lv_on,  cx_on,  cy_on  = _extract_white(on_store,  view_angle="front")
+        def _after_read(read_vac_dict):
+            if not read_vac_dict:
+                logging.error("[VAC Reading] VAC Reading 실패 - 최적화 루프 종료")
+                return
+            logging.info("[VAC Reading] VAC Reading 완료. Written VAC 데이터와의 일치 여부를 판단합니다.")
+            mismatch_keys = self._verify_vac_data_match(written_data=vac_dict, read_data=read_vac_dict)
 
-    # 측면 기준 (gamma linearity 용)
-    lv_off_side, cx_off_side, cy_off_side = _extract_white(off_store, view_angle="side")
-    lv_on_side,  cx_on_side,  cy_on_side  = _extract_white(on_store,  view_angle="side")
-
-    # ===== 1) ChromaticityDiff 표: pass/total =====
-    G_off = self._compute_gamma_series(lv_off)
-    G_on  = self._compute_gamma_series(lv_on)
-
-    dG  = G_on - G_off
-    dCx = cx_on - cx_off
-    dCy = cy_on - cy_off
-
-    # --- ΔCx/ΔCy: 소수점 4번째 자리 반올림 기준, edge gray(0,1,254,255) 완전 제외 ---
-    def _pass_total_chroma(d_arr, thr):
-        mask = np.isfinite(d_arr)
-        # edge grays 제외
-        for g in (0, 1, 254, 255):
-            if 0 <= g < len(mask):
-                mask[g] = False
-
-        vals = d_arr[mask]
-        tot = int(np.sum(mask))
-        if tot <= 0:
-            return 0, 0
-
-        rounded = np.round(np.abs(vals), 4)
-        thr_r = round(float(thr), 4)
-        ok = int(np.sum(rounded <= thr_r))
-        return ok, tot
-
-    # --- ΔGamma: 소수점 3번째 자리 반올림 기준, edge gray(0,1,254,255) 완전 제외 ---
-    def _pass_total_gamma(d_arr, thr):
-        mask = np.isfinite(d_arr)
-        for g in (0, 1, 254, 255):
-            if 0 <= g < len(mask):
-                mask[g] = False
-
-        vals = d_arr[mask]
-        tot = int(np.sum(mask))
-        if tot <= 0:
-            return 0, 0
-
-        rounded = np.round(np.abs(vals), 3)
-        thr_r = round(float(thr), 3)
-        ok = int(np.sum(rounded <= thr_r))
-        return ok, tot
-
-    ok_cx, tot_cx = _pass_total_chroma(dCx, thr_c)
-    ok_cy, tot_cy = _pass_total_chroma(dCy, thr_c)
-    ok_g,  tot_g  = _pass_total_gamma(dG,  thr_gamma)
-
-    # 표: (제목/헤더 제외) 2열×(2~4행) 채우기
-    def _set_text(tbl, row, col, text):
-        self._ensure_row_count(tbl, row)
-        item = tbl.item(row, col)
-        if item is None:
-            item = QTableWidgetItem()
-            tbl.setItem(row, col, item)
-        item.setText(text)
-
-    tbl_ch = self.ui.vac_table_chromaticityDiff
-    _set_text(tbl_ch, 1, 1, f"{ok_cx}/{tot_cx}")   # 2행,2열 ΔCx
-    _set_text(tbl_ch, 2, 1, f"{ok_cy}/{tot_cy}")   # 3행,2열 ΔCy
-    _set_text(tbl_ch, 3, 1, f"{ok_g}/{tot_g}")     # 4행,2열 ΔGamma
-
-    logging.debug(
-        f"{iter_idx}차 보정 결과: "
-        f"Cx:{ok_cx}/{tot_cx}, "
-        f"Cy:{ok_cy}/{tot_cy}, "
-        f"Gamma:{ok_g}/{tot_g}"
-    )
-
-    # ===== 2) ChromaticityDiff 차트: Cx/Cy vs gray (OFF/ON, 정면 기준) =====
-    x = np.arange(256)
-
-    self.vac_optimization_chromaticity_chart.set_series(
-        "OFF_Cx", x, cx_off,
-        marker=None,
-        linestyle='--',
-        label='OFF Cx'
-    )
-    self.vac_optimization_chromaticity_chart.lines["OFF_Cx"].set_color('orange')
-
-    self.vac_optimization_chromaticity_chart.set_series(
-        "ON_Cx", x, cx_on,
-        marker=None,
-        linestyle='-',
-        label='ON Cx'
-    )
-    self.vac_optimization_chromaticity_chart.lines["ON_Cx"].set_color('orange')
-
-    self.vac_optimization_chromaticity_chart.set_series(
-        "OFF_Cy", x, cy_off,
-        marker=None,
-        linestyle='--',
-        label='OFF Cy'
-    )
-    self.vac_optimization_chromaticity_chart.lines["OFF_Cy"].set_color('green')
-
-    self.vac_optimization_chromaticity_chart.set_series(
-        "ON_Cy", x, cy_on,
-        marker=None,
-        linestyle='-',
-        label='ON Cy'
-    )
-    self.vac_optimization_chromaticity_chart.lines["ON_Cy"].set_color('green')
-
-    # y축 autoscale with margin 1.1 (chromaticity)
-    all_y = np.concatenate([
-        np.asarray(cx_off, dtype=np.float64),
-        np.asarray(cx_on,  dtype=np.float64),
-        np.asarray(cy_off, dtype=np.float64),
-        np.asarray(cy_on,  dtype=np.float64),
-    ])
-    all_y = all_y[np.isfinite(all_y)]
-    if all_y.size > 0:
-        ymin = float(np.min(all_y))
-        ymax = float(np.max(all_y))
-        center = 0.5 * (ymin + ymax)
-        half = 0.5 * (ymax - ymin)
-        if half <= 0:
-            half = max(0.001, abs(center) * 0.05)
-        half *= 1.1  # 10% margin
-        new_min = center - half
-        new_max = center + half
-
-        ax_chr = self.vac_optimization_chromaticity_chart.ax
-        cs.MatFormat_Axis(
-            ax_chr,
-            min_val=np.float64(new_min),
-            max_val=np.float64(new_max),
-            tick_interval=None,
-            axis='y'
-        )
-        ax_chr.relim()
-        ax_chr.autoscale_view(scalex=False, scaley=False)
-        self.vac_optimization_chromaticity_chart.canvas.draw()
-
-    # ===== 3) GammaLinearity 표: 88~232, 8gray 블록 평균 슬로프 (측면 기준) =====
-    def _normalized_luminance(lv_vec):
-        """
-        lv_vec: (256,) 절대 휘도 [cd/m2]
-        return: (256,) 0~1 정규화된 휘도
-                Ynorm[g] = (Lv[g] - Lv[0]) / (max(Lv[1:]-Lv[0]))
-        """
-        lv_arr = np.asarray(lv_vec, dtype=np.float64)
-        y0 = lv_arr[0]
-        denom = np.nanmax(lv_arr[1:] - y0)
-        if not np.isfinite(denom) or denom <= 0:
-            return np.full(256, np.nan, dtype=np.float64)
-        return (lv_arr - y0) / denom
-
-    def _block_slopes(lv_vec, g_start=88, g_stop=232, step=8):
-        """
-        lv_vec: (256,) 절대 휘도
-        g_start..g_stop: 마지막 블록은 [224,232]까지 포함되도록 설정
-        step: 8gray 폭
-
-        return:
-        mids  : (n_blocks,) 각 블록 중간 gray (예: 92,100,...,228)
-        slopes: (n_blocks,) 각 블록의 slope
-                slope = abs( Ynorm[g1] - Ynorm[g0] ) / ((g1-g0)/255)
-                g0 = block start, g1 = g0+step
-        """
-        Ynorm = _normalized_luminance(lv_vec)  # (256,)
-        mids   = []
-        slopes = []
-        for g0 in range(g_start, g_stop, step):
-            g1 = g0 + step
-            if g1 >= len(Ynorm):
-                break
-
-            y0 = Ynorm[g0]
-            y1 = Ynorm[g1]
-
-            d_gray_norm = (g1 - g0) / 255.0
-
-            if np.isfinite(y0) and np.isfinite(y1) and d_gray_norm > 0:
-                slope = abs(y1 - y0) / d_gray_norm
+            if mismatch_keys:
+                logging.warning("[VAC Reading] VAC 데이터 불일치 - 최적화 루프 종료")
+                return
             else:
-                slope = np.nan
+                logging.info("[VAC Reading] Written VAC 데이터와 Read VAC 데이터 일치")
 
-            mids.append(g0 + (g1 - g0) / 2.0)  # 예: 88~96 -> 92.0
-            slopes.append(slope)
+            self._step_done(3)
 
-        return np.asarray(mids, dtype=np.float64), np.asarray(slopes, dtype=np.float64)
+            self._fine_mode = False
+            
+            self.vac_optimization_gamma_chart.reset_on()
+            self.vac_optimization_cie1976_chart.reset_on()
 
-    mids_off, slopes_off = _block_slopes(lv_off_side, g_start=88, g_stop=232, step=8)
-    mids_on,  slopes_on  = _block_slopes(lv_on_side,  g_start=88, g_stop=232, step=8)
+            profile_on = SessionProfile(
+                legend_text="VAC ON",
+                cie_label="data_2",
+                table_cols={"lv":4, "cx":5, "cy":6, "gamma":7, "d_cx":8, "d_cy":9, "d_gamma":10},
+                ref_store=self._off_store
+            )
 
-    avg_off = float(np.nanmean(slopes_off)) if np.isfinite(slopes_off).any() else float('nan')
-    avg_on  = float(np.nanmean(slopes_on )) if np.isfinite(slopes_on ).any() else float('nan')
+            def _after_on(store_on):
+                logging.info("[Measurement] DB fetch VAC 데이터 기준 측정 완료")
+                self._step_done(4)
+                self._on_store = store_on
+                self._update_last_on_lv_norm(store_on)
+                
+                logging.info("[Evaluation] ΔCx / ΔCy / ΔGamma의 Spec 만족 여부를 평가합니다.")
+                self._step_start(5)
+                self._spec_thread = SpecEvalThread(self._off_store, self._on_store, thr_gamma=0.05, thr_c=0.003, parent=self)
+                self._spec_thread.finished.connect(lambda ok, metrics: self._on_spec_eval_done(ok, metrics, iter_idx=0, max_iters=5))
+                self._spec_thread.start()
 
-    tbl_gl = self.ui.vac_table_gammaLinearity
-    _set_text(tbl_gl, 1, 1, f"{avg_off:.2f}")  # ★ 소수점 둘째 자리까지
-    _set_text(tbl_gl, 1, 2, f"{avg_on:.2f}")   # ★ 소수점 둘째 자리까지
+            logging.info("[Measurement] DB fetch VAC 데이터 기준 측정 시작")
+            self._step_start(4)
+            self.start_viewing_angle_session(
+                profile=profile_on,
+                gray_levels=op.gray_levels_256,
+                gamma_patterns=('white',),
+                colorshift_patterns=op.colorshift_patterns,
+                first_gray_delay_ms=3000,
+                gamma_settle_ms=1000,
+                cs_settle_ms=1000,
+                on_done=_after_on
+            )
 
-    # ===== 4) GammaLinearity 차트: 블록 중심 x (= g+4), dot+line =====
-    # 라인 세팅 (자동 스케일링은 직접 처리할 거라 autoscale=False)
-    self.vac_optimization_gammalinearity_chart.set_series(
-        "OFF_slope8",
-        mids_off,
-        slopes_off,
-        marker='o',
-        linestyle='-',
-        label='OFF slope(8)',
-        autoscale=False
-    )
-    off_ln = self.vac_optimization_gammalinearity_chart.lines["OFF_slope8"]
-    off_ln.set_color('black')
-    off_ln.set_markersize(3)
+        logging.info("[VAC Writing] DB fetch VAC 데이터 TV Writing 시작")
+        self._write_vac_to_tv(vac_data, on_finished=_after_write)
+        
+    def _write_vac_to_tv(self, vac_data, on_finished):
+        self._step_start(3)
+        t = WriteVACdataThread(parent=self, ser_tv=self.ser_tv,
+                                vacdataName=self.vacdataName, vacdata_loaded=vac_data)
+        t.write_finished.connect(lambda ok, msg: on_finished(ok, msg))
+        t.start()
 
-    self.vac_optimization_gammalinearity_chart.set_series(
-        "ON_slope8",
-        mids_on,
-        slopes_on,
-        marker='o',
-        linestyle='-',
-        label='ON slope(8)',
-        autoscale=False
-    )
-    on_ln = self.vac_optimization_gammalinearity_chart.lines["ON_slope8"]
-    on_ln.set_color('red')
-    on_ln.set_markersize(3)
+    def _read_vac_from_tv(self, on_finished):
+        t = ReadVACdataThread(parent=self, ser_tv=self.ser_tv, vacdataName=self.vacdataName)
+        t.data_read.connect(lambda data: on_finished(data))
+        t.error_occurred.connect(lambda err: (logging.error(err), on_finished(None)))
+        t.start()
+보통 write 하고 read 하는데 새로고침이 안됐다고 해야 하나 vac가 안입혀져 있는 오류가 10번중 2번은 발생하는거같아요. 이를 위해 
+class WriteVACdataThread(QThread):
+    write_finished = Signal(bool, str)
 
-    # y축 autoscale with margin 1.1 + tick 5개
-    all_slopes = np.concatenate([
-        np.asarray(slopes_off, dtype=np.float64),
-        np.asarray(slopes_on,  dtype=np.float64),
-    ])
-    all_slopes = all_slopes[np.isfinite(all_slopes)]
-    if all_slopes.size > 0:
-        ymin = float(np.min(all_slopes))
-        ymax = float(np.max(all_slopes))
-        center = 0.5 * (ymin + ymax)
-        half = 0.5 * (ymax - ymin)
-        if half <= 0:
-            half = max(0.001, abs(center) * 0.05)
-        half *= 1.1  # 10% margin
-        new_min = center - half
-        new_max = center + half
+    def __init__(self, parent, ser_tv, vacdataName, vacdata_loaded):
+        super().__init__(parent)
+        self.parent = parent
+        self.ser_tv = ser_tv
+        self.vacdataName = vacdataName
+        self.vacdata_loaded = vacdata_loaded
 
-        # ★ XYChart 메서드 사용: y축 범위 + tick 5개
-        self.vac_optimization_gammalinearity_chart.set_y_axis_range(
-            new_min,
-            new_max,
-            tick_count=5
-        )
+    def run(self):
+        try:
+            vac_debug_path = "/mnt/lg/cmn_data/panelcontroller/db/vac_debug"
+            self.parent.send_command(self.ser_tv, 's')
+            output = self.parent.check_directory_exists(vac_debug_path)
 
-    # ===== 5) ColorShift(4종) 표 & 6) 묶음 막대 =====
-    want_names = ['Dark Skin', 'Light Skin', 'Asian', 'Western']
-    name_to_idx = {name: i for i, (name, *_rgb) in enumerate(op.colorshift_patterns)}
+            if output == 'exists':
+                pass
+            elif output == 'not_exists':
+                self.parent.send_command(self.ser_tv, f"mkdir -p {vac_debug_path}")
+            else:
+                self.parent.send_command(self.ser_tv, 'exit')
+                self.write_finished.emit(False, f"Error checking VAC debug path: {output}")
+                return
 
-    def _delta_uv_for_state(state_store):
-        # main=정면(0°), sub=측면(60°) 가정
-        arr = []
-        for nm in want_names:
-            idx = name_to_idx.get(nm, None)
-            if idx is None:
-                arr.append(np.nan)
-                continue
-            if idx >= len(state_store['colorshift']['main']) or idx >= len(state_store['colorshift']['sub']):
-                arr.append(np.nan)
-                continue
+            copyVACdata = f"cp /etc/panelcontroller/db/vac/{self.vacdataName} {vac_debug_path}"
+            self.parent.send_command(self.ser_tv, copyVACdata)
 
-            lv0, u0, v0 = state_store['colorshift']['main'][idx]
-            lv6, u6, v6 = state_store['colorshift']['sub'][idx]
+            if self.vacdata_loaded is None:
+                self.parent.send_command(self.ser_tv, 'exit')
+                self.write_finished.emit(False, "No VAC data loaded.")
+                return
+            
+            writeVACdata = f'cat > {vac_debug_path}/{self.vacdataName}'
+            self.ser_tv.write((writeVACdata + '\n').encode())
+            time.sleep(0.1)
+            self.ser_tv.write(self.vacdata_loaded.encode())
+            time.sleep(0.1)
+            self.ser_tv.write(b'\x04')  # Ctrl+D
+            time.sleep(0.1)
+            self.ser_tv.write(b'\x04')  # Ctrl+D
+            time.sleep(0.1)
+            self.ser_tv.flush()
 
-            if not all(np.isfinite([u0, v0, u6, v6])):
-                arr.append(np.nan)
-                continue
+            self.parent.read_output(self.ser_tv, output_limit=1000)
 
-            d = float(np.sqrt((u6 - u0)**2 + (v6 - v0)**2))
-            arr.append(d)
+            self.parent.send_command(self.ser_tv, 'restart panelcontroller')
+            time.sleep(1.0)
+            self.parent.send_command(self.ser_tv, 'restart panelcontroller')
+            time.sleep(1.0)
+            self.parent.send_command(self.ser_tv, 'exit')
 
-        return np.array(arr, dtype=np.float64)  # [DarkSkin, LightSkin, Asian, Western]
-
-    duv_off = _delta_uv_for_state(off_store)
-    duv_on  = _delta_uv_for_state(on_store)
-
-    mean_off = float(np.nanmean(duv_off)) if np.isfinite(duv_off).any() else float('nan')
-    mean_on  = float(np.nanmean(duv_on )) if np.isfinite(duv_on ).any() else float('nan')
-
-    tbl_cs = self.ui.vac_table_colorShift_3
-    # OFF (★ 소수점 3째 자리까지)
-    _set_text(tbl_cs, 1, 1, f"{duv_off[0]:.3f}")   # DarkSkin
-    _set_text(tbl_cs, 2, 1, f"{duv_off[1]:.3f}")   # LightSkin
-    _set_text(tbl_cs, 3, 1, f"{duv_off[2]:.3f}")   # Asian
-    _set_text(tbl_cs, 4, 1, f"{duv_off[3]:.3f}")   # Western
-    _set_text(tbl_cs, 5, 1, f"{mean_off:.3f}")     # 평균
-
-    # ON (★ 소수점 3째 자리까지)
-    _set_text(tbl_cs, 1, 2, f"{duv_on[0]:.3f}")
-    _set_text(tbl_cs, 2, 2, f"{duv_on[1]:.3f}")
-    _set_text(tbl_cs, 3, 2, f"{duv_on[2]:.3f}")
-    _set_text(tbl_cs, 4, 2, f"{duv_on[3]:.3f}")
-    _set_text(tbl_cs, 5, 2, f"{mean_on:.3f}")
-
-    # 묶음 막대 차트 갱신
-    self.vac_optimization_colorshift_chart.update_grouped(
-        data_off=list(np.nan_to_num(duv_off, nan=0.0)),
-        data_on =list(np.nan_to_num(duv_on,  nan=0.0))
-    )
+            self.write_finished.emit(True, f"VAC data written to {vac_debug_path}/{self.vacdataName}")
+        except Exception as e:
+            self.write_finished.emit(False, f"Unexpected error while writing VAC data: {e}")
+여기서 새로고침과 같은 self.parent.send_command(self.ser_tv, 'restart panelcontroller')를 두 번 했는데도 방금 또 그랬어요.
+그래서 read한 다음에도 한번 더 send_command(self.ser_tv, 'restart panelcontroller')를 넣어주려고 합니다. 어디에 넣으면 좋을까요?
