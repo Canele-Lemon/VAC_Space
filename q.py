@@ -1,39 +1,64 @@
-    def start_viewing_angle_session(self,
-        profile: SessionProfile,
-        gray_levels=None,
-        gamma_patterns=('white','red','green','blue'),
-        colorshift_patterns=None,
-        first_gray_delay_ms=3000,
-        cs_settle_ms=1000,
-        on_done=None,
-    ):
-        if gray_levels is None:
-            gray_levels = op.gray_levels_256
-        if colorshift_patterns is None:
-            colorshift_patterns = op.colorshift_patterns
-        
-        gamma_patterns=('white',)
-        store = {
-            'gamma': {'main': {p:{} for p in gamma_patterns}, 'sub': {p:{} for p in gamma_patterns}},
-            'colorshift': {'main': [], 'sub': []}
-        }
+    def _start_fine_correction_for_ng_list(self, ng_grays, thr_gamma=0.05, thr_c=0.003):
+        # unique + 정렬
+        ng_sorted = sorted({int(g) for g in ng_grays})
+        if not ng_sorted:
+            logging.info("[FINE] NG gray list empty → nothing to do")
+            return
 
-        self._sess = {
-            'phase': 'gamma',
-            'p_idx': 0,
-            'g_idx': 0,
-            'cs_idx': 0,
-            'patterns': list(gamma_patterns),
-            'gray_levels': list(gray_levels),
-            'cs_patterns': colorshift_patterns,
-            'store': store,
-            'profile': profile,
-            'first_gray_delay_ms': first_gray_delay_ms,
-            'cs_settle_ms': cs_settle_ms,
-            'on_done': on_done
-        }
-        self._session_step()
+        logging.info(f"[FINE] start fine correction session for NG grays: {ng_sorted}")
 
+        # fine 모드 ON
+        self._fine_mode = True
+        self._fine_ng_list = ng_sorted
+
+        # ON 차트 초기화 (원하면 유지해도 됨)
+        self.vac_optimization_gamma_chart.reset_on()
+        self.vac_optimization_cie1976_chart.reset_on()
+
+        profile_fine = SessionProfile(
+            legend_text="CORR_FINE",
+            cie_label=None,
+            table_cols={
+                "lv":4, "cx":5, "cy":6, "gamma":7,
+                "d_cx":8, "d_cy":9, "d_gamma":10
+            },
+            ref_store=self._off_store
+        )
+
+        def _after_fine(store_corr):
+            # fine 세션에서 만들어진 ON 데이터를 on_store로 저장
+            self._step_done(4)
+            self._on_store = store_corr
+
+            # fine 모드 끝 (이후 세션은 per-gray 자동보정 안 함)
+            self._fine_mode = False
+
+            # 최종 Spec 평가 한 번 더 (추가 보정은 하지 않기 위해 max_iters=0)
+            self._step_start(5)
+            self._spec_thread = SpecEvalThread(
+                self._off_store,
+                self._on_store,
+                thr_gamma=thr_gamma,
+                thr_c=thr_c,
+                parent=self
+            )
+            self._spec_thread.finished.connect(
+                # max_iters=0 → _on_spec_eval_done 안에서 추가 보정 루프 없음
+                lambda ok, m: self._on_spec_eval_done(ok, m, iter_idx=0, max_iters=0)
+            )
+            self._spec_thread.start()
+
+        self._step_start(4)
+        self.start_viewing_angle_session(
+            profile=profile_fine,
+            gray_levels=ng_sorted,          # NG gray만 측정
+            gamma_patterns=('white',),
+            colorshift_patterns=op.colorshift_patterns,
+            first_gray_delay_ms=3000,
+            gamma_settle_ms = 1000,
+            cs_settle_ms=1000,
+            on_done=_after_fine
+        )
     def _session_step(self):
         s = self._sess
         if s.get('paused', False):
@@ -65,7 +90,10 @@
                 rgb_value = f"0,0,{gray}"
             self.changeColor(rgb_value)
 
-            delay = s['first_gray_delay_ms'] if s['g_idx'] == 0 else 0
+            if s['g_idx'] == 0:
+                delay = s['first_gray_delay_ms']
+            else:
+                delay = s.get('gamma_settle_ms', 0)
             QTimer.singleShot(delay, lambda p=pattern, g=gray: self._trigger_gamma_pair(p, g))
 
         elif s['phase'] == 'colorshift':
@@ -81,337 +109,5 @@
         else:  # done
             self._finalize_session()
 
-    def _trigger_gamma_pair(self, pattern, gray):
-        s = self._sess
-        s['_gamma'] = {}
-
-        def handle(role, res):
-            s['_gamma'][role] = res
-            got_main = 'main' in s['_gamma']
-            got_sub = ('sub') in s['_gamma'] or (self.sub_instrument_cls is None)
-            if got_main and got_sub:
-                self._consume_gamma_pair(pattern, gray, s['_gamma'])
-                
-                if s.get('paused', False):
-                    return
-                
-                s['g_idx'] += 1
-                QTimer.singleShot(30, lambda: self._session_step())
-
-        if self.main_instrument_cls:
-            self.main_measure_thread = MeasureThread(self.main_instrument_cls, 'main')
-            self.main_measure_thread.measure_completed.connect(handle)
-            self.main_measure_thread.start()
-
-        if self.sub_instrument_cls:
-            self.sub_measure_thread = MeasureThread(self.sub_instrument_cls, 'sub')
-            self.sub_measure_thread.measure_completed.connect(handle)
-            self.sub_measure_thread.start()
-
-    def _consume_gamma_pair(self, pattern, gray, results):
-        """
-        results: {
-        'main': (x, y, lv, cct, duv)  또는  None,
-        'sub' : (x, y, lv, cct, duv)  또는  None
-        }
-        """
-        s = self._sess
-        store = s['store']
-        profile: SessionProfile = s['profile']
-
-        state = 'OFF' if profile.legend_text.startswith('VAC OFF') else 'ON'
-
-        for role in ('main', 'sub'):
-            res = results.get(role, None)
-            if res is None:
-                store['gamma'][role][pattern][gray] = (np.nan, np.nan, np.nan)
-                continue
-
-            x, y, lv, cct, duv = res
-            store['gamma'][role][pattern][gray] = (float(lv), float(x), float(y))
-
-            self.vac_optimization_gamma_chart.add_point(
-                state=state,
-                role=role,               # 'main'/'sub'
-                pattern=pattern,         # 'white'/'red'/'green'/'blue'
-                gray=int(gray),
-                luminance=float(lv)
-            )
-
-        if pattern == 'white':
-            is_on_session = (profile.ref_store is not None)
-            is_fine_mode = getattr(self, "_fine_mode", False)
-            
-            if is_on_session and is_fine_mode:
-                ok_now = self._is_gray_spec_ok(gray, thr_gamma=0.05, thr_c=0.003, off_store=self._off_store, on_store=s['store'])
-                
-                if not ok_now and not self._sess.get('paused', False):
-                    logging.info(f"[Fine Correction] gray={gray} NG → per-gray correction start")
-                    self._start_gray_ng_correction(gray, max_retries=3, thr_gamma=0.05, thr_c=0.003)
-                    
-            # main 테이블
-            lv_m, cx_m, cy_m = store['gamma']['main']['white'].get(gray, (np.nan, np.nan, np.nan))
-            table_inst1 = self.ui.vac_table_opt_mes_results_main
-            cols = profile.table_cols
-            self._set_item(table_inst1, gray, cols['lv'], f"{lv_m:.6f}" if np.isfinite(lv_m) else "")
-            self._set_item(table_inst1, gray, cols['cx'], f"{cx_m:.6f}" if np.isfinite(cx_m) else "")
-            self._set_item(table_inst1, gray, cols['cy'], f"{cy_m:.6f}" if np.isfinite(cy_m) else "")
-
-            # sub 테이블
-            lv_s, cx_s, cy_s = store['gamma']['sub']['white'].get(gray, (np.nan, np.nan, np.nan))
-            table_inst2 = self.ui.vac_table_opt_mes_results_sub
-            self._set_item(table_inst2, gray, cols['lv'], f"{lv_s:.6f}" if np.isfinite(lv_s) else "")
-            self._set_item(table_inst2, gray, cols['cx'], f"{cx_s:.6f}" if np.isfinite(cx_s) else "")
-            self._set_item(table_inst2, gray, cols['cy'], f"{cy_s:.6f}" if np.isfinite(cy_s) else "")
-
-            # ΔCx/ΔCy (ON 세션에서만; ref_store가 있을 때)                    
-            if profile.ref_store is not None and 'd_cx' in cols and 'd_cy' in cols:
-                ref_main = profile.ref_store['gamma']['main']['white'].get(gray, None)
-                if ref_main is not None and np.isfinite(cx_m) and np.isfinite(cy_m):
-                    _, cx_r, cy_r = ref_main
-                    d_cx = cx_m - cx_r
-                    d_cy = cy_m - cy_r
-                    self._set_item_with_spec(table_inst1, gray, cols['d_cx'], f"{d_cx:.6f}", is_spec_ok=(abs(d_cx) <= 0.003))
-                    self._set_item_with_spec(table_inst1, gray, cols['d_cy'], f"{d_cy:.6f}", is_spec_ok=(abs(d_cy) <= 0.003))
-
-    def _trigger_colorshift_pair(self, patch_name):
-        s = self._sess
-        s['_cs'] = {}
-
-        def handle(role, res):
-            s['_cs'][role] = res
-            got_main = 'main' in s['_cs']
-            got_sub = ('sub') in s['_cs'] or (self.sub_instrument_cls is None)
-            if got_main and got_sub:
-                self._consume_colorshift_pair(patch_name, s['_cs'])
-                s['cs_idx'] += 1
-                QTimer.singleShot(80, lambda: self._session_step())
-
-        if self.main_instrument_cls:
-            self.main_measure_thread = MeasureThread(self.main_instrument_cls, 'main')
-            self.main_measure_thread.measure_completed.connect(handle)
-            self.main_measure_thread.start()
-
-        if self.sub_instrument_cls:
-            self.sub_measure_thread = MeasureThread(self.sub_instrument_cls, 'sub')
-            self.sub_measure_thread.measure_completed.connect(handle)
-            self.sub_measure_thread.start()
-
-    def _consume_colorshift_pair(self, patch_name, results):
-        """
-        results: {
-            'main': (x, y, lv, cct, duv)  또는  None,   # main = 0°
-            'sub' : (x, y, lv, cct, duv)  또는  None    # sub  = 60°
-        }
-        """
-        s = self._sess
-        store = s['store']
-        profile: SessionProfile = s['profile']
-
-        # 현재 세션 상태 문자열 ('VAC OFF...' 이면 OFF, 아니면 ON)
-        state = 'OFF' if profile.legend_text.startswith('VAC OFF') else 'ON'
-
-        # 이 측정 패턴의 row index (op.colorshift_patterns 순서 그대로)
-        row_idx = s['cs_idx']
-
-        # 이 테이블: vac_table_opt_mes_results_colorshift
-        tbl_cs_raw = self.ui.vac_table_opt_mes_results_colorshift
-
-        # ------------------------------------------------
-        # 1) main / sub 결과 변환해서 store에 넣고 차트 갱신
-        #    store['colorshift'][role][row_idx] = (Lv, u', v')
-        # ------------------------------------------------
-        for role in ('main', 'sub'):
-            res = results.get(role, None)
-            if res is None:
-                # 측정 실패 시 해당 row에 placeholder 저장
-                store['colorshift'][role].append((np.nan, np.nan, np.nan))
-                continue
-
-            x, y, lv, cct, duv_unused = res
-
-            # xy -> u' v'
-            u_p, v_p = cf.convert_xyz_to_uvprime(float(x), float(y))
-
-            # store에 (Lv, u', v') 저장
-            store['colorshift'][role].append((
-                float(lv),
-                float(u_p),
-                float(v_p),
-            ))
-
-            # 차트 갱신 (vac_optimization_cie1976_chart 는 u' v' scatter)
-            self.vac_optimization_cie1976_chart.add_point(
-                state=state,
-                role=role,      # 'main' or 'sub'
-                u_p=float(u_p),
-                v_p=float(v_p)
-            )
-
-        # ------------------------------------------------
-        # 2) 표 업데이트
-        #    OFF 세션:
-        #        2열,3열,4열 ← main의 Lv / u' / v'
-        #    ON/CORR 세션:
-        #        5열,6열,7열 ← main의 Lv / u' / v'
-        #        8열        ← du'v' (sub vs main 거리)
-        # ------------------------------------------------
-
-        # 이제 방금 append한 값들을 row_idx에서 꺼냄
-        main_ok = row_idx < len(store['colorshift']['main'])
-        sub_ok  = row_idx < len(store['colorshift']['sub'])
-
-        if main_ok:
-            lv_main, up_main, vp_main = store['colorshift']['main'][row_idx]
-        else:
-            lv_main, up_main, vp_main = (np.nan, np.nan, np.nan)
-
-        if sub_ok:
-            lv_sub, up_sub, vp_sub = store['colorshift']['sub'][row_idx]
-        else:
-            lv_sub, up_sub, vp_sub = (np.nan, np.nan, np.nan)
-
-        # 테이블에 안전하게 set 하는 helper
-        def _safe_set_item(table, r, c, text):
-            self._set_item(table, r, c, text if text is not None else "")
-
-        if profile.legend_text.startswith('VAC OFF'):
-            # ---------- VAC OFF ----------
-            # row_idx 행의
-            #   col=1 → Lv(main)
-            #   col=2 → u'(main)
-            #   col=3 → v'(main)
-
-            txt_lv_off = f"{lv_main:.6f}" if np.isfinite(lv_main) else ""
-            txt_u_off  = f"{up_main:.6f}"  if np.isfinite(up_main)  else ""
-            txt_v_off  = f"{vp_main:.6f}"  if np.isfinite(vp_main)  else ""
-
-            _safe_set_item(tbl_cs_raw, row_idx, 1, txt_lv_off)
-            _safe_set_item(tbl_cs_raw, row_idx, 2, txt_u_off)
-            _safe_set_item(tbl_cs_raw, row_idx, 3, txt_v_off)
-
-        else:
-            # ---------- VAC ON (또는 CORR 이후) ----------
-            # row_idx 행의
-            #   col=4 → Lv(main)
-            #   col=5 → u'(main)
-            #   col=6 → v'(main)
-            #   col=7 → du'v' = sqrt((u'_sub - u'_main)^2 + (v'_sub - v'_main)^2)
-
-            txt_lv_on = f"{lv_main:.6f}" if np.isfinite(lv_main) else ""
-            txt_u_on  = f"{up_main:.6f}"  if np.isfinite(up_main)  else ""
-            txt_v_on  = f"{vp_main:.6f}"  if np.isfinite(vp_main)  else ""
-
-            _safe_set_item(tbl_cs_raw, row_idx, 4, txt_lv_on)
-            _safe_set_item(tbl_cs_raw, row_idx, 5, txt_u_on)
-            _safe_set_item(tbl_cs_raw, row_idx, 6, txt_v_on)
-
-            # du'v' 계산
-            # 엑셀식: =SQRT( (60deg_u' - 0deg_u')^2 + (60deg_v' - 0deg_v')^2 )
-            # 여기서 main=0°, sub=60°
-            duv_txt = ""
-            if np.isfinite(up_main) and np.isfinite(vp_main) and np.isfinite(up_sub) and np.isfinite(vp_sub):
-                dist = np.sqrt((up_sub - up_main)**2 + (vp_sub - vp_main)**2)
-                duv_txt = f"{dist:.6f}"
-
-            _safe_set_item(tbl_cs_raw, row_idx, 7, duv_txt)
-        
-    def _finalize_session(self):
-        s = self._sess
-        profile: SessionProfile = s['profile']
-        table_main = self.ui.vac_table_opt_mes_results_main
-        cols = profile.table_cols
-        thr_gamma = 0.05
-
-        # =========================
-        # 1) main 감마 컬럼 채우기
-        # =========================
-        lv_series_main = np.zeros(256, dtype=np.float64)
-        for g in range(256):
-            tup = s['store']['gamma']['main']['white'].get(g, None)
-            lv_series_main[g] = float(tup[0]) if tup else np.nan
-
-        gamma_vec = self._compute_gamma_series(lv_series_main)
-        for g in range(256):
-            if np.isfinite(gamma_vec[g]):
-                self._set_item(table_main, g, cols['gamma'], f"{gamma_vec[g]:.6f}")
-
-        # =========================
-        # 2) ΔGamma (ON세션일 때만)
-        # =========================
-        if profile.ref_store is not None and 'd_gamma' in cols:
-            ref_lv_main = np.zeros(256, dtype=np.float64)
-            for g in range(256):
-                tup = profile.ref_store['gamma']['main']['white'].get(g, None)
-                ref_lv_main[g] = float(tup[0]) if tup else np.nan
-            ref_gamma = self._compute_gamma_series(ref_lv_main)
-            dG = gamma_vec - ref_gamma
-            for g in range(256):
-                if np.isfinite(dG[g]):
-                    self._set_item_with_spec(
-                        table_main, g, cols['d_gamma'], f"{dG[g]:.6f}",
-                        is_spec_ok=(abs(dG[g]) <= thr_gamma)
-                    )
-
-        # =================================================================
-        # 3) [ADD: slope 계산 후 sub 테이블 업데이트 - 측정 종료 후 한 번에]
-        # =================================================================
-        # 요구사항:
-        # - sub 측정 white의 lv로 normalized 휘도 계산
-        # - 88gray부터 8 gray step씩 (88→96, 96→104, ... 224→232)
-        # - slope = abs( Ynorm[g+8] - Ynorm[g] ) / ((8)/255)
-        # - slope는 row=g 에 기록
-        # - VAC OFF 세션이면 sub 테이블의 4번째 열(0-based index 3)
-        #   VAC ON / CORR 세션이면 sub 테이블의 8번째 열(0-based index 7)
-
-        table_sub = self.ui.vac_table_opt_mes_results_sub
-
-        # 3-1) sub white lv 배열 뽑기
-        lv_series_sub = np.full(256, np.nan, dtype=np.float64)
-        for g in range(256):
-            tup_sub = s['store']['gamma']['sub']['white'].get(g, None)
-            if tup_sub:
-                lv_series_sub[g] = float(tup_sub[0])
-
-        # 3-2) 정규화된 휘도 Ynorm[g] = (Lv[g]-Lv[0]) / max(Lv[1:]-Lv[0])
-        def _norm_lv(lv_arr):
-            lv0 = lv_arr[0]
-            denom = np.nanmax(lv_arr[1:] - lv0)
-            if not np.isfinite(denom) or denom <= 0:
-                return np.full_like(lv_arr, np.nan, dtype=np.float64)
-            return (lv_arr - lv0) / denom
-
-        Ynorm_sub = _norm_lv(lv_series_sub)
-
-        # 3-3) 어느 열에 쓰는지 결정
-        is_off_session = profile.legend_text.startswith('VAC OFF')
-        slope_col_idx = 3 if is_off_session else 7  # 4번째 or 8번째 열
-
-        # 3-4) 각 8gray 블록 slope 계산해서 테이블에 기록
-        # 블록 시작 gray: 88,96,104,...,224
-        for g0 in range(88, 225, 8):
-            g1 = g0 + 8
-            if g1 >= 256:
-                break
-
-            y0 = Ynorm_sub[g0]
-            y1 = Ynorm_sub[g1]
-            d_gray_norm = (g1 - g0) / 255.0  # 8/255
-
-            if np.isfinite(y0) and np.isfinite(y1) and d_gray_norm > 0:
-                slope_val = abs(y1 - y0) / d_gray_norm
-                txt = f"{slope_val:.6f}"
-            else:
-                txt = ""
-
-            # row = g0 에 기록
-            self._set_item(table_sub, g0, slope_col_idx, txt)
-
-        # 끝났으면 on_done 콜백 실행
-        if callable(s['on_done']):
-            try:
-                s['on_done'](s['store'])
-            except Exception as e:
-                logging.exception(e)
-
-현재는 첫번째 gamma g에서만 시간을 길게 준 다음 측정하는 것 같은데, 다음 g도 1000의 시간을 주고 싶으면 코드를 어떻게 바꾸면 되나요?
+이렇게 되어 있을 때
+NG gray만 측정할 때 패턴 변경 -> 측정 사이 대기 시간이 1000으로 설정되어있다는 말씀이시죠?
