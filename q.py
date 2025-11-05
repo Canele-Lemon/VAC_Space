@@ -30,11 +30,10 @@
             return lv, cx, cy
 
         lv_off, cx_off, cy_off = _extract_white(off_store)
-        lv_on, cx_on, cy_on = _extract_white(on_store)
+        lv_on,  cx_on,  cy_on  = _extract_white(on_store)
 
         lv_off_side, cx_off_side, cy_off_side = _extract_white(off_store, view_angle="side")
-        lv_on_side, cx_on_side, cy_on_side = _extract_white(on_store , view_angle="side")
-
+        lv_on_side,  cx_on_side,  cy_on_side  = _extract_white(on_store , view_angle="side")
 
         # ===== 1) ChromaticityDiff 표: pass/total =====
         G_off = self._compute_gamma_series(lv_off)
@@ -43,26 +42,13 @@
         dCx = cx_on - cx_off
         dCy = cy_on - cy_off
 
+        EXCLUDED_GRAYS = (0, 1, 254, 255)
+
         def _pass_total_chroma(d_arr, thr):
             # 유효 값 + edge gray(0,1,254,255) 제외
+            d_arr = np.asarray(d_arr, dtype=np.float64)
             mask = np.isfinite(d_arr)
-            for g in (0, 1, 254, 255):
-                if 0 <= g < len(mask):
-                    mask[g] = False
-        
-            vals = d_arr[mask]
-            tot = int(np.sum(mask))
-            if tot <= 0:
-                return 0, 0
-            
-            rounded = np.round(np.abs(vals), 4)
-            thr_r = round(float(thr), 4)
-            ok = int(np.sum(rounded <= thr_r))
-            return ok, tot
-        
-        def _pass_total_gamma(d_arr, thr):
-            mask = np.isfinite(d_arr)
-            for g in (0, 1, 254, 255):
+            for g in EXCLUDED_GRAYS:
                 if 0 <= g < len(mask):
                     mask[g] = False
 
@@ -70,7 +56,26 @@
             tot = int(np.sum(mask))
             if tot <= 0:
                 return 0, 0
-            
+
+            # 소수점 4째 자리에서 반올림 후 비교
+            rounded = np.round(np.abs(vals), 4)
+            thr_r = round(float(thr), 4)
+            ok = int(np.sum(rounded <= thr_r))
+            return ok, tot
+
+        def _pass_total_gamma(d_arr, thr):
+            d_arr = np.asarray(d_arr, dtype=np.float64)
+            mask = np.isfinite(d_arr)
+            for g in EXCLUDED_GRAYS:
+                if 0 <= g < len(mask):
+                    mask[g] = False
+
+            vals = d_arr[mask]
+            tot = int(np.sum(mask))
+            if tot <= 0:
+                return 0, 0
+
+            # 소수점 3째 자리에서 반올림 후 비교
             rounded = np.round(np.abs(vals), 3)
             thr_r = round(float(thr), 3)
             ok = int(np.sum(rounded <= thr_r))
@@ -211,14 +216,15 @@
             return np.asarray(mids, dtype=np.float64), np.asarray(slopes, dtype=np.float64)
 
         mids_off, slopes_off = _block_slopes(lv_off_side, g_start=88, g_stop=232, step=8)
-        mids_on, slopes_on = _block_slopes(lv_on_side, g_start=88, g_stop=232, step=8)
+        mids_on,  slopes_on  = _block_slopes(lv_on_side,  g_start=88, g_stop=232, step=8)
 
         avg_off = float(np.nanmean(slopes_off)) if np.isfinite(slopes_off).any() else float('nan')
         avg_on  = float(np.nanmean(slopes_on )) if np.isfinite(slopes_on ).any() else float('nan')
 
         tbl_gl = self.ui.vac_table_gammaLinearity
-        _set_text(tbl_gl, 1, 1, f"{avg_off:.6f}")  # 2행,2열 OFF 평균 기울기
-        _set_text(tbl_gl, 1, 2, f"{avg_on:.6f}")   # 2행,3열 ON  평균 기울기
+        # ★ slope 평균: 소수점 2째 자리까지
+        _set_text(tbl_gl, 1, 1, f"{avg_off:.2f}")  # 2행,2열 OFF 평균 기울기
+        _set_text(tbl_gl, 1, 2, f"{avg_on:.2f}")   # 2행,3열 ON  평균 기울기
 
         # ===== 4) GammaLinearity 차트: 블록 중심 x (= g+4), dot+line =====
         # 라인 세팅
@@ -246,7 +252,7 @@
         on_ln.set_color('red')
         on_ln.set_markersize(3)
 
-        # y축 autoscale with margin 1.1
+        # y축 autoscale with margin 1.1 + tick 5개
         all_slopes = np.concatenate([
             np.asarray(slopes_off, dtype=np.float64),
             np.asarray(slopes_on,  dtype=np.float64),
@@ -264,11 +270,16 @@
             new_max = center + half
 
             ax_slope = self.vac_optimization_gammalinearity_chart.ax
-            cs.MatFormat_Axis(ax_slope,
-                            min_val=np.float64(new_min),
-                            max_val=np.float64(new_max),
-                            tick_interval=None,
-                            axis='y')
+            cs.MatFormat_Axis(
+                ax_slope,
+                min_val=np.float64(new_min),
+                max_val=np.float64(new_max),
+                tick_interval=None,      # 범위만 설정하고
+                axis='y'
+            )
+            # ★ y축 major tick을 최대 5개로
+            ax_slope.yaxis.set_major_locator(MaxNLocator(nbins=5))
+
             ax_slope.relim(); ax_slope.autoscale_view(scalex=False, scaley=False)
             self.vac_optimization_gammalinearity_chart.canvas.draw()
 
@@ -308,18 +319,18 @@
 
         # 표 채우기: 2열=OFF, 3열=ON / 2~5행=패턴 / 6행=평균
         tbl_cs = self.ui.vac_table_colorShift_3
-        # OFF
-        _set_text(tbl_cs, 1, 1, f"{duv_off[0]:.6f}")   # DarkSkin
-        _set_text(tbl_cs, 2, 1, f"{duv_off[1]:.6f}")   # LightSkin
-        _set_text(tbl_cs, 3, 1, f"{duv_off[2]:.6f}")   # Asian
-        _set_text(tbl_cs, 4, 1, f"{duv_off[3]:.6f}")   # Western
-        _set_text(tbl_cs, 5, 1, f"{mean_off:.6f}")     # 평균
-        # ON
-        _set_text(tbl_cs, 1, 2, f"{duv_on[0]:.6f}")
-        _set_text(tbl_cs, 2, 2, f"{duv_on[1]:.6f}")
-        _set_text(tbl_cs, 3, 2, f"{duv_on[2]:.6f}")
-        _set_text(tbl_cs, 4, 2, f"{duv_on[3]:.6f}")
-        _set_text(tbl_cs, 5, 2, f"{mean_on:.6f}")
+        # OFF  ★ 소수점 3째 자리까지
+        _set_text(tbl_cs, 1, 1, f"{duv_off[0]:.3f}")   # DarkSkin
+        _set_text(tbl_cs, 2, 1, f"{duv_off[1]:.3f}")   # LightSkin
+        _set_text(tbl_cs, 3, 1, f"{duv_off[2]:.3f}")   # Asian
+        _set_text(tbl_cs, 4, 1, f"{duv_off[3]:.3f}")   # Western
+        _set_text(tbl_cs, 5, 1, f"{mean_off:.3f}")     # 평균
+        # ON   ★ 소수점 3째 자리까지
+        _set_text(tbl_cs, 1, 2, f"{duv_on[0]:.3f}")
+        _set_text(tbl_cs, 2, 2, f"{duv_on[1]:.3f}")
+        _set_text(tbl_cs, 3, 2, f"{duv_on[2]:.3f}")
+        _set_text(tbl_cs, 4, 2, f"{duv_on[3]:.3f}")
+        _set_text(tbl_cs, 5, 2, f"{mean_on:.3f}")
 
         # 묶음 막대 차트 갱신
         self.vac_optimization_colorshift_chart.update_grouped(
