@@ -1,141 +1,144 @@
-보정결과를 보면 바뀐게 없거든요? 근데 이렇게 조금 바꾸면 휘도, 색좌표에도 영향을 안줘요. 뭔가 잘못된거 아닐까요?
-2025-11-05 11:53:55,548 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=2: dCx=+0.001800, dCy=+0.004500, dG=+0.000000 → ΔR_H=-0.000, ΔG_H=-0.000, ΔB_H=+0.000
-2025-11-05 11:53:55,549 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=4: dCx=+0.000200, dCy=+0.004100, dG=+0.000000 → ΔR_H=-0.000, ΔG_H=-0.001, ΔB_H=+0.004
-2025-11-05 11:53:55,549 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=5: dCx=-0.004700, dCy=-0.013500, dG=+0.000000 → ΔR_H=+0.001, ΔG_H=+0.003, ΔB_H=-0.011
-2025-11-05 11:53:55,550 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=6: dCx=-0.005900, dCy=-0.008400, dG=+0.035613 → ΔR_H=+0.013, ΔG_H=+0.027, ΔB_H=+0.002
-2025-11-05 11:53:55,550 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=7: dCx=-0.003600, dCy=-0.008300, dG=+0.024201 → ΔR_H=+0.009, ΔG_H=+0.020, ΔB_H=-0.002
-2025-11-05 11:53:55,550 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=8: dCx=-0.003800, dCy=-0.009100, dG=+0.048256 → ΔR_H=+0.018, ΔG_H=+0.039, ΔB_H=+0.002
-2025-11-05 11:53:55,551 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=9: dCx=-0.003300, dCy=-0.006700, dG=+0.054521 → ΔR_H=+0.021, ΔG_H=+0.044, ΔB_H=+0.003
-2025-11-05 11:53:55,551 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=10: dCx=-0.002700, dCy=-0.005500, dG=+0.065945 → ΔR_H=+0.024, ΔG_H=+0.050, ΔB_H=+0.009
-2025-11-05 11:53:55,552 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=11: dCx=+0.000300, dCy=-0.001500, dG=+0.082558 → ΔR_H=+0.028, ΔG_H=+0.059, ΔB_H=+0.008
-2025-11-05 11:53:55,552 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=12: dCx=+0.000100, dCy=+0.001100, dG=+0.084358 → ΔR_H=+0.028, ΔG_H=+0.058, ΔB_H=+0.010
-2025-11-05 11:53:55,552 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=13: dCx=-0.000500, dCy=+0.002700, dG=+0.086974 → ΔR_H=+0.027, ΔG_H=+0.058, ΔB_H=+0.009
-2025-11-05 11:53:55,553 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=14: dCx=+0.002000, dCy=+0.004000, dG=+0.087984 → ΔR_H=+0.027, ΔG_H=+0.057, ΔB_H=+0.006
-2025-11-05 11:53:55,553 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=15: dCx=+0.000300, dCy=+0.000500, dG=+0.097312 → ΔR_H=+0.029, ΔG_H=+0.061, ΔB_H=+0.002
-2025-11-05 11:53:55,553 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=16: dCx=+0.000100, dCy=+0.000200, dG=+0.093892 → ΔR_H=+0.028, ΔG_H=+0.058, ΔB_H=-0.000
-2025-11-05 11:53:55,553 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=17: dCx=+0.001200, dCy=+0.002800, dG=+0.089054 → ΔR_H=+0.025, ΔG_H=+0.052, ΔB_H=+0.005
-2025-11-05 11:53:55,554 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=18: dCx=+0.000400, dCy=+0.001500, dG=+0.087443 → ΔR_H=+0.023, ΔG_H=+0.048, ΔB_H=+0.003
-2025-11-05 11:53:55,554 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=19: dCx=-0.000400, dCy=-0.003200, dG=+0.088880 → ΔR_H=+0.022, ΔG_H=+0.047, ΔB_H=-0.000
-2025-11-05 11:53:55,554 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=20: dCx=+0.001600, dCy=+0.002600, dG=+0.084401 → ΔR_H=+0.019, ΔG_H=+0.042, ΔB_H=+0.006
-2025-11-05 11:53:55,555 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=21: dCx=+0.001200, dCy=-0.000100, dG=+0.076767 → ΔR_H=+0.015, ΔG_H=+0.033, ΔB_H=-0.002
-2025-11-05 11:53:55,555 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=22: dCx=+0.002100, dCy=+0.001700, dG=+0.077052 → ΔR_H=+0.016, ΔG_H=+0.033, ΔB_H=+0.002
-2025-11-05 11:53:55,555 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=23: dCx=+0.002200, dCy=+0.001700, dG=+0.078014 → ΔR_H=+0.016, ΔG_H=+0.033, ΔB_H=+0.002
-2025-11-05 11:53:55,556 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=24: dCx=+0.000900, dCy=+0.000200, dG=+0.072719 → ΔR_H=+0.015, ΔG_H=+0.031, ΔB_H=+0.000
-2025-11-05 11:53:55,556 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=25: dCx=+0.001100, dCy=+0.000900, dG=+0.066067 → ΔR_H=+0.012, ΔG_H=+0.026, ΔB_H=+0.002
-2025-11-05 11:53:55,556 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=26: dCx=+0.001500, dCy=+0.001800, dG=+0.062003 → ΔR_H=+0.011, ΔG_H=+0.024, ΔB_H=+0.001
-2025-11-05 11:53:55,556 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=27: dCx=+0.001400, dCy=+0.001500, dG=+0.059926 → ΔR_H=+0.009, ΔG_H=+0.020, ΔB_H=+0.001
-2025-11-05 11:53:55,557 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=28: dCx=+0.001100, dCy=+0.001700, dG=+0.055370 → ΔR_H=+0.008, ΔG_H=+0.017, ΔB_H=+0.001
-2025-11-05 11:53:55,557 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=29: dCx=+0.001900, dCy=+0.003100, dG=+0.056640 → ΔR_H=+0.008, ΔG_H=+0.018, ΔB_H=+0.002
-2025-11-05 11:53:55,557 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=37: dCx=+0.002400, dCy=+0.004700, dG=+0.032729 → ΔR_H=+0.004, ΔG_H=+0.008, ΔB_H=+0.001
-2025-11-05 11:53:55,558 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=38: dCx=+0.002400, dCy=+0.003700, dG=+0.028148 → ΔR_H=+0.003, ΔG_H=+0.007, ΔB_H=+0.000
-2025-11-05 11:53:55,558 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=39: dCx=+0.002200, dCy=+0.003200, dG=+0.028284 → ΔR_H=+0.003, ΔG_H=+0.007, ΔB_H=+0.001
-2025-11-05 11:53:55,558 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=40: dCx=+0.002400, dCy=+0.003900, dG=+0.031384 → ΔR_H=+0.003, ΔG_H=+0.007, ΔB_H=+0.002
-2025-11-05 11:53:55,558 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=41: dCx=+0.002300, dCy=+0.004600, dG=+0.020250 → ΔR_H=+0.002, ΔG_H=+0.004, ΔB_H=+0.000
-2025-11-05 11:53:55,558 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=42: dCx=+0.002500, dCy=+0.004600, dG=+0.015145 → ΔR_H=+0.002, ΔG_H=+0.003, ΔB_H=+0.002
-2025-11-05 11:53:55,558 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=43: dCx=+0.002900, dCy=+0.005400, dG=+0.019208 → ΔR_H=+0.002, ΔG_H=+0.004, ΔB_H=+0.002
-2025-11-05 11:53:55,559 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=44: dCx=+0.002700, dCy=+0.005300, dG=+0.012191 → ΔR_H=+0.001, ΔG_H=+0.002, ΔB_H=+0.001
-2025-11-05 11:53:55,559 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=45: dCx=+0.002300, dCy=+0.004700, dG=+0.013892 → ΔR_H=+0.001, ΔG_H=+0.003, ΔB_H=+0.002
-2025-11-05 11:53:55,559 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=46: dCx=+0.002200, dCy=+0.004200, dG=+0.017540 → ΔR_H=+0.002, ΔG_H=+0.004, ΔB_H=+0.002
-2025-11-05 11:53:55,559 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=47: dCx=+0.002000, dCy=+0.004800, dG=+0.008654 → ΔR_H=+0.001, ΔG_H=+0.002, ΔB_H=+0.001
-2025-11-05 11:53:55,560 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=48: dCx=+0.002500, dCy=+0.005100, dG=+0.008288 → ΔR_H=+0.001, ΔG_H=+0.001, ΔB_H=+0.002
-2025-11-05 11:53:55,560 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=49: dCx=+0.002400, dCy=+0.004500, dG=+0.012474 → ΔR_H=+0.001, ΔG_H=+0.002, ΔB_H=+0.001
-2025-11-05 11:53:55,560 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=50: dCx=+0.002400, dCy=+0.004000, dG=+0.015282 → ΔR_H=+0.001, ΔG_H=+0.003, ΔB_H=+0.001
-2025-11-05 11:53:55,560 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=51: dCx=+0.002200, dCy=+0.003200, dG=+0.004330 → ΔR_H=+0.000, ΔG_H=+0.001, ΔB_H=+0.001
-2025-11-05 11:53:55,560 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=52: dCx=+0.002100, dCy=+0.003300, dG=+0.020213 → ΔR_H=+0.002, ΔG_H=+0.003, ΔB_H=+0.001
-2025-11-05 11:53:55,560 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=53: dCx=+0.001900, dCy=+0.003300, dG=+0.013626 → ΔR_H=+0.001, ΔG_H=+0.002, ΔB_H=+0.001
-2025-11-05 11:53:55,561 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=54: dCx=+0.001900, dCy=+0.003300, dG=+0.009328 → ΔR_H=+0.001, ΔG_H=+0.001, ΔB_H=+0.001
-2025-11-05 11:53:55,561 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=55: dCx=+0.001900, dCy=+0.003600, dG=+0.018507 → ΔR_H=+0.001, ΔG_H=+0.003, ΔB_H=+0.002
-2025-11-05 11:53:55,561 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=96: dCx=+0.000900, dCy=+0.001200, dG=-0.052638 → ΔR_H=-0.002, ΔG_H=-0.005, ΔB_H=-0.005
-2025-11-05 11:53:55,561 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=97: dCx=+0.001000, dCy=+0.001400, dG=-0.052354 → ΔR_H=-0.002, ΔG_H=-0.005, ΔB_H=-0.005
-2025-11-05 11:53:55,561 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=99: dCx=+0.000900, dCy=+0.002000, dG=-0.052995 → ΔR_H=-0.002, ΔG_H=-0.005, ΔB_H=-0.006
-2025-11-05 11:53:55,561 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=104: dCx=+0.000700, dCy=+0.001000, dG=-0.050760 → ΔR_H=-0.002, ΔG_H=-0.004, ΔB_H=-0.005
-2025-11-05 11:53:55,562 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=106: dCx=+0.000700, dCy=+0.001400, dG=-0.050877 → ΔR_H=-0.002, ΔG_H=-0.004, ΔB_H=-0.004
-2025-11-05 11:53:55,562 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=110: dCx=+0.000900, dCy=+0.001600, dG=-0.051036 → ΔR_H=-0.002, ΔG_H=-0.004, ΔB_H=-0.004
-2025-11-05 11:53:55,562 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=166: dCx=+0.000500, dCy=+0.001400, dG=+0.058757 → ΔR_H=+0.001, ΔG_H=+0.003, ΔB_H=+0.002
-2025-11-05 11:53:55,562 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=167: dCx=+0.000700, dCy=+0.001300, dG=+0.062420 → ΔR_H=+0.002, ΔG_H=+0.003, ΔB_H=+0.003
-2025-11-05 11:53:55,562 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=168: dCx=+0.000700, dCy=+0.001300, dG=+0.062512 → ΔR_H=+0.002, ΔG_H=+0.003, ΔB_H=+0.004
-2025-11-05 11:53:55,562 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=169: dCx=+0.000700, dCy=+0.001300, dG=+0.065259 → ΔR_H=+0.002, ΔG_H=+0.003, ΔB_H=+0.004
-2025-11-05 11:53:55,563 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=170: dCx=+0.000700, dCy=+0.001500, dG=+0.061584 → ΔR_H=+0.001, ΔG_H=+0.003, ΔB_H=+0.002
-2025-11-05 11:53:55,563 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=171: dCx=+0.000700, dCy=+0.001200, dG=+0.073009 → ΔR_H=+0.002, ΔG_H=+0.004, ΔB_H=+0.004
-2025-11-05 11:53:55,563 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=172: dCx=+0.000600, dCy=+0.001100, dG=+0.077161 → ΔR_H=+0.002, ΔG_H=+0.004, ΔB_H=+0.004
-2025-11-05 11:53:55,563 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=173: dCx=+0.000600, dCy=+0.001100, dG=+0.083146 → ΔR_H=+0.002, ΔG_H=+0.004, ΔB_H=+0.005
-2025-11-05 11:53:55,564 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=174: dCx=+0.000500, dCy=+0.001400, dG=+0.100227 → ΔR_H=+0.002, ΔG_H=+0.005, ΔB_H=+0.007
-2025-11-05 11:53:55,564 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=175: dCx=+0.000400, dCy=+0.001000, dG=+0.094798 → ΔR_H=+0.002, ΔG_H=+0.004, ΔB_H=+0.005
-2025-11-05 11:53:55,564 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=176: dCx=+0.000500, dCy=+0.001000, dG=+0.096115 → ΔR_H=+0.002, ΔG_H=+0.004, ΔB_H=+0.004
-2025-11-05 11:53:55,564 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=177: dCx=+0.000400, dCy=+0.001300, dG=+0.112321 → ΔR_H=+0.003, ΔG_H=+0.005, ΔB_H=+0.010
-2025-11-05 11:53:55,565 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=178: dCx=+0.000100, dCy=+0.001300, dG=+0.112304 → ΔR_H=+0.002, ΔG_H=+0.006, ΔB_H=+0.016
-2025-11-05 11:53:55,565 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=179: dCx=+0.000200, dCy=+0.001200, dG=+0.100715 → ΔR_H=+0.002, ΔG_H=+0.005, ΔB_H=+0.000
-2025-11-05 11:53:55,565 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=180: dCx=+0.000300, dCy=+0.001000, dG=+0.104801 → ΔR_H=+0.002, ΔG_H=+0.004, ΔB_H=-0.006
-2025-11-05 11:53:55,565 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=181: dCx=+0.000400, dCy=+0.000800, dG=+0.114921 → ΔR_H=+0.002, ΔG_H=+0.005, ΔB_H=+0.003
-2025-11-05 11:53:55,565 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=182: dCx=+0.000400, dCy=+0.001100, dG=+0.113589 → ΔR_H=+0.002, ΔG_H=+0.005, ΔB_H=+0.001
-2025-11-05 11:53:55,566 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=183: dCx=+0.000500, dCy=+0.001200, dG=+0.107899 → ΔR_H=+0.002, ΔG_H=+0.005, ΔB_H=+0.007
-2025-11-05 11:53:55,566 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=184: dCx=+0.000500, dCy=+0.001300, dG=+0.117595 → ΔR_H=+0.003, ΔG_H=+0.005, ΔB_H=+0.003
-2025-11-05 11:53:55,566 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=185: dCx=+0.000300, dCy=+0.000800, dG=+0.120409 → ΔR_H=+0.003, ΔG_H=+0.005, ΔB_H=+0.005
-2025-11-05 11:53:55,566 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=186: dCx=+0.000400, dCy=+0.001000, dG=+0.135272 → ΔR_H=+0.003, ΔG_H=+0.006, ΔB_H=+0.011
-2025-11-05 11:53:55,566 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=187: dCx=+0.000500, dCy=+0.000900, dG=+0.127131 → ΔR_H=+0.003, ΔG_H=+0.006, ΔB_H=+0.004
-2025-11-05 11:53:55,567 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=188: dCx=+0.000500, dCy=+0.001000, dG=+0.132018 → ΔR_H=+0.003, ΔG_H=+0.006, ΔB_H=+0.008
-2025-11-05 11:53:55,567 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=189: dCx=+0.000200, dCy=+0.000800, dG=+0.128619 → ΔR_H=+0.003, ΔG_H=+0.006, ΔB_H=+0.004
-2025-11-05 11:53:55,567 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=190: dCx=+0.000200, dCy=+0.001000, dG=+0.133410 → ΔR_H=+0.003, ΔG_H=+0.006, ΔB_H=+0.009
-2025-11-05 11:53:55,568 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=191: dCx=+0.000200, dCy=+0.001100, dG=+0.131105 → ΔR_H=+0.003, ΔG_H=+0.006, ΔB_H=+0.006
-2025-11-05 11:53:55,568 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=192: dCx=+0.000300, dCy=+0.000900, dG=+0.136491 → ΔR_H=+0.003, ΔG_H=+0.006, ΔB_H=+0.002
-2025-11-05 11:53:55,568 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=193: dCx=+0.000100, dCy=+0.000700, dG=+0.171216 → ΔR_H=+0.004, ΔG_H=+0.007, ΔB_H=+0.006
-2025-11-05 11:53:55,568 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=194: dCx=+0.000200, dCy=+0.000600, dG=+0.166174 → ΔR_H=+0.003, ΔG_H=+0.007, ΔB_H=+0.003
-2025-11-05 11:53:55,568 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=195: dCx=+0.000100, dCy=+0.000300, dG=+0.164968 → ΔR_H=+0.003, ΔG_H=+0.006, ΔB_H=+0.008
-2025-11-05 11:53:55,569 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=196: dCx=+0.000400, dCy=+0.000900, dG=+0.192386 → ΔR_H=+0.004, ΔG_H=+0.007, ΔB_H=+0.001
-2025-11-05 11:53:55,569 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=197: dCx=+0.000300, dCy=+0.000500, dG=+0.189646 → ΔR_H=+0.004, ΔG_H=+0.007, ΔB_H=-0.006
-2025-11-05 11:53:55,569 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=198: dCx=+0.000300, dCy=+0.000600, dG=+0.195636 → ΔR_H=+0.004, ΔG_H=+0.008, ΔB_H=-0.003
-2025-11-05 11:53:55,569 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=199: dCx=+0.000200, dCy=+0.000500, dG=+0.204116 → ΔR_H=+0.004, ΔG_H=+0.008, ΔB_H=-0.004
-2025-11-05 11:53:55,569 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=200: dCx=+0.000000, dCy=+0.000300, dG=+0.214931 → ΔR_H=+0.004, ΔG_H=+0.008, ΔB_H=+0.000
-2025-11-05 11:53:55,570 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=201: dCx=+0.000200, dCy=+0.000300, dG=+0.205645 → ΔR_H=+0.004, ΔG_H=+0.008, ΔB_H=+0.009
-2025-11-05 11:53:55,570 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=202: dCx=+0.000300, dCy=+0.000500, dG=+0.247105 → ΔR_H=+0.005, ΔG_H=+0.010, ΔB_H=+0.006
-2025-11-05 11:53:55,570 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=203: dCx=+0.000300, dCy=+0.000300, dG=+0.244765 → ΔR_H=+0.005, ΔG_H=+0.009, ΔB_H=-0.028
-2025-11-05 11:53:55,570 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=204: dCx=+0.000200, dCy=+0.000400, dG=+0.249812 → ΔR_H=+0.005, ΔG_H=+0.009, ΔB_H=-0.010
-2025-11-05 11:53:55,570 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=205: dCx=+0.000100, dCy=+0.000500, dG=+0.264697 → ΔR_H=+0.005, ΔG_H=+0.010, ΔB_H=+0.001
-2025-11-05 11:53:55,571 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=206: dCx=+0.000100, dCy=+0.000400, dG=+0.264834 → ΔR_H=+0.005, ΔG_H=+0.010, ΔB_H=-0.006
-2025-11-05 11:53:55,571 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=207: dCx=+0.000100, dCy=+0.000500, dG=+0.281401 → ΔR_H=+0.005, ΔG_H=+0.010, ΔB_H=+0.004
-2025-11-05 11:53:55,571 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=208: dCx=+0.000200, dCy=+0.000700, dG=+0.297183 → ΔR_H=+0.005, ΔG_H=+0.011, ΔB_H=+0.017
-2025-11-05 11:53:55,571 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=209: dCx=+0.000100, dCy=+0.000500, dG=+0.287680 → ΔR_H=+0.005, ΔG_H=+0.010, ΔB_H=-0.015
-2025-11-05 11:53:55,571 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=210: dCx=+0.000000, dCy=+0.000400, dG=+0.296369 → ΔR_H=+0.005, ΔG_H=+0.010, ΔB_H=-0.016
-2025-11-05 11:53:55,572 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=211: dCx=+0.000100, dCy=+0.000300, dG=+0.284667 → ΔR_H=+0.005, ΔG_H=+0.010, ΔB_H=-0.018
-2025-11-05 11:53:55,572 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=212: dCx=+0.000300, dCy=+0.000300, dG=+0.317740 → ΔR_H=+0.005, ΔG_H=+0.010, ΔB_H=+0.002
-2025-11-05 11:53:55,572 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=213: dCx=+0.000300, dCy=+0.000200, dG=+0.317504 → ΔR_H=+0.005, ΔG_H=+0.010, ΔB_H=-0.009
-2025-11-05 11:53:55,572 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=214: dCx=+0.000100, dCy=+0.000300, dG=+0.330876 → ΔR_H=+0.005, ΔG_H=+0.011, ΔB_H=+0.009
-2025-11-05 11:53:55,572 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=215: dCx=+0.000100, dCy=+0.000300, dG=+0.316483 → ΔR_H=+0.005, ΔG_H=+0.010, ΔB_H=-0.023
-2025-11-05 11:53:55,573 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=216: dCx=+0.000100, dCy=+0.000200, dG=+0.359259 → ΔR_H=+0.006, ΔG_H=+0.012, ΔB_H=+0.004
-2025-11-05 11:53:55,573 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=217: dCx=+0.000100, dCy=+0.000200, dG=+0.365049 → ΔR_H=+0.006, ΔG_H=+0.012, ΔB_H=-0.008
-2025-11-05 11:53:55,573 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=218: dCx=+0.000200, dCy=+0.000100, dG=+0.371756 → ΔR_H=+0.006, ΔG_H=+0.013, ΔB_H=-0.027
-2025-11-05 11:53:55,573 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=219: dCx=+0.000200, dCy=+0.000100, dG=+0.387310 → ΔR_H=+0.006, ΔG_H=+0.013, ΔB_H=-0.016
-2025-11-05 11:53:55,573 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=220: dCx=+0.000200, dCy=+0.000100, dG=+0.383165 → ΔR_H=+0.006, ΔG_H=+0.013, ΔB_H=-0.011
-2025-11-05 11:53:55,573 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=221: dCx=+0.000000, dCy=-0.000100, dG=+0.404194 → ΔR_H=+0.007, ΔG_H=+0.013, ΔB_H=+0.007
-2025-11-05 11:53:55,573 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=222: dCx=+0.000000, dCy=-0.000100, dG=+0.406427 → ΔR_H=+0.006, ΔG_H=+0.013, ΔB_H=+0.020
-2025-11-05 11:53:55,574 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=223: dCx=+0.000200, dCy=+0.000100, dG=+0.382253 → ΔR_H=+0.006, ΔG_H=+0.012, ΔB_H=+0.009
-2025-11-05 11:53:55,574 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=224: dCx=+0.000100, dCy=+0.000000, dG=+0.435077 → ΔR_H=+0.007, ΔG_H=+0.013, ΔB_H=+0.046
-2025-11-05 11:53:55,574 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=225: dCx=+0.000100, dCy=+0.000000, dG=+0.378626 → ΔR_H=+0.006, ΔG_H=+0.012, ΔB_H=-0.012
-2025-11-05 11:53:55,574 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=226: dCx=+0.000100, dCy=+0.000000, dG=+0.419869 → ΔR_H=+0.006, ΔG_H=+0.012, ΔB_H=-0.049
-2025-11-05 11:53:55,574 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=227: dCx=+0.000100, dCy=-0.000100, dG=+0.431682 → ΔR_H=+0.006, ΔG_H=+0.013, ΔB_H=-0.003
-2025-11-05 11:53:55,574 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=228: dCx=+0.000300, dCy=+0.000300, dG=+0.425544 → ΔR_H=+0.006, ΔG_H=+0.012, ΔB_H=-0.035
-2025-11-05 11:53:55,574 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=229: dCx=+0.000200, dCy=+0.000200, dG=+0.426338 → ΔR_H=+0.006, ΔG_H=+0.012, ΔB_H=+0.032
-2025-11-05 11:53:55,574 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=230: dCx=-0.000100, dCy=+0.000400, dG=+0.427144 → ΔR_H=+0.006, ΔG_H=+0.012, ΔB_H=+0.004
-2025-11-05 11:53:55,575 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=231: dCx=-0.000100, dCy=+0.000000, dG=+0.440448 → ΔR_H=+0.006, ΔG_H=+0.013, ΔB_H=+0.027
-2025-11-05 11:53:55,575 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=232: dCx=-0.000100, dCy=+0.000100, dG=+0.451039 → ΔR_H=+0.007, ΔG_H=+0.013, ΔB_H=-0.024
-2025-11-05 11:53:55,575 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=233: dCx=-0.000100, dCy=+0.000100, dG=+0.472720 → ΔR_H=+0.007, ΔG_H=+0.014, ΔB_H=-0.015
-2025-11-05 11:53:55,575 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=234: dCx=+0.000000, dCy=+0.000100, dG=+0.462602 → ΔR_H=+0.007, ΔG_H=+0.014, ΔB_H=+0.043
-2025-11-05 11:53:55,575 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=235: dCx=+0.000200, dCy=+0.000300, dG=+0.443573 → ΔR_H=+0.006, ΔG_H=+0.013, ΔB_H=+0.061
-2025-11-05 11:53:55,575 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=236: dCx=-0.000200, dCy=+0.000300, dG=+0.462975 → ΔR_H=+0.007, ΔG_H=+0.013, ΔB_H=+0.090
-2025-11-05 11:53:55,575 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=237: dCx=-0.000300, dCy=+0.000300, dG=+0.437285 → ΔR_H=+0.006, ΔG_H=+0.012, ΔB_H=+0.024
-2025-11-05 11:53:55,576 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=238: dCx=-0.000200, dCy=+0.000400, dG=+0.486393 → ΔR_H=+0.007, ΔG_H=+0.013, ΔB_H=+0.124
-2025-11-05 11:53:55,576 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=239: dCx=-0.000200, dCy=+0.000200, dG=+0.488546 → ΔR_H=+0.007, ΔG_H=+0.013, ΔB_H=-0.002
-2025-11-05 11:53:55,576 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=240: dCx=-0.000100, dCy=+0.000400, dG=+0.405392 → ΔR_H=+0.005, ΔG_H=+0.010, ΔB_H=+0.078
-2025-11-05 11:53:55,576 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=241: dCx=-0.000100, dCy=+0.000100, dG=+0.469052 → ΔR_H=+0.006, ΔG_H=+0.012, ΔB_H=+0.135
-2025-11-05 11:53:55,576 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=242: dCx=-0.000100, dCy=-0.000100, dG=+0.463303 → ΔR_H=+0.006, ΔG_H=+0.012, ΔB_H=+0.129
-2025-11-05 11:53:55,576 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=243: dCx=+0.000000, dCy=+0.000000, dG=+0.513466 → ΔR_H=+0.007, ΔG_H=+0.013, ΔB_H=+0.286
-2025-11-05 11:53:55,576 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=244: dCx=+0.000000, dCy=+0.000000, dG=+0.441382 → ΔR_H=+0.006, ΔG_H=+0.012, ΔB_H=+0.345
-2025-11-05 11:53:55,577 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=245: dCx=+0.000200, dCy=+0.000100, dG=+0.383187 → ΔR_H=+0.005, ΔG_H=+0.010, ΔB_H=+0.251
-2025-11-05 11:53:55,577 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=246: dCx=+0.000000, dCy=-0.000200, dG=+0.460081 → ΔR_H=+0.006, ΔG_H=+0.013, ΔB_H=+0.281
-2025-11-05 11:53:55,577 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=247: dCx=+0.000100, dCy=-0.000200, dG=+0.426603 → ΔR_H=+0.006, ΔG_H=+0.012, ΔB_H=+0.455
-2025-11-05 11:53:55,577 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=248: dCx=+0.000000, dCy=-0.000100, dG=+0.421413 → ΔR_H=+0.005, ΔG_H=+0.011, ΔB_H=-0.042
-2025-11-05 11:53:55,577 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=249: dCx=-0.000100, dCy=-0.000100, dG=+0.491786 → ΔR_H=+0.006, ΔG_H=+0.013, ΔB_H=+0.055
-2025-11-05 11:53:55,578 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=250: dCx=-0.000200, dCy=-0.000100, dG=+0.587880 → ΔR_H=+0.007, ΔG_H=+0.015, ΔB_H=-0.264
-2025-11-05 11:53:55,578 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=251: dCx=-0.000200, dCy=+0.000000, dG=+0.406525 → ΔR_H=+0.005, ΔG_H=+0.011, ΔB_H=-0.365
-2025-11-05 11:53:55,578 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=252: dCx=+0.000000, dCy=+0.000200, dG=+0.453140 → ΔR_H=+0.005, ΔG_H=+0.011, ΔB_H=+0.557
-2025-11-05 11:53:55,578 - DEBUG - subpage_vacspace.py:1475 - [BATCH CORR] g=253: dCx=+0.000000, dCy=-0.000100, dG=+0.253020 → ΔR_H=+0.003, ΔG_H=+0.006, ΔB_H=+1.120
+    def start_VAC_optimization(self):
+        """
+        ============================== 메인 엔트리: 버튼 이벤트 연결용 ==============================
+        전체 Flow:
+        """
+        for s in (1,2,3,4,5):
+            self._step_set_pending(s)
+        self._step_start(1)
+        self._fine_mode = False
+        self._fine_ng_list = None
+        
+        try:
+            self._load_jacobian_bundle_npy()
+        except Exception as e:
+            logging.exception("[Jacobian] Jacobian load failed")
+            return
+        
+        logging.info("[TV Control] VAC OFF 전환 시작")
+        if not self._set_vac_active(False):
+            logging.error("[TV Control] VAC OFF 전환 실패 - VAC 최적화를 종료합니다.")
+            return
+        logging.info("[TV Control] TV VAC OFF 전환 성공")    
+        
+        logging.info("[Measurement] VAC OFF 상태 측정 시작")
+        self._run_off_baseline_then_on()
+
+여기서
+    def _set_vac_active(self, enable: bool) -> bool:
+        try:
+            logging.debug("[TV Control] 현재 VAC 적용 상태를 확인합니다.")
+            current_status = self._check_vac_status()
+            current_active = bool(current_status.get("activated", False))
+
+            if current_active == enable:
+                logging.info(f"[TV Control] VAC already {'ON' if enable else 'OFF'} - skipping command.")
+                return True
+
+            self.send_command(self.ser_tv, 's')
+            setVACActive = (
+                "luna-send -n 1 -f "
+                "luna://com.webos.service.panelcontroller/setVACActive "
+                f"'{{\"OnOff\":{str(enable).lower()}}}'"
+            )
+            self.send_command(self.ser_tv, setVACActive)
+            self.send_command(self.ser_tv, 'exit', output_limit=22)
+            time.sleep(0.5)
+            st = self._check_vac_status()
+            return bool(st.get("activated", False)) == enable
+        
+        except Exception as e:
+            logging.error(f"[TV Control] VAC {'ON' if enable else 'OFF'} 전환 실패: {e}")
+            return False
+        
+    def _check_vac_status(self):
+        self.send_command(self.ser_tv, 's')
+        getVACSupportstatus = 'luna-send -n 1 -f luna://com.webos.service.panelcontroller/getVACSupportStatus \'{"subscribe":true}\''
+        VAC_support_status = self.send_command(self.ser_tv, getVACSupportstatus)
+        VAC_support_status = self.extract_json_from_luna_send(VAC_support_status)
+        self.send_command(self.ser_tv, 'exit', output_limit=22)
+        
+        if not VAC_support_status:
+            logging.warning("[TV Control] Failed to retrieve VAC support status from TV.")
+            return {"supported": False, "activated": False, "vacdata": None}
+        
+        if not VAC_support_status.get("isSupport", False):
+            logging.info("[TV Control] VAC is not supported on this model.")
+            return {"supported": False, "activated": False, "vacdata": None}
+        
+        activated = VAC_support_status.get("isActivated", False)
+        logging.info(f"[TV Control] VAC 적용 상태: {activated}")
+                
+        return {"supported": True, "activated": activated}
+를 통해 VAC를 끄는 방식 말고, 
+    def _fetch_vac_by_vac_info_pk(self, pk: int):
+        """
+        `W_VAC_Info` 테이블에서 주어진 `PK` 값으로 `VAC_Version`과 `VAC_Data`를 가져옵니다.
+        반환: (vac_version, vac_data) 또는 (None, None)
+        """
+        try:
+            db_conn = pymysql.connect(**config.conn_params)
+            cursor = db_conn.cursor()
+
+            cursor.execute("""
+                SELECT `VAC_Version`, `VAC_Data`
+                FROM `W_VAC_Info`
+                WHERE `PK` = %s
+            """, (pk,))
+
+            vac_row = cursor.fetchone()
+
+            if not vac_row:
+                logging.error(f"[DB] No VAC information found for PK={pk}")
+                return None, None
+
+            vac_version = vac_row[0]
+            vac_data = vac_row[1]
+
+            logging.info(f"[DB] VAC Info fetched for PK={pk} - Version: {vac_version}")
+            return vac_version, vac_data
+
+        except Exception as e:
+            logging.error(f"[DB] Error while fetching VAC Info by PK={pk}: {e}")
+            return None, None
+를 통해 PK=1인 것을 tv writing하는 식으로 바꿀래요
+
+마찬가지로 아래 _run_off_baseline_then_on 메서드에도 vac를 키는 것은 따로 안하겠습니다.
+
+    def _run_off_baseline_then_on(self):
+        profile_off = SessionProfile(
+            legend_text="VAC OFF (Ref.)",
+            cie_label="data_1",
+            table_cols={"lv":0, "cx":1, "cy":2, "gamma":3},
+            ref_store=None
+        )
+
+        def _after_off(store_off):
+            self._off_store = store_off
+            lv_off = np.zeros(256, dtype=np.float64)
+            for g in range(256):
+                tup = store_off['gamma']['main']['white'].get(g, None)
+                lv_off[g] = float(tup[0]) if tup else np.nan
+            self._gamma_off_vec = self._compute_gamma_series(lv_off)
+            
+            self._step_done(1)
+            logging.info("[Measurement] VAC OFF 상태 측정 완료")
+            
+            logging.info("[TV Control] VAC ON 전환 시작")
+            if not self._set_vac_active(True):
+                logging.warning("[TV Control] VAC ON 전환 실패 - VAC 최적화 종료")
+                return
+            logging.info("[TV Control] VAC ON 전환 성공")
+            
+            logging.info("[Measurement] VAC ON 측정 시작")
+            self._apply_vac_from_db_and_measure_on()
+
+        self.start_viewing_angle_session(
+            profile=profile_off,
+            gray_levels=op.gray_levels_256,
+            gamma_patterns=('white',),
+            colorshift_patterns=op.colorshift_patterns,
+            first_gray_delay_ms=3000,
+            cs_settle_ms=1000,
+            on_done=_after_off
+        )
