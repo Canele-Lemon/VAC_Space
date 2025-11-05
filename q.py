@@ -1,23 +1,20 @@
-def _update_last_on_lv_norm(self, on_store):
+def _gamma_from_last_on_norm_at_gray(self, lv_on_g: float, g: int) -> float:
     """
-    마지막 전체 ON 측정 결과(on_store)에서
-    Lv[0], max(Lv[1:]-Lv[0])를 구해 fine 보정용으로 저장.
+    마지막 전체 ON 측정의 Lv0/denom (self._fine_lv0_on / _fine_denom_on)을
+    정규화 기준으로 사용하여, 현재 Lv_on(g)에서 γ를 추정.
     """
-    lv_on = np.full(256, np.nan, np.float64)
-    for g in range(256):
-        tup = on_store['gamma']['main']['white'].get(g, None)
-        if tup:
-            lv_on[g] = float(tup[0])
+    lv0  = getattr(self, "_fine_lv0_on", float("nan"))
+    denom = getattr(self, "_fine_denom_on", float("nan"))
 
-    lv0 = lv_on[0]
-    with np.errstate(invalid='ignore'):
-        denom = np.nanmax(lv_on[1:] - lv0) if np.isfinite(lv0) else np.nan
+    if (not np.isfinite(lv0)) or (not np.isfinite(denom)) or denom <= 0:
+        return float("nan")
 
-    if (not np.isfinite(denom)) or denom <= 0:
-        logging.warning("[FineNorm] invalid ON Lv norm (denom<=0) → fine gamma disabled")
-        self._fine_lv0_on = float("nan")
-        self._fine_denom_on = float("nan")
-    else:
-        self._fine_lv0_on = float(lv0)
-        self._fine_denom_on = float(denom)
-        logging.info(f"[FineNorm] updated from last ON: Lv0={lv0:.3f}, denom={denom:.3f}")
+    nor = (lv_on_g - lv0) / denom
+    gray_norm = g / 255.0
+
+    if (not np.isfinite(nor)) or nor <= 0:
+        return float("nan")
+    if gray_norm <= 0 or gray_norm >= 1:
+        return float("nan")
+
+    return float(np.log(nor) / np.log(gray_norm))
