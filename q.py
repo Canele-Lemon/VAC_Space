@@ -1,519 +1,90 @@
-    def _apply_vac_from_db_and_measure_on(self):
-        self._step_start(2)
-        
-        # panel = self.ui.vac_cmb_PanelMaker.currentText().strip()
-        # fr = self.ui.vac_cmb_FrameRate.currentText().strip()
-        # vac_pk, vac_version, vac_data = self._fetch_vac_by_model(panel, fr)
-        # if vac_data is None:
-        #     logging.error(f"[DB] {panel}+{fr} 조합으로 매칭되는 VAC Data가 없습니다 - 최적화 루프 종료")
-        #     return
+2025-11-05 19:34:22,205 - INFO - subpage_vacspace.py:1366 - [Correction] LUT 1차 보정 완료
+2025-11-05 19:34:22,232 - DEBUG - subpage_vacspace.py:7498 - Sending command: s
+2025-11-05 19:34:22,446 - DEBUG - subpage_vacspace.py:7529 - Output: s
+/bin/sh: s: not found
+/ #
+/ #
+2025-11-05 19:34:22,447 - DEBUG - subpage_vacspace.py:7498 - Sending command: [ -d /mnt/lg/cmn_data/panelcontroller/db/vac_debug ] && echo 'exists' || echo 'not_exists'
+2025-11-05 19:34:22,660 - DEBUG - subpage_vacspace.py:7529 - Output: [ -d /mnt/lg/cmn_data/panelcontroller/db/vac_debug ] && echo 'exists' || ech
+o 'not_exists'
+exists
+/ #
+/ #
+2025-11-05 19:34:22,660 - DEBUG - subpage_vacspace.py:7498 - Sending command: cp /etc/panelcontroller/db/vac/vac_INX_50_60hz.json /mnt/lg/cmn_data/panelcontroller/db/vac_debug
+2025-11-05 19:34:22,873 - DEBUG - subpage_vacspace.py:7529 - Output: cp /etc/panelcontroller/db/vac/vac_INX_50_60hz.json /mnt/lg/cmn_data/panelco
+ntroller/db/vac_debug
 
-        vac_version, vac_data = self._fetch_vac_by_vac_info_pk(2582)
-        if vac_data is None:
-            logging.error("[DB] VAC 데이터 로딩 실패 - 최적화 루프 종료")
-            return
+/ #
+/ #
+2025-11-05 19:34:35,863 - DEBUG - subpage_vacspace.py:7527 - Output (truncated): cat > /mnt/lg/cmn_data/panelcontroller/db/vac_debug/vac_INX_50_60hz.json
+{
+"DRV_valc_major_ctrl"   :       [       0,      1       ],
+"DRV_valc_pattern_ctrl_0"       :       [       5,      1       ],
+"DRV_valc_pattern_ctrl_1"       :       [       [       1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0       ],
+                        [       0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1       ],
+                        [       1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0       ],
+                        [       0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1       ],
+                        [       1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0       ],
+                        [       0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1       ],
+                        [       1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0       ],
+                        [       0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1       ]               ],
+"DRV_valc_sat_ctrl"     :       [       0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0       ],
+"DRV_valc_hpf_ctrl_0"   :       [       0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0       ],
+"DRV_valc_hpf_ctrl_1"   :               1,
+"RchannelLow"   :       [       0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,
+                        0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,
+                        0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,
+                        0,      0,      0,      0,      0,      0
+2025-11-05 19:34:35,864 - DEBUG - subpage_vacspace.py:7498 - Sending command: restart panelcontroller
+2025-11-05 19:34:36,075 - DEBUG - subpage_vacspace.py:7529 - Output: restart panelcontroller
+restart panelcontroller
+/ #
+/ #
+2025-11-05 19:34:36,076 - DEBUG - subpage_vacspace.py:7498 - Sending command: exit
+2025-11-05 19:34:36,289 - DEBUG - subpage_vacspace.py:7529 - Output: exit
+exit shell mode
 
-        vac_dict = json.loads(vac_data)
-        self._vac_dict_cache = vac_dict
-        lut_dict_plot = {key.replace("channel", "_"): v for key, v in vac_dict.items() if "channel" in key}
-        self._update_lut_chart_and_table(lut_dict_plot)
-        self._step_done(2)
-
-        def _after_write(ok, msg):
-            if not ok:
-                logging.error(f"[VAC Writing] DB fetch VAC 데이터 Writing 실패: {msg} - 최적화 루프 종료")
-                return
-            
-            logging.info(f"[VAC Writing] DB fetch VAC 데이터 Writing 완료: {msg}")
-            logging.info("[VAC Reading] VAC Reading 시작")
-            self._read_vac_from_tv(_after_read)
-
-        def _after_read(read_vac_dict):
-            if not read_vac_dict:
-                logging.error("[VAC Reading] VAC Reading 실패 - 최적화 루프 종료")
-                return
-            logging.info("[VAC Reading] VAC Reading 완료. Written VAC 데이터와의 일치 여부를 판단합니다.")
-            mismatch_keys = self._verify_vac_data_match(written_data=vac_dict, read_data=read_vac_dict)
-
-            if mismatch_keys:
-                logging.warning("[VAC Reading] VAC 데이터 불일치 - 최적화 루프 종료")
-                return
-            else:
-                logging.info("[VAC Reading] Written VAC 데이터와 Read VAC 데이터 일치")
-
-            self._step_done(3)
-
-            self._fine_mode = False
-            
-            self.vac_optimization_gamma_chart.reset_on()
-            self.vac_optimization_cie1976_chart.reset_on()
-
-            profile_on = SessionProfile(
-                legend_text="VAC ON",
-                cie_label="data_2",
-                table_cols={"lv":4, "cx":5, "cy":6, "gamma":7, "d_cx":8, "d_cy":9, "d_gamma":10},
-                ref_store=self._off_store
-            )
-
-            def _after_on(store_on):
-                logging.info("[Measurement] DB fetch VAC 데이터 기준 측정 완료")
-                self._step_done(4)
-                self._on_store = store_on
-                self._update_last_on_lv_norm(store_on)
-                
-                logging.info("[Evaluation] ΔCx / ΔCy / ΔGamma의 Spec 만족 여부를 평가합니다.")
-                self._step_start(5)
-                self._spec_thread = SpecEvalThread(self._off_store, self._on_store, thr_gamma=0.05, thr_c=0.003, parent=self)
-                self._spec_thread.finished.connect(lambda ok, metrics: self._on_spec_eval_done(ok, metrics, iter_idx=0, max_iters=1))
-                self._spec_thread.start()
-
-            logging.info("[Measurement] DB fetch VAC 데이터 기준 측정 시작")
-            self._step_start(4)
-            self.start_viewing_angle_session(
-                profile=profile_on,
-                gray_levels=op.gray_levels_256,
-                gamma_patterns=('white',),
-                colorshift_patterns=op.colorshift_patterns,
-                first_gray_delay_ms=3000,
-                gamma_settle_ms=1000,
-                cs_settle_ms=1000,
-                on_done=_after_on
-            )
-
-        logging.info("[VAC Writing] DB fetch VAC 데이터 TV Writing 시작")
-        self._write_vac_to_tv(vac_data, on_finished=_after_write)
-    def _on_spec_eval_done(self, spec_ok, metrics, iter_idx, max_iters):
-        """
-        조건 1) spec_ok==True: 종료
-        조건 2) (spec_ok==False) and (max_iters>0): Batch Correction
-                └─ 조건 2-1) (len(ng_grays)<=10): Batch Correction 종료 → Per-gray Fine Correction 진입
-                └─ 조건 2-2) (len(ng_grays)>10) and (iter_idx<max_iters): 다음 Batch Correction
-        """
-        try:
-            ng_grays = []
-            thr_g = None
-            thr_c = None
-            
-            if metrics and "error" not in metrics:
-                max_dG   = metrics.get("max_dG",  float("nan"))
-                max_dCx  = metrics.get("max_dCx", float("nan"))
-                max_dCy  = metrics.get("max_dCy", float("nan"))
-                thr_g    = metrics.get("thr_gamma", self._spec_thread.thr_gamma if self._spec_thread else None)
-                thr_c    = metrics.get("thr_c",     self._spec_thread.thr_c     if self._spec_thread else None)
-                ng_grays = metrics.get("ng_grays", [])
-                
-                logging.info(
-                    f"[Evaluation] max|ΔGamma|={max_dG:.6f} (≤{thr_g}), "
-                    f"max|ΔCx|={max_dCx:.6f}, max|ΔCy|={max_dCy:.6f} (≤{thr_c}), "
-                    f"NG grays={ng_grays}"
-                )
-            else:
-                logging.warning("[Evaluation] evaluation failed — treating as not passed.")
-                ng_grays = []
-
-            self._update_spec_views(iter_idx, self._off_store, self._on_store)
-
-            # 조건 1) spec_ok==True: 종료
-            if spec_ok:
-                self._step_done(5)
-                logging.info("[Evaluation] Spec 통과 — 최적화 종료")
-                return
-            
-            self._step_fail(5)
-            if max_iters <= 0:
-                logging.info("[Evaluation] Spec NG but no further correction (max_iters≤0) - 최적화 종료")
-                return
-            
-            # 조건 2) (spec_ok==False) and (max_iters>0): Batch Correction
-            ng_cnt = len(ng_grays)
-            # 조건 2-1) (len(ng_grays)<=10): Batch Correction 종료 → Per-gray Fine Correction 진입
-            if ng_cnt > 0 and ng_cnt <= 10:
-                logging.info(f"[Evaluation] NG gray {ng_cnt}개 ≤ 10 → Batch Correction 종료, Per-gray Fine Correction 시작")
-                for s in (2, 3, 4):
-                    self._step_set_pending(s)
-                thr_gamma = float(thr_g) if thr_g is not None else 0.05
-                thr_c_val = float(thr_c) if thr_c is not None else 0.003
-                self._start_fine_correction_for_ng_list(
-                    ng_grays,
-                    thr_gamma=thr_gamma,
-                    thr_c=thr_c_val
-                )
-                return
-            # 조건 2-2) (len(ng_grays)>10) and (iter_idx<max_iters): 다음 Batch Correction
-            if iter_idx < max_iters:
-                logging.info(f"[Evaluation] Spec NG — batch 보정 {iter_idx+1}회차 시작")
-                for s in (2, 3, 4):
-                    self._step_set_pending(s)
-
-                thr_gamma = float(thr_g) if thr_g is not None else 0.05
-                thr_c_val = float(thr_c) if thr_c is not None else 0.003
-
-                self._run_batch_correction_with_jacobian(
-                    iter_idx=iter_idx+1,
-                    max_iters=max_iters,
-                    thr_gamma=thr_gamma,
-                    thr_c=thr_c_val,
-                    metrics=metrics
-                )
-            else:
-                logging.info("[Correction] 최대 보정 횟수 도달 — 종료")
-
-        finally:
-            self._spec_thread = None
-
-    def _run_batch_correction_with_jacobian(self, iter_idx, max_iters, thr_gamma, thr_c, lam=1e-3, metrics=None):
-
-        logging.info(f"[Batch Correction] iteration {iter_idx} start (Jacobian dense)")
-
-        # 0) 사전 조건: 자코비안 & LUT mapping & VAC cache
-        if not hasattr(self, "_J_dense"):
-            logging.error("[Batch Correction] J_dense not loaded") # self._J_dense 없음
-            return
-        self._load_mapping_index_gray_to_lut()
-        if not hasattr(self, "_vac_dict_cache") or self._vac_dict_cache is None:
-            logging.error("[Batch Correction] no VAC cache; need latest TV VAC JSON")
-            return
-
-        # 1) NG gray 리스트 / Δ 타깃 준비
-        if metrics is not None and "ng_grays" in metrics and "dG" in metrics:
-            ng_list = list(metrics["ng_grays"])
-            d_targets = {
-                "Gamma": np.asarray(metrics["dG"],  dtype=np.float32),
-                "Cx":    np.asarray(metrics["dCx"], dtype=np.float32),
-                "Cy":    np.asarray(metrics["dCy"], dtype=np.float32),
-            }
-            thr_gamma = float(metrics.get("thr_gamma", thr_gamma))
-            thr_c     = float(metrics.get("thr_c",     thr_c))
-            logging.info(f"[Batch Correction] reuse metrics from SpecEvalThread, NG={ng_list}")
-        else:
-            dG, dCx, dCy, ng_list = SpecEvalThread.compute_gray_errors_and_ng_list(
-                self._off_store, self._on_store,
-                thr_gamma=thr_gamma, thr_c=thr_c
-            )
-            d_targets = {
-                "Gamma": dG.astype(np.float32),
-                "Cx":    dCx.astype(np.float32),
-                "Cy":    dCy.astype(np.float32),
-            }
-            logging.info(f"[Batch Correction] NG grays (recomputed): {ng_list}")
-
-        if not ng_list:
-            logging.info("[Batch Correction] no NG gray (또는 0/1/254/255만 NG) → 보정 없음")
-            return
-    
-        # 2) 현재 High LUT 확보
-        vac_dict = self._vac_dict_cache
-
-        RH0 = np.asarray(vac_dict["RchannelHigh"], dtype=np.float32).copy()
-        GH0 = np.asarray(vac_dict["GchannelHigh"], dtype=np.float32).copy()
-        BH0 = np.asarray(vac_dict["BchannelHigh"], dtype=np.float32).copy()
-
-        RH = RH0.copy()
-        GH = GH0.copy()
-        BH = BH0.copy()
-
-        # 3) index별 Δ 누적 (여러 gray가 같은 index를 참조할 수 있으므로)
-        delta_acc = {
-            "R": np.zeros_like(RH),
-            "G": np.zeros_like(GH),
-            "B": np.zeros_like(BH),
-        }
-        count_acc = {
-            "R": np.zeros_like(RH, dtype=np.int32),
-            "G": np.zeros_like(GH, dtype=np.int32),
-            "B": np.zeros_like(BH, dtype=np.int32),
-        }
-
-        mapR = self._lut_map_high["R"]   # (256,)
-        mapG = self._lut_map_high["G"]
-        mapB = self._lut_map_high["B"]
-        
-        # 4) 각 NG gray에 대해 ΔR/G/B 계산 후 index에 누적
-        for g in ng_list:
-            Jg = self._J_dense[g]
-            logging.info(f"g={g} | Jg abs min={np.min(np.abs(Jg))} | Jg abs max={np.max(np.abs(Jg))}")
-            dX = self._solve_delta_rgb_for_gray(
-                g,
-                d_targets,
-                lam=lam,
-                thr_c=thr_c,          # 색좌표 스펙 (예: 0.003)
-                thr_gamma=thr_gamma,  # 감마 스펙 (예: 0.05)
-                base_wCx=0.5,         # Cx 기본 가중치 (기존 0.5를 base로 사용)
-                base_wCy=0.5,         # Cy 기본 가중치
-                base_wG=1.0,          # Gamma 기본 가중치
-                boost=3.0,            # NG일 때 배율
-                keep=0.2,             # OK일 때 배율 (거의 무시)
-            )
-            if dX is None:
-                continue
-
-            dR, dG, dB = dX
-
-            idxR = int(mapR[g])
-            idxG = int(mapG[g])
-            idxB = int(mapB[g])
-
-            if 0 <= idxR < len(RH):
-                delta_acc["R"][idxR] += dR
-                count_acc["R"][idxR] += 1
-            if 0 <= idxG < len(GH):
-                delta_acc["G"][idxG] += dG
-                count_acc["G"][idxG] += 1
-            if 0 <= idxB < len(BH):
-                delta_acc["B"][idxB] += dB
-                count_acc["B"][idxB] += 1
-
-        # 5) index별 평균 Δ 적용 + clip + monotone + 로그
-        for ch, arr, arr0 in (
-            ("R", RH, RH0),
-            ("G", GH, GH0),
-            ("B", BH, BH0),
-        ):
-            da = delta_acc[ch]
-            ct = count_acc[ch]
-            mask = ct > 0
-
-            if not np.any(mask):
-                logging.info(f"[Batch Correction] channel {ch}: no indices updated")
-                continue
-
-            # 평균 Δ
-            arr[mask] = arr0[mask] + (da[mask] / ct[mask])
-            # clip
-            arr[:] = np.clip(arr, 0.0, 4095.0)
-            # 단조 증가 (i<j → LUT[i] ≤ LUT[j])
-            self._enforce_monotone(arr)
-
-            # 인덱스별 보정 로그 (before → after)
-            changed_idx = np.where(mask)[0]
-            logging.info(f"[Batch Correction] channel {ch}: {len(changed_idx)} indices updated")
-            for idx in changed_idx:
-                before = float(arr0[idx])
-                after  = float(arr[idx])
-                delta  = after - before
-                logging.debug(
-                    f"[Batch Correction] ch={ch} idx={idx:4d}: {before:7.1f} → {after:7.1f} (Δ={delta:+.2f})"
-                )
-
-        # 6) NG gray 기준으로 어떤 LUT index가 어떻게 바뀌었는지 추가 요약 로그
-        for g in ng_list:
-            idxR = int(mapR[g])
-            idxG = int(mapG[g])
-            idxB = int(mapB[g])
-            info = []
-            if 0 <= idxR < len(RH0):
-                info.append(
-                    f"R(idx={idxR}): {RH0[idxR]:.1f}→{RH[idxR]:.1f} (Δ={RH[idxR]-RH0[idxR]:+.1f})"
-                )
-            if 0 <= idxG < len(GH0):
-                info.append(
-                    f"G(idx={idxG}): {GH0[idxG]:.1f}→{GH[idxG]:.1f} (Δ={GH[idxG]-GH0[idxG]:+.1f})"
-                )
-            if 0 <= idxB < len(BH0):
-                info.append(
-                    f"B(idx={idxB}): {BH0[idxB]:.1f}→{BH[idxB]:.1f} (Δ={BH[idxB]-BH0[idxB]:+.1f})"
-                )
-            if info:
-                logging.info(f"[Batch Correction] g={g:3d} → " + " | ".join(info))
-
-        # 7) 새 4096 LUT 구성 (Low는 그대로, High만 업데이트)
-        new_lut_4096 = {
-            "RchannelLow":  np.asarray(vac_dict["RchannelLow"],  dtype=np.float32),
-            "GchannelLow":  np.asarray(vac_dict["GchannelLow"],  dtype=np.float32),
-            "BchannelLow":  np.asarray(vac_dict["BchannelLow"],  dtype=np.float32),
-            "RchannelHigh": RH,
-            "GchannelHigh": GH,
-            "BchannelHigh": BH,
-        }
-        for k in new_lut_4096:
-            new_lut_4096[k] = np.clip(np.round(new_lut_4096[k]), 0, 4095).astype(np.uint16)
-
-        # UI용 플롯 dict
-        lut_dict_plot = {
-            "R_Low":  new_lut_4096["RchannelLow"],
-            "R_High": new_lut_4096["RchannelHigh"],
-            "G_Low":  new_lut_4096["GchannelLow"],
-            "G_High": new_lut_4096["GchannelHigh"],
-            "B_Low":  new_lut_4096["BchannelLow"],
-            "B_High": new_lut_4096["BchannelHigh"],
-        }
-        self._update_lut_chart_and_table(lut_dict_plot)
-
-        # 8) TV write → read → 전체 ON 재측정 → Spec 재평가
-        logging.info(f"[Correction] LUT {iter_idx}차 보정 완료")
-
-        vac_write_json = self.build_vacparam_std_format(
-            base_vac_dict=self._vac_dict_cache,
-            new_lut_tvkeys=new_lut_4096
-        )
-        vac_dict = json.loads(vac_write_json)
-        self._vac_dict_cache = vac_dict
-
-        def _after_write(ok, msg):
-            logging.info(f"[VAC Writing] write result: {ok} {msg}")
-            if not ok:
-                return
-            logging.info("[VAC Reading] TV reading after write")
-            self._read_vac_from_tv(_after_read_back)
-
-        def _after_read_back(vac_dict_after):
-            if not vac_dict_after:
-                logging.error("[VAC Reading] TV read-back failed")
-                return
-            logging.info("[VAC Reading] VAC Reading 완료. Written VAC 데이터와의 일치 여부를 판단합니다.")
-            mismatch_keys = self._verify_vac_data_match(written_data=vac_dict, read_data=vac_dict_after)
-            if mismatch_keys:
-                logging.warning("[VAC Reading] VAC 데이터 불일치 - 최적화 루프 종료")
-                return
-            else:
-                logging.info("[VAC Reading] Written VAC 데이터와 Read VAC 데이터 일치")            
-            self._step_done(3)
-            
-            self._fine_mode = False
-
-            self.vac_optimization_gamma_chart.reset_on()
-            self.vac_optimization_cie1976_chart.reset_on()
-
-            profile_corr = SessionProfile(
-                legend_text=f"CORR #{iter_idx}",
-                cie_label=None,
-                table_cols={"lv":4, "cx":5, "cy":6, "gamma":7,
-                            "d_cx":8, "d_cy":9, "d_gamma":10},
-                ref_store=self._off_store
-            )
-
-            def _after_corr(store_corr):
-                self._step_done(4)
-                self._on_store = store_corr
-                self._update_last_on_lv_norm(store_corr)
-                
-                self._step_start(5)
-                self._spec_thread = SpecEvalThread(
-                    self._off_store, self._on_store,
-                    thr_gamma=thr_gamma, thr_c=thr_c, parent=self
-                )
-                self._spec_thread.finished.connect(
-                    lambda ok, m: self._on_spec_eval_done(ok, m, iter_idx, max_iters)
-                )
-                self._spec_thread.start()
-
-            logging.info("[BATCH CORR] re-measure start (after LUT update)")
-            self._step_start(4)
-            self.start_viewing_angle_session(
-                profile=profile_corr,
-                gray_levels=op.gray_levels_256,
-                gamma_patterns=('white',),
-                colorshift_patterns=op.colorshift_patterns,
-                first_gray_delay_ms=3000,
-                gamma_settle_ms=1000,
-                cs_settle_ms=1000,
-                on_done=_after_corr
-            )
-
-        self._step_start(3)
-        self._write_vac_to_tv(vac_write_json, on_finished=_after_write)
-    def _solve_delta_rgb_for_gray(
-        self,
-        g: int,
-        d_targets: dict,
-        lam: float = 1e-3,
-        # --- (옵션1) 기존처럼 직접 weight 지정하고 싶을 때 ---
-        wCx: float | None = None,
-        wCy: float | None = None,
-        wG:  float | None = None,
-        # --- (옵션2) NG 정도에 따라 자동 가중치 계산 ---
-        thr_c: float | None = None,
-        thr_gamma: float | None = None,
-        base_wCx: float = 1.0,
-        base_wCy: float = 1.0,
-        base_wG:  float = 1.0,
-        boost: float = 3.0,
-        keep: float = 0.2,
-    ):
-        """
-        주어진 gray g에서, 현재 ΔY = [dCx, dCy, dGamma]를
-        자코비안 J_g를 이용해 줄이기 위한 ΔX = [ΔR_H, ΔG_H, ΔB_H]를 푼다.
-
-        관계식:  ΔY_new ≈ ΔY + J_g · ΔX
-        우리가 원하는 건 ΔY_new ≈ 0 이므로, J_g · ΔX ≈ -ΔY 를 풀어야 함.
-
-        리지 가중 최소자승:
-            argmin_ΔX || W (J_g ΔX + ΔY) ||^2 + λ ||ΔX||^2
-            → (J^T W^2 J + λI) ΔX = - J^T W^2 ΔY
-
-        - thr_c, thr_gamma가 주어지면:
-            NG 여부에 따라 (base_w * boost) / (base_w * keep)로 가중치 자동 계산
-        - thr_c, thr_gamma가 None 이고 wCx/wCy/wG가 주어지면:
-            예전 방식처럼 고정 weight 사용
-        """
-        Jg = np.asarray(self._J_dense[g], dtype=np.float32)  # (3,3)
-        if not np.isfinite(Jg).all():
-            logging.warning(f"[BATCH CORR] g={g}: J_g has NaN/inf → skip")
-            return None
-
-        dCx_g = float(d_targets["Cx"][g])
-        dCy_g = float(d_targets["Cy"][g])
-        dG_g  = float(d_targets["Gamma"][g])
-        dy = np.array([dCx_g, dCy_g, dG_g], dtype=np.float32)  # (3,)
-
-        # 이미 거의 0이면 굳이 보정 안 해도 됨
-        if np.all(np.abs(dy) < 1e-6):
-            return None
-
-        # ---------------------------------------------
-        # 1) 가중치 계산
-        #    - 우선순위:
-        #      (1) thr_c/thr_gamma가 있으면 NG 기반 자동 가중치
-        #      (2) 아니면 (wCx,wCy,wG) 직접 지정값 사용
-        #      (3) 둘 다 없으면 base_w* 그대로 사용
-        # ---------------------------------------------
-        if thr_c is not None and thr_gamma is not None:
-            # NG 기반: 스펙 넘어가면 boost, 아니면 keep
-            def w_for(err: float, thr: float, base: float) -> float:
-                if abs(err) > thr:
-                    return base * boost     # NG → 더 강하게
-                else:
-                    return base * keep      # OK → 거의 무시 수준
-
-            wCx_eff = w_for(dCx_g, thr_c,     base_wCx)
-            wCy_eff = w_for(dCy_g, thr_c,     base_wCy)
-            wG_eff  = w_for(dG_g,  thr_gamma, base_wG)
-
-        elif (wCx is not None) and (wCy is not None) and (wG is not None):
-            # 옛날 방식: 직접 weight 지정
-            wCx_eff, wCy_eff, wG_eff = float(wCx), float(wCy), float(wG)
-
-        else:
-            # fallback: 그냥 base weight 사용
-            wCx_eff, wCy_eff, wG_eff = base_wCx, base_wCy, base_wG
-
-        w_vec = np.array([wCx_eff, wCy_eff, wG_eff], dtype=np.float32)
-
-        # ---------------------------------------------
-        # 2) 가중 least squares (기존 로직 그대로)
-        # ---------------------------------------------
-        WJ = w_vec[:, None] * Jg   # (3,3)
-        Wy = w_vec * dy            # (3,)
-
-        A = WJ.T @ WJ + float(lam) * np.eye(3, dtype=np.float32)  # (3,3)
-        b = - WJ.T @ Wy                                           # (3,)
-
-        try:
-            dX = np.linalg.solve(A, b).astype(np.float32)
-        except np.linalg.LinAlgError:
-            dX = np.linalg.lstsq(A, b, rcond=None)[0].astype(np.float32)
-
-        step_gain = 16.0
-        dR, dG, dB = (float(dX[0]) * step_gain,
-                    float(dX[1]) * step_gain,
-                    float(dX[2]) * step_gain)
-
-        logging.debug(
-            f"[BATCH CORR] g={g}: "
-            f"dCx={dCx_g:+.6f}, dCy={dCy_g:+.6f}, dG={dG_g:+.6f} → "
-            f"wCx={wCx_eff:.3f}, wCy={wCy_eff:.3f}, wG={wG_eff:.3f} → "
-            f"ΔR_H={dR:+.3f}, ΔG_H={dG:+.3f}, ΔB_H={dB:+.3f}"
-        )
-        return dR, dG, dB
-
-그리고 이렇게 하면 batch 보정 1번만 하는거 맞죠?
+030818.948711:teminalmanager-h:help] 0x0000000a
+030818.948733:teminalmanager-h:help] 0x0000000a
+030818.948759:teminalmanager-h:help] 0x0000000a
+2025-11-05 19:34:36,295 - INFO - subpage_vacspace.py:1376 - [VAC Writing] write result: True VAC data written to /mnt/lg/cmn_data/panelcontroller/db/vac_debug/vac_INX_50_60hz.json
+2025-11-05 19:34:36,295 - INFO - subpage_vacspace.py:1379 - [VAC Reading] TV reading after write
+2025-11-05 19:34:36,297 - DEBUG - subpage_vacspace.py:7498 - Sending command: s
+2025-11-05 19:34:36,519 - DEBUG - subpage_vacspace.py:7529 - Output: 
+030819.169486:teminalmanager-h:help] 0x00000073
+start shell mode.
+/ #
+2025-11-05 19:34:36,520 - DEBUG - subpage_vacspace.py:7498 - Sending command: [ -d /mnt/lg/cmn_data/panelcontroller/db/vac_debug ] && echo 'exists' || echo 'not_exists'
+2025-11-05 19:34:36,732 - DEBUG - subpage_vacspace.py:7529 - Output: [ -d /mnt/lg/cmn_data/panelcontroller/db/vac_debug ] && echo 'exists' || ech
+o 'not_exists'
+exists
+/ #
+/ #
+2025-11-05 19:34:36,733 - DEBUG - subpage_vacspace.py:7498 - Sending command: cat /mnt/lg/cmn_data/panelcontroller/db/vac_debug/vac_INX_50_60hz.json
+2025-11-05 19:34:49,402 - DEBUG - subpage_vacspace.py:7527 - Output (truncated): cat /mnt/lg/cmn_data/panelcontroller/db/vac_debug/vac_INX_50_60hz.json
+{
+"DRV_valc_major_ctrl"   :       [       0,      1       ],
+"DRV_valc_pattern_ctrl_0"       :       [       5,      1       ],
+"DRV_valc_pattern_ctrl_1"       :       [       [       1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0       ],
+                        [       0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1       ],
+                        [       1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0       ],
+                        [       0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1       ],
+                        [       1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0       ],
+                        [       0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1       ],
+                        [       1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0       ],
+                        [       0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1,      0,      1       ]               ],
+"DRV_valc_sat_ctrl"     :       [       0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0       ],
+"DRV_valc_hpf_ctrl_0"   :       [       0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0       ],
+"DRV_valc_hpf_ctrl_1"   :               1,
+"RchannelLow"   :       [       0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,
+                        0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,
+                        0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      0,
+                        0,      0,      0,      0,      0,      0,
+2025-11-05 19:34:49,413 - INFO - subpage_vacspace.py:1386 - [VAC Reading] VAC Reading 완료. Written VAC 데이터와의 일치 여부를 판단합니다.
+2025-11-05 19:34:49,414 - INFO - subpage_vacspace.py:2572 - [VAC Reading] VAC data successfully verified - no mismatches.
+2025-11-05 19:34:49,415 - INFO - subpage_vacspace.py:1392 - [VAC Reading] Written VAC 데이터와 Read VAC 데이터 일치
+2025-11-05 19:34:49,426 - INFO - subpage_vacspace.py:1423 - [BATCH CORR] re-measure start (after LUT update)
+2025-11-05 19:42:26,413 - INFO - subpage_vacspace.py:2779 - [FineNorm] updated from last ON: Lv0=0.040, denom=303.460
+2025-11-05 19:42:26,426 - INFO - subpage_vacspace.py:778 - [Evaluation] max|ΔGamma|=0.467177 (≤0.05), max|ΔCx|=0.006600, max|ΔCy|=0.012700 (≤0.003), NG grays=[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 95, 96, 97, 98, 99, 100, 101, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253]
+2025-11-05 19:42:26,428 - DEBUG - subpage_vacspace.py:892 - 1차 보정 결과: Cx:251/256, Cy:221/256, Gamma:137/253
+2025-11-05 19:42:26,639 - INFO - subpage_vacspace.py:832 - [Correction] 최대 보정 횟수 도달 — 종료
