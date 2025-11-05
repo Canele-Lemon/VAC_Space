@@ -1,21 +1,23 @@
-def _after_off(store_off):
-    self._off_store = store_off
-
-    # OFF 전체 Lv는 감마 벡터 계산용으로만 사용
-    lv_off = np.zeros(256, dtype=np.float64)
+def _update_last_on_lv_norm(self, on_store):
+    """
+    마지막 전체 ON 측정 결과(on_store)에서
+    Lv[0], max(Lv[1:]-Lv[0])를 구해 fine 보정용으로 저장.
+    """
+    lv_on = np.full(256, np.nan, np.float64)
     for g in range(256):
-        tup = store_off['gamma']['main']['white'].get(g, None)
-        lv_off[g] = float(tup[0]) if tup else np.nan
+        tup = on_store['gamma']['main']['white'].get(g, None)
+        if tup:
+            lv_on[g] = float(tup[0])
 
-    # 🔹 OFF 기준 감마 시리즈만 캐싱 (타깃용)
-    self._gamma_off_vec = self._compute_gamma_series(lv_off)
+    lv0 = lv_on[0]
+    with np.errstate(invalid='ignore'):
+        denom = np.nanmax(lv_on[1:] - lv0) if np.isfinite(lv0) else np.nan
 
-    self._step_done(1)
-    logging.info("[Measurement] VAC OFF 상태 측정 완료")
-
-    logging.info("[TV Control] VAC ON 전환 시작")
-    if not self._set_vac_active(True):
-        logging.warning("[TV Control] VAC ON 전환 실패 - VAC 최적화 종료")
-        return
-    logging.info("[TV Control] VAC ON 전환 성공")
-    # ...
+    if (not np.isfinite(denom)) or denom <= 0:
+        logging.warning("[FineNorm] invalid ON Lv norm (denom<=0) → fine gamma disabled")
+        self._fine_lv0_on = float("nan")
+        self._fine_denom_on = float("nan")
+    else:
+        self._fine_lv0_on = float(lv0)
+        self._fine_denom_on = float(denom)
+        logging.info(f"[FineNorm] updated from last ON: Lv0={lv0:.3f}, denom={denom:.3f}")
