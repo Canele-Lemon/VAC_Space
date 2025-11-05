@@ -1,72 +1,339 @@
-class XYChart:
-    ...
+def _update_spec_views(self, iter_idx, off_store, on_store, thr_gamma=0.05, thr_c=0.003):
+    """
+    결과 표/차트 갱신
+    1) vac_table_chromaticityDiff  (ΔCx/ΔCy/ΔGamma pass/total)
+    2) vac_chart_chromaticityDiff  (Cx,Cy vs gray: OFF/ON)
+    3) vac_table_gammaLinearity    (OFF/ON, 88~232 구간별 슬로프 평균)
+    4) vac_chart_gammaLinearity    (8gray 블록 평균 슬로프 dot+line)
+    5) vac_table_colorShift_3      (4 skin 패턴 Δu′v′, OFF/ON, 평균)
+    6) vac_chart_colorShift_3      (Grouped bars)
+    """
 
-    def set_series(self, key, x_list, y_list, *, marker=None, linestyle='-', label=None, axis_index=0, autoscale=True):
-        """한 번에 x/y 전체를 세팅 (배치 갱신)"""
-        # 1) 1D 배열로 강제 + 길이 체크
-        x_arr = np.asarray(x_list).reshape(-1)
-        y_arr = np.asarray(y_list).reshape(-1)
-        if x_arr.size != y_arr.size:
-            print(f"[XYChart] set_series: length mismatch (x={x_arr.size}, y={y_arr.size})")
-            return
-
-        # 2) 라인 생성(없으면)
-        if key not in self.lines:
-            axis = self.axes[axis_index]
-            line, = axis.plot([], [], linestyle=linestyle, marker=marker, label=label or key)
-            self.lines[key] = line
-            self.data[key] = {'x': [], 'y': []}
-
-        # 3) 데이터 반영
-        self.data[key]['x'] = x_arr.tolist()
-        self.data[key]['y'] = y_arr.tolist()
-
-        ln = self.lines[key]
-        if marker is not None:
-            ln.set_marker(marker)
-        ln.set_linestyle(linestyle)
-        if label is not None:
-            ln.set_label(label)
-        ln.set_data(self.data[key]['x'], self.data[key]['y'])
-
-        ax = ln.axes
-        # ★ 필요할 때만 autoscale
-        if autoscale:
-            ax.relim()
-            ax.autoscale_view()
-
-        self.update_legend()
-        self.canvas.draw()
-        
-class XYChart:
-    ...
-
-    def set_y_axis_range(self, min_val, max_val, tick_count=None, axis_index=0):
+    # ===== 공통: white 시리즈 추출 (정면 / 측면) =====
+    def _extract_white(series_store, view_angle="front"):
         """
-        y축 범위 및 tick 개수 설정.
-        tick_count가 주어지면 (max-min)/(tick_count-1) 간격으로 tick 생성.
+        Extract Lv, Cx, Cy arrays from white pattern data.
+        view_angle: "front" → use 'main' data, "side" → use 'sub' data
         """
-        if axis_index >= len(self.axes):
-            print(f"[XYChart] Invalid axis index in set_y_axis_range: {axis_index}")
-            return
+        lv = np.full(256, np.nan, np.float64)
+        cx = np.full(256, np.nan, np.float64)
+        cy = np.full(256, np.nan, np.float64)
 
-        ax = self.axes[axis_index]
+        key = "main" if view_angle == "front" else "sub"
 
-        if tick_count is not None and tick_count > 1:
-            tick_interval = float(max_val - min_val) / float(tick_count - 1)
-        else:
-            tick_interval = None
+        for g in range(256):
+            tup = series_store['gamma'][key]['white'].get(g, None)
+            if tup:
+                lv[g] = float(tup[0])
+                cx[g] = float(tup[1])
+                cy[g] = float(tup[2])
 
+        return lv, cx, cy
+
+    # 정면 기준 (chromaticity / gamma spec)
+    lv_off, cx_off, cy_off = _extract_white(off_store, view_angle="front")
+    lv_on,  cx_on,  cy_on  = _extract_white(on_store,  view_angle="front")
+
+    # 측면 기준 (gamma linearity 용)
+    lv_off_side, cx_off_side, cy_off_side = _extract_white(off_store, view_angle="side")
+    lv_on_side,  cx_on_side,  cy_on_side  = _extract_white(on_store,  view_angle="side")
+
+    # ===== 1) ChromaticityDiff 표: pass/total =====
+    G_off = self._compute_gamma_series(lv_off)
+    G_on  = self._compute_gamma_series(lv_on)
+
+    dG  = G_on - G_off
+    dCx = cx_on - cx_off
+    dCy = cy_on - cy_off
+
+    # --- ΔCx/ΔCy: 소수점 4번째 자리 반올림 기준, edge gray(0,1,254,255) 완전 제외 ---
+    def _pass_total_chroma(d_arr, thr):
+        mask = np.isfinite(d_arr)
+        # edge grays 제외
+        for g in (0, 1, 254, 255):
+            if 0 <= g < len(mask):
+                mask[g] = False
+
+        vals = d_arr[mask]
+        tot = int(np.sum(mask))
+        if tot <= 0:
+            return 0, 0
+
+        rounded = np.round(np.abs(vals), 4)
+        thr_r = round(float(thr), 4)
+        ok = int(np.sum(rounded <= thr_r))
+        return ok, tot
+
+    # --- ΔGamma: 소수점 3번째 자리 반올림 기준, edge gray(0,1,254,255) 완전 제외 ---
+    def _pass_total_gamma(d_arr, thr):
+        mask = np.isfinite(d_arr)
+        for g in (0, 1, 254, 255):
+            if 0 <= g < len(mask):
+                mask[g] = False
+
+        vals = d_arr[mask]
+        tot = int(np.sum(mask))
+        if tot <= 0:
+            return 0, 0
+
+        rounded = np.round(np.abs(vals), 3)
+        thr_r = round(float(thr), 3)
+        ok = int(np.sum(rounded <= thr_r))
+        return ok, tot
+
+    ok_cx, tot_cx = _pass_total_chroma(dCx, thr_c)
+    ok_cy, tot_cy = _pass_total_chroma(dCy, thr_c)
+    ok_g,  tot_g  = _pass_total_gamma(dG,  thr_gamma)
+
+    # 표: (제목/헤더 제외) 2열×(2~4행) 채우기
+    def _set_text(tbl, row, col, text):
+        self._ensure_row_count(tbl, row)
+        item = tbl.item(row, col)
+        if item is None:
+            item = QTableWidgetItem()
+            tbl.setItem(row, col, item)
+        item.setText(text)
+
+    tbl_ch = self.ui.vac_table_chromaticityDiff
+    _set_text(tbl_ch, 1, 1, f"{ok_cx}/{tot_cx}")   # 2행,2열 ΔCx
+    _set_text(tbl_ch, 2, 1, f"{ok_cy}/{tot_cy}")   # 3행,2열 ΔCy
+    _set_text(tbl_ch, 3, 1, f"{ok_g}/{tot_g}")     # 4행,2열 ΔGamma
+
+    logging.debug(
+        f"{iter_idx}차 보정 결과: "
+        f"Cx:{ok_cx}/{tot_cx}, "
+        f"Cy:{ok_cy}/{tot_cy}, "
+        f"Gamma:{ok_g}/{tot_g}"
+    )
+
+    # ===== 2) ChromaticityDiff 차트: Cx/Cy vs gray (OFF/ON, 정면 기준) =====
+    x = np.arange(256)
+
+    self.vac_optimization_chromaticity_chart.set_series(
+        "OFF_Cx", x, cx_off,
+        marker=None,
+        linestyle='--',
+        label='OFF Cx'
+    )
+    self.vac_optimization_chromaticity_chart.lines["OFF_Cx"].set_color('orange')
+
+    self.vac_optimization_chromaticity_chart.set_series(
+        "ON_Cx", x, cx_on,
+        marker=None,
+        linestyle='-',
+        label='ON Cx'
+    )
+    self.vac_optimization_chromaticity_chart.lines["ON_Cx"].set_color('orange')
+
+    self.vac_optimization_chromaticity_chart.set_series(
+        "OFF_Cy", x, cy_off,
+        marker=None,
+        linestyle='--',
+        label='OFF Cy'
+    )
+    self.vac_optimization_chromaticity_chart.lines["OFF_Cy"].set_color('green')
+
+    self.vac_optimization_chromaticity_chart.set_series(
+        "ON_Cy", x, cy_on,
+        marker=None,
+        linestyle='-',
+        label='ON Cy'
+    )
+    self.vac_optimization_chromaticity_chart.lines["ON_Cy"].set_color('green')
+
+    # y축 autoscale with margin 1.1 (chromaticity)
+    all_y = np.concatenate([
+        np.asarray(cx_off, dtype=np.float64),
+        np.asarray(cx_on,  dtype=np.float64),
+        np.asarray(cy_off, dtype=np.float64),
+        np.asarray(cy_on,  dtype=np.float64),
+    ])
+    all_y = all_y[np.isfinite(all_y)]
+    if all_y.size > 0:
+        ymin = float(np.min(all_y))
+        ymax = float(np.max(all_y))
+        center = 0.5 * (ymin + ymax)
+        half = 0.5 * (ymax - ymin)
+        if half <= 0:
+            half = max(0.001, abs(center) * 0.05)
+        half *= 1.1  # 10% margin
+        new_min = center - half
+        new_max = center + half
+
+        ax_chr = self.vac_optimization_chromaticity_chart.ax
         cs.MatFormat_Axis(
-            ax,
-            min_val=float(min_val),
-            max_val=float(max_val),
-            tick_interval=tick_interval,
+            ax_chr,
+            min_val=np.float64(new_min),
+            max_val=np.float64(new_max),
+            tick_interval=None,
             axis='y'
         )
-        # x축은 건드리지 않고, y축은 우리가 지정한 범위 유지
-        ax.relim()
-        ax.autoscale_view(scalex=False, scaley=False)
-        self.canvas.draw()
-        
-        .
+        ax_chr.relim()
+        ax_chr.autoscale_view(scalex=False, scaley=False)
+        self.vac_optimization_chromaticity_chart.canvas.draw()
+
+    # ===== 3) GammaLinearity 표: 88~232, 8gray 블록 평균 슬로프 (측면 기준) =====
+    def _normalized_luminance(lv_vec):
+        """
+        lv_vec: (256,) 절대 휘도 [cd/m2]
+        return: (256,) 0~1 정규화된 휘도
+                Ynorm[g] = (Lv[g] - Lv[0]) / (max(Lv[1:]-Lv[0]))
+        """
+        lv_arr = np.asarray(lv_vec, dtype=np.float64)
+        y0 = lv_arr[0]
+        denom = np.nanmax(lv_arr[1:] - y0)
+        if not np.isfinite(denom) or denom <= 0:
+            return np.full(256, np.nan, dtype=np.float64)
+        return (lv_arr - y0) / denom
+
+    def _block_slopes(lv_vec, g_start=88, g_stop=232, step=8):
+        """
+        lv_vec: (256,) 절대 휘도
+        g_start..g_stop: 마지막 블록은 [224,232]까지 포함되도록 설정
+        step: 8gray 폭
+
+        return:
+        mids  : (n_blocks,) 각 블록 중간 gray (예: 92,100,...,228)
+        slopes: (n_blocks,) 각 블록의 slope
+                slope = abs( Ynorm[g1] - Ynorm[g0] ) / ((g1-g0)/255)
+                g0 = block start, g1 = g0+step
+        """
+        Ynorm = _normalized_luminance(lv_vec)  # (256,)
+        mids   = []
+        slopes = []
+        for g0 in range(g_start, g_stop, step):
+            g1 = g0 + step
+            if g1 >= len(Ynorm):
+                break
+
+            y0 = Ynorm[g0]
+            y1 = Ynorm[g1]
+
+            d_gray_norm = (g1 - g0) / 255.0
+
+            if np.isfinite(y0) and np.isfinite(y1) and d_gray_norm > 0:
+                slope = abs(y1 - y0) / d_gray_norm
+            else:
+                slope = np.nan
+
+            mids.append(g0 + (g1 - g0) / 2.0)  # 예: 88~96 -> 92.0
+            slopes.append(slope)
+
+        return np.asarray(mids, dtype=np.float64), np.asarray(slopes, dtype=np.float64)
+
+    mids_off, slopes_off = _block_slopes(lv_off_side, g_start=88, g_stop=232, step=8)
+    mids_on,  slopes_on  = _block_slopes(lv_on_side,  g_start=88, g_stop=232, step=8)
+
+    avg_off = float(np.nanmean(slopes_off)) if np.isfinite(slopes_off).any() else float('nan')
+    avg_on  = float(np.nanmean(slopes_on )) if np.isfinite(slopes_on ).any() else float('nan')
+
+    tbl_gl = self.ui.vac_table_gammaLinearity
+    _set_text(tbl_gl, 1, 1, f"{avg_off:.2f}")  # ★ 소수점 둘째 자리까지
+    _set_text(tbl_gl, 1, 2, f"{avg_on:.2f}")   # ★ 소수점 둘째 자리까지
+
+    # ===== 4) GammaLinearity 차트: 블록 중심 x (= g+4), dot+line =====
+    # 라인 세팅 (자동 스케일링은 직접 처리할 거라 autoscale=False)
+    self.vac_optimization_gammalinearity_chart.set_series(
+        "OFF_slope8",
+        mids_off,
+        slopes_off,
+        marker='o',
+        linestyle='-',
+        label='OFF slope(8)',
+        autoscale=False
+    )
+    off_ln = self.vac_optimization_gammalinearity_chart.lines["OFF_slope8"]
+    off_ln.set_color('black')
+    off_ln.set_markersize(3)
+
+    self.vac_optimization_gammalinearity_chart.set_series(
+        "ON_slope8",
+        mids_on,
+        slopes_on,
+        marker='o',
+        linestyle='-',
+        label='ON slope(8)',
+        autoscale=False
+    )
+    on_ln = self.vac_optimization_gammalinearity_chart.lines["ON_slope8"]
+    on_ln.set_color('red')
+    on_ln.set_markersize(3)
+
+    # y축 autoscale with margin 1.1 + tick 5개
+    all_slopes = np.concatenate([
+        np.asarray(slopes_off, dtype=np.float64),
+        np.asarray(slopes_on,  dtype=np.float64),
+    ])
+    all_slopes = all_slopes[np.isfinite(all_slopes)]
+    if all_slopes.size > 0:
+        ymin = float(np.min(all_slopes))
+        ymax = float(np.max(all_slopes))
+        center = 0.5 * (ymin + ymax)
+        half = 0.5 * (ymax - ymin)
+        if half <= 0:
+            half = max(0.001, abs(center) * 0.05)
+        half *= 1.1  # 10% margin
+        new_min = center - half
+        new_max = center + half
+
+        # ★ XYChart 메서드 사용: y축 범위 + tick 5개
+        self.vac_optimization_gammalinearity_chart.set_y_axis_range(
+            new_min,
+            new_max,
+            tick_count=5
+        )
+
+    # ===== 5) ColorShift(4종) 표 & 6) 묶음 막대 =====
+    want_names = ['Dark Skin', 'Light Skin', 'Asian', 'Western']
+    name_to_idx = {name: i for i, (name, *_rgb) in enumerate(op.colorshift_patterns)}
+
+    def _delta_uv_for_state(state_store):
+        # main=정면(0°), sub=측면(60°) 가정
+        arr = []
+        for nm in want_names:
+            idx = name_to_idx.get(nm, None)
+            if idx is None:
+                arr.append(np.nan)
+                continue
+            if idx >= len(state_store['colorshift']['main']) or idx >= len(state_store['colorshift']['sub']):
+                arr.append(np.nan)
+                continue
+
+            lv0, u0, v0 = state_store['colorshift']['main'][idx]
+            lv6, u6, v6 = state_store['colorshift']['sub'][idx]
+
+            if not all(np.isfinite([u0, v0, u6, v6])):
+                arr.append(np.nan)
+                continue
+
+            d = float(np.sqrt((u6 - u0)**2 + (v6 - v0)**2))
+            arr.append(d)
+
+        return np.array(arr, dtype=np.float64)  # [DarkSkin, LightSkin, Asian, Western]
+
+    duv_off = _delta_uv_for_state(off_store)
+    duv_on  = _delta_uv_for_state(on_store)
+
+    mean_off = float(np.nanmean(duv_off)) if np.isfinite(duv_off).any() else float('nan')
+    mean_on  = float(np.nanmean(duv_on )) if np.isfinite(duv_on ).any() else float('nan')
+
+    tbl_cs = self.ui.vac_table_colorShift_3
+    # OFF (★ 소수점 3째 자리까지)
+    _set_text(tbl_cs, 1, 1, f"{duv_off[0]:.3f}")   # DarkSkin
+    _set_text(tbl_cs, 2, 1, f"{duv_off[1]:.3f}")   # LightSkin
+    _set_text(tbl_cs, 3, 1, f"{duv_off[2]:.3f}")   # Asian
+    _set_text(tbl_cs, 4, 1, f"{duv_off[3]:.3f}")   # Western
+    _set_text(tbl_cs, 5, 1, f"{mean_off:.3f}")     # 평균
+
+    # ON (★ 소수점 3째 자리까지)
+    _set_text(tbl_cs, 1, 2, f"{duv_on[0]:.3f}")
+    _set_text(tbl_cs, 2, 2, f"{duv_on[1]:.3f}")
+    _set_text(tbl_cs, 3, 2, f"{duv_on[2]:.3f}")
+    _set_text(tbl_cs, 4, 2, f"{duv_on[3]:.3f}")
+    _set_text(tbl_cs, 5, 2, f"{mean_on:.3f}")
+
+    # 묶음 막대 차트 갱신
+    self.vac_optimization_colorshift_chart.update_grouped(
+        data_off=list(np.nan_to_num(duv_off, nan=0.0)),
+        data_on =list(np.nan_to_num(duv_on,  nan=0.0))
+    )
