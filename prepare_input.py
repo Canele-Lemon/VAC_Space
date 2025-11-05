@@ -242,54 +242,107 @@ class VACInputBuilder:
             "meta": meta_dict
         }
         
-def debug_dump_delta_example(target_pk=2444):
-    print(f"[DEBUG] Checking ΔLUT for target PK={target_pk}")
+    def _load_lut_index_mapping(self, csv_path=None):
+        """
+        LUT_index_mapping.csv 로부터 i(0..255) → j(0..4095) 매핑을 읽어 반환
+        - 기본 경로: prepare_input.py 상위 폴더의 'LUT_index_mapping.csv'
+        - 컬럼명: '8bit gray', '12bit LUT index'
+        """
+        if csv_path is None:
+            csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'LUT_index_mapping.csv'))
 
-    builder = VACInputBuilder(target_pk)
+        df = pd.read_csv(csv_path)
+        # 컬럼명 방어
+        col_i = None
+        for c in df.columns:
+            if str(c).strip().lower().replace(" ", "") in ("8bitgray", "gray", "i"):
+                col_i = c; break
+        if col_i is None:
+            col_i = "8bit gray"
+        col_j = None
+        for c in df.columns:
+            if str(c).strip().lower().replace(" ", "") in ("12bitlutindex", "lutindex", "j"):
+                col_j = c; break
+        if col_j is None:
+            col_j = "12bit LUT index"
 
-    # 절대 LUT (target 자체)
-    X_abs = builder.prepare_X0()
+        # 256개 정렬 확보
+        if len(df) < 256:
+            raise ValueError(f"[Mapping] rows<{len(df)}> insufficient. Need 256 rows.")
+        df = df.sort_values(by=col_i)
+        j = df[col_j].to_numpy().astype(np.int32)
+        if j.shape[0] > 256:
+            j = j[:256]
+        if j.shape[0] != 256:
+            raise ValueError(f"[Mapping] mapping length must be 256, got {j.shape[0]}")
+        # 클립
+        j = np.clip(j, 0, 4095).astype(np.int32)
+        return j
+        
+    def prepare_X_delta_raw_with_mapping(self, ref_vac_info_pk: int):
+        """
+        ref_vac_info_pk: W_VAC_Info 테이블의 'ref' LUT가 들어있는 PK (예: 2582)
+        return:
+            {
+            "lut_delta_raw": { "R_Low": (256,), ... },   # raw 12bit (target - ref) @ mapped j
+            "meta": { panel_maker one-hot, frame_rate, model_year },
+            "mapping_j": (256,) np.int32
+            }
+        """
+        # 1) 타겟 메타/타겟 LUT(4096)
+        info = self._load_vac_set_info_row(self.PK)
+        if info is None:
+            raise RuntimeError(f"[X_delta_raw] No VAC_SET_Info for PK={self.PK}")
 
-    # ΔLUT = target - ref(PK=1)
-    X_delta = builder.prepare_X_delta()
+        vac_info_pk_target = info["vac_info_pk"]
+        meta_dict          = info["meta"]
 
-    lut_abs   = X_abs["lut"]
-    lut_delta = X_delta["lut"]
-    meta      = X_delta["meta"]  # meta는 target 기준으로 동일하므로 어느쪽을 써도 같아야 함
+        lut4096_target = self._load_vacdata_lut4096(vac_info_pk_target)
+        if lut4096_target is None:
+            raise RuntimeError(f"[X_delta_raw] No VAC_Data for VAC_Info_PK={vac_info_pk_target}")
 
-    print("\n[META INFO]")
-    print(f"panel_maker one-hot : {meta['panel_maker']}")
-    print(f"frame_rate          : {meta['frame_rate']}")
-    print(f"model_year          : {meta['model_year']}")
+        # 2) ref LUT(4096) — DB에서 PK로 직접
+        lut4096_ref = self._load_vacdata_lut4096(ref_vac_info_pk)
+        if lut4096_ref is None:
+            raise RuntimeError(f"[X_delta_raw] No REF VAC_Data for VAC_Info_PK={ref_vac_info_pk}")
 
-    # 채널 리스트 (prepare_X0와 동일)
-    channels = ['R_Low','R_High','G_Low','G_High','B_Low','B_High']
+        # 3) i(0..255) → j(0..4095) 매핑 로드 (CSV)
+        j_map = self._load_lut_index_mapping()  # (256,) int
 
-    # 우리가 직접 눈으로 확인해볼 gray 인덱스 몇 개
-    sample_grays = [0, 1, 32, 128, 255]
+        # 4) 매핑 지점에서 raw delta(target - ref) 계산 (정규화 없음)
+        delta = {}
+        for ch in ['R_Low','R_High','G_Low','G_High','B_Low','B_High']:
+            tgt = np.asarray(lut4096_target[ch], dtype=np.float32)
+            ref = np.asarray(lut4096_ref[ch],    dtype=np.float32)
+            if tgt.shape[0] != 4096 or ref.shape[0] != 4096:
+                raise ValueError(f"[X_delta_raw] channel {ch}: need 4096-length arrays.")
+            delta[ch] = (tgt[j_map] - ref[j_map]).astype(np.float32)
 
-    for ch in channels:
-        arr_abs   = lut_abs[ch]    # (256,) 절대 LUT 값 [0..1] 정규화
-        arr_delta = lut_delta[ch]  # (256,) ΔLUT 값 = target - ref
+        return {"lut_delta_raw": delta, "meta": meta_dict, "mapping_j": j_map}
 
-        print(f"\n--- Channel: {ch} ---")
-        print(f"  shape abs   : {arr_abs.shape}, dtype={arr_abs.dtype}")
-        print(f"  shape delta : {arr_delta.shape}, dtype={arr_delta.dtype}")
+    def debug_dump_delta_with_mapping(self, pk=None, ref_vac_info_pk: int = 1):
+        if pk is not None:
+            self.PK = int(pk)
 
-        for g in sample_grays:
-            if g >= len(arr_abs):
-                continue
-            v_abs   = float(arr_abs[g])
-            v_delta = float(arr_delta[g])
-            print(f"    gray {g:3d} : abs={v_abs: .6f} , delta={v_delta: .6f}")
+        pack = self.prepare_X_delta_raw_with_mapping(ref_vac_info_pk=ref_vac_info_pk)
+        delta = pack["lut_delta_raw"]; meta = pack["meta"]; j_map = pack["mapping_j"]
 
-    # 간단 sanity check:
-    # ΔLUT가 전부 0에 가깝다면 → target LUT가 ref(LUT@PK=1)랑 거의 동일하다는 뜻
-    # ΔLUT가 + 쪽이면 → target이 ref보다 더 크게 올려놓은 구간
-    # ΔLUT가 - 쪽이면 → target이 ref보다 더 낮춘 구간
-    print("\n[NOTE] If delta≈0 for all channels, target LUT is basically same as ref(PK=1).")
-    print("[NOTE] Positive delta means target LUT is higher than ref at that gray, negative means lower.\n")
+        print(f"\n[DEBUG] ΔLUT(raw, target−ref@PK={ref_vac_info_pk}) @ mapped indices for PK={self.PK}")
+        print("[META]")
+        print(f"  panel_maker one-hot: {meta['panel_maker']}")
+        print(f"  frame_rate         : {meta['frame_rate']}")
+        print(f"  model_year         : {meta['model_year']}")
+        print("\n[MAPPING] j[0..10] =", j_map[:11].tolist(), "...")
+
+        channels = ['R_Low','R_High','G_Low','G_High','B_Low','B_High']
+        for ch in channels:
+            arr = delta[ch]
+            print(f"\n--- {ch} ---  shape={arr.shape}, dtype={arr.dtype}")
+            for g in (0,1,32,128,255):
+                if 0 <= g < len(arr):
+                    print(f"  gray {g:3d} @ j={int(j_map[g]):4d} : Δ={float(arr[g]): .3f}")
 
 
 if __name__ == "__main__":
-    debug_dump_delta_example(target_pk=2444)
+    builder = VACInputBuilder(pk=2635)
+    builder.debug_dump_delta_with_mapping(pk=2635, ref_vac_info_pk=2582)
