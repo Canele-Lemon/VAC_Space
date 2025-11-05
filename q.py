@@ -1,46 +1,25 @@
-G_off = self._compute_gamma_series(lv_off)
-G_on  = self._compute_gamma_series(lv_on)
+if profile.ref_store is not None and 'd_cx' in cols and 'd_cy' in cols:
+    ref_main = profile.ref_store['gamma']['main']['white'].get(gray, None)
+    if ref_main is not None and np.isfinite(cx_m) and np.isfinite(cy_m):
+        _, cx_r, cy_r = ref_main
+        d_cx = cx_m - cx_r
+        d_cy = cy_m - cy_r
 
-# 부호 유지해 두고, abs는 밑에서 씁니다.
-dG  = G_on - G_off        # (256,)
-dCx = cx_on - cx_off
-dCy = cy_on - cy_off
+        # ★ 스펙 판정은 반올림 기준
+        cx_ok = round(abs(d_cx), 4) <= 0.003   # ΔCx
+        cy_ok = round(abs(d_cy), 4) <= 0.003   # ΔCy
 
-def _pass_total_chroma(d_arr, thr):
-    # 유효 값 + edge gray(0,1,254,255) 제외
-    mask = np.isfinite(d_arr)
-    for g in (0, 1, 254, 255):
-        if 0 <= g < len(mask):
-            mask[g] = False
-
-    vals = d_arr[mask]
-    tot = int(np.sum(mask))
-    if tot <= 0:
-        return 0, 0
-
-    # ★ 소수점 4째 자리에서 반올림
-    rounded = np.round(np.abs(vals), 4)
-    thr_r = round(float(thr), 4)
-    ok = int(np.sum(rounded <= thr_r))
-    return ok, tot
-
-def _pass_total_gamma(d_arr, thr):
-    mask = np.isfinite(d_arr)
-    for g in (0, 1, 254, 255):
-        if 0 <= g < len(mask):
-            mask[g] = False
-
-    vals = d_arr[mask]
-    tot = int(np.sum(mask))
-    if tot <= 0:
-        return 0, 0
-
-    # ★ 소수점 3째 자리에서 반올림
-    rounded = np.round(np.abs(vals), 3)
-    thr_r = round(float(thr), 3)
-    ok = int(np.sum(rounded <= thr_r))
-    return ok, tot
-
-ok_cx, tot_cx = _pass_total_chroma(dCx, thr_c)
-ok_cy, tot_cy = _pass_total_chroma(dCy, thr_c)
-ok_g , tot_g  = _pass_total_gamma(dG , thr_gamma)
+        if gray in (0, 1, 254, 255):
+            # edge gray → 색깔은 건드리지 않고 값만 채워 넣음
+            self._set_item(table_inst1, gray, cols['d_cx'], f"{d_cx:.6f}")
+            self._set_item(table_inst1, gray, cols['d_cy'], f"{d_cy:.6f}")
+        else:
+            # 나머지 gray만 빨강/파랑 표시
+            self._set_item_with_spec(
+                table_inst1, gray, cols['d_cx'],
+                f"{d_cx:.6f}", is_spec_ok=cx_ok
+            )
+            self._set_item_with_spec(
+                table_inst1, gray, cols['d_cy'],
+                f"{d_cy:.6f}", is_spec_ok=cy_ok
+            )
