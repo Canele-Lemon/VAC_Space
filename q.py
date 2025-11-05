@@ -1,11 +1,46 @@
-if pattern == 'white':
-    is_on_session = (profile.ref_store is not None)
-    is_fine_mode = getattr(self, "_fine_mode", False)
+G_off = self._compute_gamma_series(lv_off)
+G_on  = self._compute_gamma_series(lv_on)
 
-    # ★ ON 세션의 0gray(main) 휘도 저장 → 이후 정규화에 사용
-    if is_on_session:
-        ref_store = profile.ref_store
-        # main role 기준으로 0gray 휘도 사용
-        lv0_main, _, _ = store['gamma']['main']['white'].get(0, (np.nan, np.nan, np.nan))
-        if np.isfinite(lv0_main):
-            self._on_lv0_current = float(lv0_main)
+# 부호 유지해 두고, abs는 밑에서 씁니다.
+dG  = G_on - G_off        # (256,)
+dCx = cx_on - cx_off
+dCy = cy_on - cy_off
+
+def _pass_total_chroma(d_arr, thr):
+    # 유효 값 + edge gray(0,1,254,255) 제외
+    mask = np.isfinite(d_arr)
+    for g in (0, 1, 254, 255):
+        if 0 <= g < len(mask):
+            mask[g] = False
+
+    vals = d_arr[mask]
+    tot = int(np.sum(mask))
+    if tot <= 0:
+        return 0, 0
+
+    # ★ 소수점 4째 자리에서 반올림
+    rounded = np.round(np.abs(vals), 4)
+    thr_r = round(float(thr), 4)
+    ok = int(np.sum(rounded <= thr_r))
+    return ok, tot
+
+def _pass_total_gamma(d_arr, thr):
+    mask = np.isfinite(d_arr)
+    for g in (0, 1, 254, 255):
+        if 0 <= g < len(mask):
+            mask[g] = False
+
+    vals = d_arr[mask]
+    tot = int(np.sum(mask))
+    if tot <= 0:
+        return 0, 0
+
+    # ★ 소수점 3째 자리에서 반올림
+    rounded = np.round(np.abs(vals), 3)
+    thr_r = round(float(thr), 3)
+    ok = int(np.sum(rounded <= thr_r))
+    return ok, tot
+
+ok_cx, tot_cx = _pass_total_chroma(dCx, thr_c)
+ok_cy, tot_cy = _pass_total_chroma(dCy, thr_c)
+ok_g , tot_g  = _pass_total_gamma(dG , thr_gamma)
