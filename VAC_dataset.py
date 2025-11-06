@@ -1,29 +1,13 @@
 # VAC_dataset.py
 import sys
-import torch
 import os
-import json
-import pandas as pd
 import numpy as np
-import tempfile, webbrowser
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from torch.utils.data import Dataset
-from src.prepare_input import VACInputBuilder
-from src.prepare_output import VACOutputBuilder
-
-_PATTERN_LIST = ['W', 'R', 'G', 'B']
-
-def _onehot(idx: int, size: int) -> np.ndarray:
-    """
-    one-hot 벡터 변환 encoder
-    
-    """
-    v = np.zeros(size, dtype=np.float32)
-    if 0 <= idx < size:
-        v[idx] = 1.0
-    return v
+from src.data_preparation.prepare_input import VACInputBuilder
+from src.data_preparation.prepare_output import VACOutputBuilder
 
 class VACDataset(Dataset):
     def __init__(self, pk_list, ref_vac_info_pk=2582):
@@ -78,7 +62,7 @@ class VACDataset(Dataset):
 
         return np.asarray(row, dtype=np.float32)
 
-    def build_white_y0_delta(self, component='dGamma'):
+    def build_xy_dataset(self, component='dGamma'):
         """
         White 패턴만 선택, y = dGamma/dCx/dCy (target - ref).
         X는 raw ΔLUT(High 3채널) + 메타 + gray_norm(+ pattern onehot=White) + LUT index
@@ -109,14 +93,14 @@ class VACDataset(Dataset):
         return X_mat, y_vec, groups
 
 if __name__ == "__main__":
-    ds = VACDataset(pk_list=[2635], ref_vac_info_pk=2582)
-    X_mat, y_vec, groups = ds.build_white_y0_delta(component='dCx')
+    ds = VACDataset(pk_list=[2757], ref_vac_info_pk=2744)
+    X_mat, y_vec, groups = ds.build_xy_dataset(component='dCx')
 
     print("X_mat shape:", X_mat.shape)
     print("y_vec shape:", y_vec.shape)
 
     # 앞 몇 행만 출력
-    for i in range(100):
+    for i in range(20):
         print(f"\n--- row {i} ---")
         print("X:", X_mat[i])
         print("y:", y_vec[i])
