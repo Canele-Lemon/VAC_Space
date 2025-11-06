@@ -1,45 +1,44 @@
-class ReadVACdataThread(QThread):
-    data_read = Signal(dict)
-    error_occurred = Signal(str)
+--- R_Low ---  shape=(256,), dtype=float32
+  gray   0 @ j=   0 : Δ= 0.000
+  gray   1 @ j=   0 : Δ= 0.000
+  gray  32 @ j= 499 : Δ= 0.000
+  gray 128 @ j=2043 : Δ= 0.000
+  gray 255 @ j=4092 : Δ= 0.000
 
-    def __init__(self, parent, vac_data_path=None, ser_tv=None, vacdataName=None):
-        super().__init__(parent)
-        self.parent = parent
-        self.vac_data_path = vac_data_path
-        self.ser_tv = ser_tv
-        self.vacdataName = vacdataName
+--- R_High ---  shape=(256,), dtype=float32
+  gray   0 @ j=   0 : Δ= 0.000
+  gray   1 @ j=   0 : Δ= 0.000
+  gray  32 @ j= 499 : Δ= 0.000
+  gray 128 @ j=2043 : Δ= 0.000
+  gray 255 @ j=4092 : Δ= 0.000
 
-    def run(self):
-        try:
-            vac_debug_path = "/mnt/lg/cmn_data/panelcontroller/db/vac_debug"
-            self.parent.send_command(self.ser_tv, 's')
-            output = self.parent.check_directory_exists(vac_debug_path)
-            
-            if output == "exists":
-                vac_data_path = vac_debug_path
-            elif output == 'not_exists':
-                vac_data_path = "/etc/panelcontroller/db/vac"
-            else:
-                self.error_occurred.emit(f"Error checking VAC debug path: {output}")
-                return
-            
-            vacparam = self.parent.send_command(self.ser_tv, f'cat {vac_data_path}/{self.vacdataName}', output_limit=1000)
-            
-            if vacparam:
-                vacparam = self._clean_vac_output(vacparam)
-                vacparam = json.loads(vacparam)
-                self.data_read.emit(vacparam)
-            else:
-                self.error_occurred.emit("VAC data read failed: empty response")
-        except json.JSONDecodeError as e:
-            self.error_occurred.emit(f"JSON decode error while reading VAC data: {e}")
-        except Exception as e:
-            self.error_occurred.emit(f"Unexpected error while reading VAC data: {e}")
+--- G_Low ---  shape=(256,), dtype=float32
+  gray   0 @ j=   0 : Δ= 0.000
+  gray   1 @ j=   0 : Δ= 0.000
+  gray  32 @ j= 499 : Δ= 0.000
+  gray 128 @ j=2043 : Δ= 0.000
+  gray 255 @ j=4092 : Δ= 0.000
 
-    def _clean_vac_output(self, raw_output):
-        cleaned = re.sub(r'^.*?\n\s*', '', raw_output)
-        cleaned = re.sub(r'(?m)^\s*$\n', '', cleaned)
-        cleaned = cleaned.replace("/ #", "").strip()
-        return cleaned
+--- G_High ---  shape=(256,), dtype=float32
+  gray   0 @ j=   0 : Δ= 0.000
+  gray   1 @ j=   0 : Δ= 0.000
+  gray  32 @ j= 499 : Δ= 25.000
+  gray 128 @ j=2043 : Δ= 25.000
+  gray 255 @ j=4092 : Δ= 0.000
 
-지금 여기서는 exit 안하고 끝내는거죠?
+--- B_Low ---  shape=(256,), dtype=float32
+  gray   0 @ j=   0 : Δ= 0.000
+  gray   1 @ j=   0 : Δ= 0.000
+  gray  32 @ j= 499 : Δ= 0.000
+  gray 128 @ j=2043 : Δ= 0.000
+  gray 255 @ j=4092 : Δ= 0.000
+
+--- B_High ---  shape=(256,), dtype=float32
+  gray   0 @ j=   0 : Δ= 0.000
+  gray   1 @ j=   0 : Δ= 0.000
+  gray  32 @ j= 499 : Δ=-125.000
+  gray 128 @ j=2043 : Δ=-125.000
+  gray 255 @ j=4092 : Δ=-3.000
+
+문제가 되는 부분은 위 디버그에서 B_High예요.
+G에만 sweep offset을 +25 주었기 때문에 G_High만 변해야 하는데 B_High도 변합니다. 원인 파악을 위해 B_Hihg의 LUT값도 디버깅해볼 수 있을까요? 왜 저 값이 나왔는지 따져보려고요
