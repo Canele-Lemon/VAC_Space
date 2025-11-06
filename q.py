@@ -1,40 +1,37 @@
-def debug_dump_delta_with_mapping(self, pk=None, ref_vac_info_pk: int = 1, verbose_lut: bool = False):
-    if pk is not None:
-        self.PK = int(pk)
+    def _load_vacdata_lut4096(self, vac_info_pk: int):
+        """
+        내부 유틸:
+        - VAC_DATA_TABLE에서 VAC_Data(JSON)를 읽어와서
+          4096포인트 LUT 배열(dict)을 반환
+        - 채널명 매핑은 prepare_X0()과 동일하게 맞춘다.
+        반환 예:
+        {
+            "R_Low":  np.array([...], float32)  # len 4096, 정규화 전(raw)
+            "R_High": ...
+            ...
+        }
+        """
+        query_vacdata = f"""
+        SELECT `VAC_Data`
+        FROM `{self.VAC_DATA_TABLE}`
+        WHERE `PK` = {vac_info_pk}
+        """
+        df_vacdata = pd.read_sql(query_vacdata, engine)
+        if df_vacdata.empty:
+            logging.warning(f"[VACInputBuilder] No VAC_Data found for VAC_Info_PK={vac_info_pk}")
+            return None
 
-    # ΔLUT + 메타 + 매핑 먼저 불러오기
-    pack = self.prepare_X_delta_raw_with_mapping(ref_vac_info_pk=ref_vac_info_pk)
-    delta = pack["lut_delta_raw"]; meta = pack["meta"]; j_map = pack["mapping_j"]
+        vacdata_dict = json.loads(df_vacdata.iloc[0]['VAC_Data'])
 
-    print(f"\n[DEBUG] ΔLUT(raw, target−ref@VAC_Info_PK={ref_vac_info_pk}) @ mapped indices for VAC_SET_Info.PK={self.PK}")
-    print("[META]")
-    print(f"  panel_maker one-hot: {meta['panel_maker']}")
-    print(f"  frame_rate         : {meta['frame_rate']}")
-    print(f"  model_year         : {meta['model_year']}")
-    print("\n[MAPPING] j[0..10] =", j_map[:11].tolist(), "...")
+        channels = ['R_Low', 'R_High', 'G_Low', 'G_High', 'B_Low', 'B_High']
+        lut4096 = {}
+        for ch in channels:
+            key = ch.replace("_", "channel")  # "R_Low" -> "RchannelLow"
+            arr4096 = np.array(vacdata_dict.get(key, [0]*4096), dtype=np.float32)
+            lut4096[ch] = arr4096
+        return lut4096
 
-    # ---- 여기서부터 추가: 원본 4096 LUT도 같이 로딩 ----
-    info_target = self._load_vac_set_info_row(self.PK)
-    vac_info_pk_target = info_target["vac_info_pk"]
+여기서 WHERE `PK` = {vac_info_pk} 부분에 vac_info_pk말고 다른것이 들어가야 하는거같아요. 
 
-    lut4096_target = self._load_vacdata_lut4096(vac_info_pk_target)
-    lut4096_ref    = self._load_vacdata_lut4096(ref_vac_info_pk)
-
-    channels = ['R_Low','R_High','G_Low','G_High','B_Low','B_High']
-    for ch in channels:
-        arr = delta[ch]
-        print(f"\n--- {ch} ---  shape={arr.shape}, dtype={arr.dtype}")
-        for g in (0,1,32,128,255):
-            if 0 <= g < len(arr):
-                j = int(j_map[g])
-                print(f"  gray {g:3d} @ j={j:4d} : Δ={float(arr[g]): .3f}")
-
-                if verbose_lut:
-                    tgt_val = float(lut4096_target[ch][j])
-                    ref_val = float(lut4096_ref[ch][j])
-                    diff    = tgt_val - ref_val
-                    print(
-                        f"      target[{ch}][{j}]={tgt_val: .3f}, "
-                        f"ref[{ch}][{j}]={ref_val: .3f}, "
-                        f"target - ref={diff: .3f}"
-                    )
+먼저 self.VAC_SET_INFO_TABLE = "W_VAC_SET_Info" 테이블에서, self.PK = pk행의 `VAC_Info_PK` 값을 조회한 다음에 이 값을
+FROM `{self.VAC_DATA_TABLE}`테이블의 `PK`행에서의 `VAC_Data`의 longtext를 가져오는 방식이 맞아요.
