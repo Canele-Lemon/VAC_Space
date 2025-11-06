@@ -10,8 +10,8 @@ import webbrowser
 from sklearn.preprocessing import OneHotEncoder
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from src.config.db_config import engine
-from src.config.app_config import PANEL_MAKER_CATEGORIES
+from config.db_config import engine
+from config.app_config import PANEL_MAKER_CATEGORIES
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -249,7 +249,7 @@ class VACInputBuilder:
         - 컬럼명: '8bit gray', '12bit LUT index'
         """
         if csv_path is None:
-            csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'LUT_index_mapping.csv'))
+            csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'LUT_index_mapping.csv'))
 
         df = pd.read_csv(csv_path)
         # 컬럼명 방어
