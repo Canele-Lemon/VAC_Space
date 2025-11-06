@@ -1,44 +1,40 @@
---- R_Low ---  shape=(256,), dtype=float32
-  gray   0 @ j=   0 : Δ= 0.000
-  gray   1 @ j=   0 : Δ= 0.000
-  gray  32 @ j= 499 : Δ= 0.000
-  gray 128 @ j=2043 : Δ= 0.000
-  gray 255 @ j=4092 : Δ= 0.000
+def debug_dump_delta_with_mapping(self, pk=None, ref_vac_info_pk: int = 1, verbose_lut: bool = False):
+    if pk is not None:
+        self.PK = int(pk)
 
---- R_High ---  shape=(256,), dtype=float32
-  gray   0 @ j=   0 : Δ= 0.000
-  gray   1 @ j=   0 : Δ= 0.000
-  gray  32 @ j= 499 : Δ= 0.000
-  gray 128 @ j=2043 : Δ= 0.000
-  gray 255 @ j=4092 : Δ= 0.000
+    # ΔLUT + 메타 + 매핑 먼저 불러오기
+    pack = self.prepare_X_delta_raw_with_mapping(ref_vac_info_pk=ref_vac_info_pk)
+    delta = pack["lut_delta_raw"]; meta = pack["meta"]; j_map = pack["mapping_j"]
 
---- G_Low ---  shape=(256,), dtype=float32
-  gray   0 @ j=   0 : Δ= 0.000
-  gray   1 @ j=   0 : Δ= 0.000
-  gray  32 @ j= 499 : Δ= 0.000
-  gray 128 @ j=2043 : Δ= 0.000
-  gray 255 @ j=4092 : Δ= 0.000
+    print(f"\n[DEBUG] ΔLUT(raw, target−ref@VAC_Info_PK={ref_vac_info_pk}) @ mapped indices for VAC_SET_Info.PK={self.PK}")
+    print("[META]")
+    print(f"  panel_maker one-hot: {meta['panel_maker']}")
+    print(f"  frame_rate         : {meta['frame_rate']}")
+    print(f"  model_year         : {meta['model_year']}")
+    print("\n[MAPPING] j[0..10] =", j_map[:11].tolist(), "...")
 
---- G_High ---  shape=(256,), dtype=float32
-  gray   0 @ j=   0 : Δ= 0.000
-  gray   1 @ j=   0 : Δ= 0.000
-  gray  32 @ j= 499 : Δ= 25.000
-  gray 128 @ j=2043 : Δ= 25.000
-  gray 255 @ j=4092 : Δ= 0.000
+    # ---- 여기서부터 추가: 원본 4096 LUT도 같이 로딩 ----
+    info_target = self._load_vac_set_info_row(self.PK)
+    vac_info_pk_target = info_target["vac_info_pk"]
 
---- B_Low ---  shape=(256,), dtype=float32
-  gray   0 @ j=   0 : Δ= 0.000
-  gray   1 @ j=   0 : Δ= 0.000
-  gray  32 @ j= 499 : Δ= 0.000
-  gray 128 @ j=2043 : Δ= 0.000
-  gray 255 @ j=4092 : Δ= 0.000
+    lut4096_target = self._load_vacdata_lut4096(vac_info_pk_target)
+    lut4096_ref    = self._load_vacdata_lut4096(ref_vac_info_pk)
 
---- B_High ---  shape=(256,), dtype=float32
-  gray   0 @ j=   0 : Δ= 0.000
-  gray   1 @ j=   0 : Δ= 0.000
-  gray  32 @ j= 499 : Δ=-125.000
-  gray 128 @ j=2043 : Δ=-125.000
-  gray 255 @ j=4092 : Δ=-3.000
+    channels = ['R_Low','R_High','G_Low','G_High','B_Low','B_High']
+    for ch in channels:
+        arr = delta[ch]
+        print(f"\n--- {ch} ---  shape={arr.shape}, dtype={arr.dtype}")
+        for g in (0,1,32,128,255):
+            if 0 <= g < len(arr):
+                j = int(j_map[g])
+                print(f"  gray {g:3d} @ j={j:4d} : Δ={float(arr[g]): .3f}")
 
-문제가 되는 부분은 위 디버그에서 B_High예요.
-G에만 sweep offset을 +25 주었기 때문에 G_High만 변해야 하는데 B_High도 변합니다. 원인 파악을 위해 B_Hihg의 LUT값도 디버깅해볼 수 있을까요? 왜 저 값이 나왔는지 따져보려고요
+                if verbose_lut:
+                    tgt_val = float(lut4096_target[ch][j])
+                    ref_val = float(lut4096_ref[ch][j])
+                    diff    = tgt_val - ref_val
+                    print(
+                        f"      target[{ch}][{j}]={tgt_val: .3f}, "
+                        f"ref[{ch}][{j}]={ref_val: .3f}, "
+                        f"target - ref={diff: .3f}"
+                    )
