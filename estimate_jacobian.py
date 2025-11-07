@@ -1,7 +1,7 @@
 # estimate_jacobian.py
 # ------------------------------------------------------------
 # 그레이별 자코비안 J_g 추정 스크립트 (White 패턴, High 3채널)
-# X = [ΔR_H, ΔG_H, ΔB_H, panel_onehot..., frame_rate, model_year, gray_norm, LUT_j] 
+# X = [ΔR_H, ΔG_H, ΔB_H, panel_onehot(5), frame_rate, model_year, gray_norm, LUT_j] 
 # Y = [ΔCx, ΔCy, ΔGamma]
 # 해법: 가중 리지 최소자승  J = (X^T W X + λI)^{-1} X^T W Y
 # ------------------------------------------------------------
@@ -16,8 +16,8 @@ CURRENT_DIR  = os.path.dirname(os.path.abspath(__file__))          # .../module/
 PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))    # .../module
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from scripts.VAC_dataset import VACDataset
+
+from src.modeling.VAC_dataset import VACDataset
 
 def parse_pks(spec: str):
     """
@@ -71,12 +71,12 @@ def build_white_X_Y3(pk_list, ref_pk):
     - idx_gray : X에서 gray_norm 컬럼 인덱스
     - ds : VACDataset 인스턴스
     """
-    ds = VACDataset(pk_list=pk_list, ref_vac_info_pk=ref_pk)
+    ds = VACDataset(pk_list=pk_list, ref_pk=ref_pk)
 
     # component별로 한 번씩 빌드
-    X_cx, y_cx, g_cx = ds.build_white_y0_delta(component='dCx')
-    X_cy, y_cy, g_cy = ds.build_white_y0_delta(component='dCy')
-    X_ga, y_ga, g_ga = ds.build_white_y0_delta(component='dGamma')
+    X_cx, y_cx, g_cx = ds.build_XYdataset_for_jacobian_g(component='dCx')
+    X_cy, y_cy, g_cy = ds.build_XYdataset_for_jacobian_g(component='dCy')
+    X_ga, y_ga, g_ga = ds.build_XYdataset_for_jacobian_g(component='dGamma')
 
     # gray_norm 컬럼 위치 (VACDataset 피처 정의 기준)
     K = len(ds.samples[0]["X"]["meta"]["panel_maker"])  # panel one-hot 길이
@@ -315,7 +315,7 @@ def main():
     print(f"[OK] NPY saved -> {out_npy}")
     end_time = time.time()
     elapsed = end_time - start_time
-    print(f"[INFO]  {out_npy}")
+    print(f"[INFO] elapsed = {elapsed:.2f} sec, bundle = {out_npy}")
 
     # 미리보기
     for g in (0, 32, 128, 255):
