@@ -10,9 +10,9 @@ from src.data_preparation.prepare_input import VACInputBuilder
 from src.data_preparation.prepare_output import VACOutputBuilder
 
 class VACDataset(Dataset):
-    def __init__(self, pk_list, ref_vac_info_pk=2582):
+    def __init__(self, pk_list, ref_pk=2582):
         self.pk_list = list(pk_list)
-        self.ref_vac_info_pk = int(ref_vac_info_pk)
+        self.ref_pk = int(ref_pk)
         self.feature_channels = ('R_High','G_High','B_High')
         self.samples = []
         self._collect()
@@ -21,10 +21,10 @@ class VACDataset(Dataset):
         for pk in self.pk_list:
             x_builder = VACInputBuilder(pk)
             # X = raw ΔLUT @ CSV 매핑 인덱스 (정규화 없음)
-            X = x_builder.prepare_X_delta_raw_with_mapping(ref_vac_info_pk=self.ref_vac_info_pk)
+            X = x_builder.prepare_X_delta_lut_with_mapping(ref_pk=self.ref_pk)
 
             # 참조 PK를 동일하게 써서 ΔY0 계산
-            y_builder = VACOutputBuilder(pk, reference_pk=self.ref_vac_info_pk)
+            y_builder = VACOutputBuilder(pk, reference_pk=self.ref_pk)
             Y = y_builder.prepare_Y(y1_patterns=('W',))  # Y0만 써도 되지만 구조 유지
 
             self.samples.append({"pk": pk, "X": X, "Y": Y})
@@ -62,7 +62,7 @@ class VACDataset(Dataset):
 
         return np.asarray(row, dtype=np.float32)
 
-    def build_xy_dataset(self, component='dGamma'):
+    def build_XYdataset_for_jacobian_g(self, component='dGamma'):
         """
         White 패턴만 선택, y = dGamma/dCx/dCy (target - ref).
         X는 raw ΔLUT(High 3채널) + 메타 + gray_norm(+ pattern onehot=White) + LUT index
@@ -93,8 +93,8 @@ class VACDataset(Dataset):
         return X_mat, y_vec, groups
 
 if __name__ == "__main__":
-    ds = VACDataset(pk_list=[2757], ref_vac_info_pk=2744)
-    X_mat, y_vec, groups = ds.build_xy_dataset(component='dCx')
+    ds = VACDataset(pk_list=[2757], ref_pk=2744)
+    X_mat, y_vec, groups = ds.build_XYdataset_for_jacobian_g(component='dCx')
 
     print("X_mat shape:", X_mat.shape)
     print("y_vec shape:", y_vec.shape)
