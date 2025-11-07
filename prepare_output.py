@@ -4,45 +4,117 @@ import sys
 import logging
 import tempfile
 import webbrowser
-import torch
 
 import pandas as pd
 import numpy as np
 
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))       # .../module/src
-PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..")) # .../module
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
     
-from src.config.db_config import engine
+from config.db_config import engine
 
 logging.basicConfig(level=logging.DEBUG)
 
 class VACOutputBuilder:
-    def __init__(self, pk: int, reference_pk: int = 2154):
-        self.TARGET_PK = pk
-        self.REFERENCE_PK = reference_pk
+    def __init__(self, pk: int, ref_pk: int = 2154):
+        self.pk = pk
+        self.ref_pk = ref_pk
+        
+        self.MEASUREMENT_INFO_TABLE = "W_VAC_SET_Info"
         self.MEASUREMENT_DATA_TABLE = "W_VAC_SET_Measure"
         
     def load_set_info_pk_data(self, pk):
         """
-        지정한 pk(VAC_SET_Info_PK)에 해당하는 모든 측정 데이터를 DataFrame으로 반환합니다.
-        - 모든 Parameter, Component, Data 컬럼 포함
-        - 디버깅, 검증, CSV 저장 등에 활용 가능
+        pk : `W_VAC_SET_Info` 테이블의 `PK`
+        
+        지정한 pk에 해당하는 측정 데이터를 DataFrame으로 반환
+        
+        return :
+        - df_front_pivot: VAC_Gamma_W_Gray
+        - df_side_pivot: VAC_GammaLinearity_60_W_Gray
+
         """
         query = f"""
-        SELECT *
+        SELECT `VAC_SET_Info_PK`, `Parameter`, `Component`, `Data`
         FROM `{self.MEASUREMENT_DATA_TABLE}`
         WHERE `VAC_SET_Info_PK` = {pk}
         """
-        df = pd.read_sql(query, engine)
-        logging.debug(f"[load_set_info_pk_data] Loaded {len(df)} rows for pk={pk}")
+        df_all = pd.read_sql(query, engine)
         
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode='w', newline='', encoding='utf-8') as tmp_file:
-            df.to_csv(tmp_file.name, index=False)
-            webbrowser.open(f"file://{tmp_file.name}")  # Open in default CSV viewer (e.g., Excel)
+        df_front = df_all[df_all['Parameter'].str.contains('VAC_Gamma_W_Gray', na=False)]
+        df_front_pivot = df_front.pivot(index=['VAC_SET_Info_PK', 'Parameter'], columns='Component', values='Data').reset_index()
+        df_front_pivot.insert(0, 'Gray', range(len(df_front_pivot)))
+        lv_values = pd.to_numeric(df_front_pivot['Lv'], errors='coerce')
+        lv_min, lv_max = lv_values.min(), lv_values.max()
+        
+        def calc_gamma(lv_on_g, g):
+            if not np.isfinite(lv_on_g) or lv_max <= lv_min:
+                return float("nan")
+            nor = (lv_on_g - lv_min) / (lv_max - lv_min)
+            gray_norm = g / 255.0
+            if nor <= 0 or gray_norm <= 0 or gray_norm >= 1:
+                return float("nan")
+            return float(np.log(nor) / np.log(gray_norm))
+        
+        df_front_pivot['Gamma'] = [calc_gamma(lv, g) for lv, g in zip(lv_values, df_front_pivot['Gray'])]
 
-        return df
+        df_side = df_all[df_all['Parameter'].str.contains('VAC_GammaLinearity_60_W_Gray', na=False)]
+        df_side_pivot = df_side.pivot(index=['VAC_SET_Info_PK', 'Parameter'], columns='Component', values='Data').reset_index()
+        df_side_pivot.insert(0, 'Gray', range(len(df_side_pivot)))
+        lv_side_values = pd.to_numeric(df_side_pivot['Lv'], errors='coerce')
+        lv_side_min, lv_side_max = lv_side_values.min(), lv_side_values.max()
+        df_side_pivot['Nor. Lv'] = (lv_side_values - lv_side_min) / (lv_side_max - lv_side_min)
+  
+        query_version = f"""
+        SELECT `VAC_Version`
+        FROM `{self.MEASUREMENT_INFO_TABLE}`
+        WHERE `PK` = {pk}
+        """
+        version_df = pd.read_sql(query_version, engine)
+        vac_version = version_df['VAC_Version'].iloc[0] if not version_df.empty else f"PK_{pk}"
+        
+        logging.debug(f"[load_set_info_pk_data] Loading complete for `VAC_SET_Info_PK`={pk} from table=`{self.MEASUREMENT_DATA_TABLE}` (VAC Version={vac_version})")
+        
+        return vac_version, df_front_pivot, df_side_pivot
+
+    def load_multiple_pk_data_with_chart(self, pk_list):
+        """
+        pk 리스트를 받아서 하나의 Excel 파일에 pk별 시트 생성
+        각 시트에:
+        - VAC_Gamma_W_Gray 데이터
+        - VAC_GammaLinearity_60_W_Gray 데이터
+        - Gray vs Lv_normalized 차트
+        """
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_file:
+            with pd.ExcelWriter(tmp_file.name, engine='xlsxwriter') as writer:
+                workbook = writer.book
+
+                for pk in pk_list:
+                    vac_version, df_front_pivot, df_side_pivot = self.load_set_info_pk_data(pk)
+                    sheet_name = str(vac_version)
+
+                    # 데이터 쓰기
+                    df_front_pivot.to_excel(writer, sheet_name=sheet_name, startrow=0, index=False)
+                    start_row_side = len(df_front_pivot) + 3
+                    df_side_pivot.to_excel(writer, sheet_name=sheet_name, startrow=start_row_side, index=False)
+
+                    # 차트 추가
+                    worksheet = writer.sheets[sheet_name]
+                    chart = workbook.add_chart({'type': 'line'})
+                    chart.add_series({
+                        'name': 'Nor. Lv',
+                        'categories': [sheet_name, start_row_side + 1, 0, start_row_side + len(df_side_pivot), 0],  # Gray
+                        'values': [sheet_name, start_row_side + 1, df_side_pivot.columns.get_loc('Nor. Lv'),
+                                start_row_side + len(df_side_pivot), df_side_pivot.columns.get_loc('Nor. Lv')],
+                    })
+                    chart.set_title({'name': 'Side View Luminance'})
+                    chart.set_x_axis({'name': 'Gray'})
+                    chart.set_y_axis({'name': 'Nor. Lv'})
+                    worksheet.insert_chart(0, 10, chart)
+
+            webbrowser.open(f"file://{tmp_file.name}")
 
     def _load_measure_data(self, pk, parameters=None, components=('Lv', 'Cx', 'Cy'), normalize_lv_flag=True):
         # [STEP 1] 데이터 로드
@@ -113,10 +185,13 @@ class VACOutputBuilder:
             normalized_lv = []
             for pattern in lv_df['Pattern_Window'].unique():
                 sub = lv_df[lv_df['Pattern_Window'] == pattern].copy()
-                lv0 = lv_0_fixed.get(pattern, 0.0)
-                lv255 = lv_255.get(pattern, 1.0)
-                denom = lv255 - lv0 if lv255 != lv0 else 1.0
-                sub['Data'] = (sub['Data'] - lv0) / denom
+                
+                lv_min = sub['Data'].min()
+                lv_max = sub['Data'].max()
+                
+                denom = lv_max - lv_min if lv_max != lv_min else 1.0
+                
+                sub['Data'] = (sub['Data'] - lv_min) / denom
                 normalized_lv.append(sub)
 
             lv_df = pd.concat(normalized_lv, ignore_index=True)
@@ -161,7 +236,7 @@ class VACOutputBuilder:
 
     def compute_Y0_struct(self):
         """
-        Y[0] detailed: 패턴별(W/R/G/B) 정면 Gamma 특성 차이 w/ self.REFERENCE_PK (dGamma, dCx, dCy)
+        Y[0] detailed: 패턴별(W/R/G/B) 정면 Gamma 특성 차이 w/ self.ref_pk (dGamma, dCx, dCy)
         Gamma(g) = log(nor.Lv_g) / log(gray_norm_g)
         - gray_norm = gray/255
         - gray=0 → NaN
@@ -185,11 +260,11 @@ class VACOutputBuilder:
         patterns = ('W', 'R', 'G', 'B')
         L = 256
 
-        df_target = self._load_measure_data(self.TARGET_PK, parameters=parameters, components=components)
-        df_ref = self._load_measure_data(self.REFERENCE_PK, parameters=parameters, components=components)
+        df_target = self._load_measure_data(self.pk, parameters=parameters, components=components)
+        df_ref = self._load_measure_data(self.ref_pk, parameters=parameters, components=components)
 
         if df_target.empty or df_ref.empty:
-            logging.warning(f"[Y0] Missing data (PK={self.TARGET_PK}, Ref={self.REFERENCE_PK})")
+            logging.warning(f"[Y0] Missing data (PK={self.pk}, Ref={self.ref_pk})")
             return {p: {k: np.zeros(L, np.float32) for k in ('dGamma','dCx','dCy')} for p in patterns}  # fallback: zero 구조
 
         def calc_gamma_array(df_lv_pattern: pd.DataFrame) -> np.ndarray:
@@ -277,7 +352,7 @@ class VACOutputBuilder:
             "VAC_Gamma_G_Gray____",
             "VAC_Gamma_B_Gray____"
         ]
-        df = self._load_measure_data(self.TARGET_PK, parameters=parameters, components=('Lv','Cx','Cy'))
+        df = self._load_measure_data(self.pk, parameters=parameters, components=('Lv','Cx','Cy'))
         L, patterns = 256, ('W','R','G','B')
 
         def calc_gamma_array(df_lv_pattern):
@@ -329,7 +404,7 @@ class VACOutputBuilder:
             "VAC_GammaLinearity_60_G_Gray____",
             "VAC_GammaLinearity_60_B_Gray____"
         ]
-        df = self._load_measure_data(self.TARGET_PK, components=('Lv',), parameters=parameters)
+        df = self._load_measure_data(self.pk, components=('Lv',), parameters=parameters)
         
         L = 256
         y1 = {}
@@ -356,9 +431,9 @@ class VACOutputBuilder:
         parameters_0 = [f"VAC_ColorShift_0_{p}" for p in macbeth_patterns]
         parameters_60 = [f"VAC_ColorShift_60_{p}" for p in macbeth_patterns]
 
-        df_0 = self._load_measure_data(self.TARGET_PK, components=('Cx', 'Cy'), 
+        df_0 = self._load_measure_data(self.pk, components=('Cx', 'Cy'), 
                                        parameters=parameters_0, normalize_lv_flag=False)
-        df_60 = self._load_measure_data(self.TARGET_PK, components=('Cx', 'Cy'), 
+        df_60 = self._load_measure_data(self.pk, components=('Cx', 'Cy'), 
                                         parameters=parameters_60, normalize_lv_flag=False)
         
         # logging.debug(f"0도 데이터:\n{df_0}")
@@ -389,10 +464,10 @@ class VACOutputBuilder:
         """
         최종 Y 딕셔너리 병합 반환:
         {
-          "Y0": { 'W': {'Gamma':(256,), 'Cx':(256,), 'Cy':(256,)}, 
-                  'R': {'Gamma':(256,), 'Cx':(256,), 'Cy':(256,)},
-                  'G': {'Gamma':(256,), 'Cx':(256,), 'Cy':(256,)},
-                  'B': {'Gamma':(256,), 'Cx':(256,), 'Cy':(256,)},
+          "Y0": { 'W': {'dGamma':(256,), 'dCx':(256,), 'dCy':(256,)}, 
+                  'R': {'dGamma':(256,), 'dCx':(256,), 'dCy':(256,)},
+                  'G': {'dGamma':(256,), 'dCx':(256,), 'dCy':(256,)},
+                  'B': {'dGamma':(256,), 'dCx':(256,), 'dCy':(256,)},
                 }
           "Y1": { 'W': (255,),
                   'R': (255,),
@@ -411,61 +486,8 @@ class VACOutputBuilder:
         
         return {"Y0": y0, "Y1": y1, "Y2": y2}
     
-def debug_dump_y0_delta(target_pk=2444, reference_pk=2154, preview_grays=(0, 1, 32, 128, 255)):
-    """
-    1) target_pk와 reference_pk 각각의 raw 측정 데이터를 CSV로 저장하고 엽니다.
-    2) 두 데이터로부터 계산된 dGamma / dCx / dCy 일부 값을 콘솔에 출력합니다.
-    """
-    print(f"[DEBUG] target_pk={target_pk}, reference_pk={reference_pk}")
-
-    # 빌더 준비
-    target_builder = VACOutputBuilder(pk=target_pk, reference_pk=reference_pk)
-    ref_builder    = VACOutputBuilder(pk=reference_pk, reference_pk=reference_pk)
-
-    # 1) RAW MEASUREMENTS 덤프 → CSV
-    print("\n[STEP 1] Dump raw measurement rows for target and reference to CSV (and open)")
-    df_target = target_builder.load_set_info_pk_data(target_pk)
-    df_ref    = ref_builder.load_set_info_pk_data(reference_pk)
-
-    print(f"  target df rows: {len(df_target)} (pk={target_pk})")
-    print(f"  ref    df rows: {len(df_ref)}    (pk={reference_pk})")
-
-    # 2) ΔY0 계산 (dGamma, dCx, dCy)
-    print("\n[STEP 2] Compute dGamma / dCx / dCy using compute_Y0_struct() ...")
-    y0_delta = target_builder.compute_Y0_struct()
-
-    # y0_delta 구조 예:
-    # {
-    #   'W': {'dGamma': (256,), 'dCx': (256,), 'dCy': (256,)},
-    #   'R': {...},
-    #   'G': {...},
-    #   'B': {...}
-    # }
-
-    patterns = ['W','R','G','B']
-    for ptn in patterns:
-        if ptn not in y0_delta:
-            continue
-
-        dGamma_arr = y0_delta[ptn]['dGamma']
-        dCx_arr    = y0_delta[ptn]['dCx']
-        dCy_arr    = y0_delta[ptn]['dCy']
-
-        print(f"\n[PTN {ptn}]  (values are target - ref)")
-        for g in preview_grays:
-            if g < 0 or g >= len(dGamma_arr):
-                continue
-
-            dGamma_val = float(dGamma_arr[g]) if np.isfinite(dGamma_arr[g]) else None
-            dCx_val    = float(dCx_arr[g])    if np.isfinite(dCx_arr[g])    else None
-            dCy_val    = float(dCy_arr[g])    if np.isfinite(dCy_arr[g])    else None
-
-            print(f"  gray {g:3d}:  dGamma={dGamma_val} , dCx={dCx_val} , dCy={dCy_val}")
-
-    print("\n[STEP 3] Sanity checklist:")
-    print(" - 위 dCx, dCy는 실제로 df_target에서 해당 gray의 Cx/Cy 값 minus df_ref의 Cx/Cy 값과 일치해야 합니다.")
-    print(" - dGamma는 정규화된 Lv → gamma 계산 후 차이이므로, 그냥 Lv 차이랑은 다를 수 있습니다.")
-    print(" - dGamma/dCx/dCy가 거의 0이라면 target_pk와 reference_pk의 특성이 매우 유사하다는 뜻입니다.")    
-
+    
 if __name__ == "__main__":
-    debug_dump_y0_delta()
+    pk_list = list(range(2973, 2984))
+    builder = VACOutputBuilder(pk=pk_list[0], ref_pk=pk_list[1])
+    builder.load_multiple_pk_data_with_chart(pk_list)
