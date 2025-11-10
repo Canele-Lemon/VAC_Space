@@ -24,7 +24,7 @@ class VACDataset(Dataset):
             X = x_builder.prepare_X_delta_lut_with_mapping(ref_pk=self.ref_pk)
 
             # 참조 PK를 동일하게 써서 ΔY0 계산
-            y_builder = VACOutputBuilder(pk, reference_pk=self.ref_pk)
+            y_builder = VACOutputBuilder(pk, ref_pk=self.ref_pk)
             Y = y_builder.prepare_Y(y1_patterns=('W',))  # Y0만 써도 되지만 구조 유지
 
             self.samples.append({"pk": pk, "X": X, "Y": Y})
@@ -93,14 +93,14 @@ class VACDataset(Dataset):
         return X_mat, y_vec, groups
 
 if __name__ == "__main__":
-    ds = VACDataset(pk_list=[2757], ref_pk=2744)
+    ds = VACDataset(pk_list=[3002], ref_pk=2744)
     X_mat, y_vec, groups = ds.build_XYdataset_for_jacobian_g(component='dCx')
 
     print("X_mat shape:", X_mat.shape)
     print("y_vec shape:", y_vec.shape)
 
-    # 앞 몇 행만 출력
-    for i in range(20):
+    # range(n)에서 n 행까지만 출력
+    for i in range(100):
         print(f"\n--- row {i} ---")
         print("X:", X_mat[i])
         print("y:", y_vec[i])
