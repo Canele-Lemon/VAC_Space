@@ -207,57 +207,38 @@ class VACOutputBuilder:
         # logging.debug(f"[STEP 3] Lv 정규화 후 df:\n{df.head(6)}")
         
         return df
-    
-    def flatten_Y0(self, merged_df):
+
+    def compute_Y0_struct(self, patterns=('W', 'R', 'G', 'B')):
         """
-        Flatten Y[0] merged DataFrame into 1D vector in the order:
-        [W_0_Lv, W_0_Cx, W_0_Cy, W_1_Lv, ..., B_255_Cy]
-        """
-        pattern_order = ['W', 'R', 'G', 'B']
-        component_order = ['Lv', 'Cx', 'Cy']
-        gray_order = list(range(256))
-
-        flat_list = []
-
-        for pattern in pattern_order:
-            for gray in gray_order:
-                for comp in component_order:
-                    row = merged_df[
-                        (merged_df['Pattern_Window'] == pattern) &
-                        (merged_df['Gray_Level'] == gray) &
-                        (merged_df['Component'] == comp)
-                    ]
-                    if not row.empty:
-                        flat_list.append(row.iloc[0]['Diff'])  # 방향성 유지
-                    else:
-                        flat_list.append(0.0)  # 누락된 경우 0으로 채움
-
-        return np.array(flat_list, dtype=np.float32)
-
-    def compute_Y0_struct(self):
-        """
-        Y[0] detailed: 패턴별(W/R/G/B) 정면 Gamma 특성 차이 w/ self.ref_pk (dGamma, dCx, dCy)
+        Y[0] detailed: 패턴별(W/R/G/B) self.pk와 self.ref_pk 간 Gamma, Cx, Cy 차이 => dGamma, dCx, dCy
         Gamma(g) = log(nor.Lv_g) / log(gray_norm_g)
         - gray_norm = gray/255
         - gray=0 → NaN
         - gray=255 → NaN
         - nor.Lv=0 → NaN        
+        
         return:
         {
           'W': {'dGamma': (256,), 'dCx': (256,), 'dCy': (256,)},
           'R': {...},
           'G': {...},
           'B': {...}
-        } dGamma를 계산할 수 없는 경우 0으로 처리
+        } 
+        ※ dGamma를 계산할 수 없는 경우 NaN으로 처리
         """
-        parameters = [
-            "VAC_Gamma_W_Gray____",
-            "VAC_Gamma_R_Gray____",
-            "VAC_Gamma_G_Gray____",
-            "VAC_Gamma_B_Gray____"
-        ]
+        all_pattern_map = {
+            'W': "VAC_Gamma_W_Gray____",
+            'R': "VAC_Gamma_R_Gray____",
+            'G': "VAC_Gamma_G_Gray____",
+            'B': "VAC_Gamma_B_Gray____",
+        }
+        patterns = tuple(p for p in patterns if p in all_pattern_map)
+        if not patterns:
+            logging.warning("[Y0] No valid patterns requested, returning empty dict.")
+            return {}
+ 
+        parameters = [all_pattern_map[p] for p in patterns]
         components = ('Lv', 'Cx', 'Cy')
-        patterns = ('W', 'R', 'G', 'B')
         L = 256
 
         df_target = self._load_measure_data(self.pk, parameters=parameters, components=components)
@@ -265,16 +246,24 @@ class VACOutputBuilder:
 
         if df_target.empty or df_ref.empty:
             logging.warning(f"[Y0] Missing data (PK={self.pk}, Ref={self.ref_pk})")
-            return {p: {k: np.zeros(L, np.float32) for k in ('dGamma','dCx','dCy')} for p in patterns}  # fallback: zero 구조
+            return {
+                p: {k: np.zeros(L, np.float32) for k in ('dGamma', 'dCx', 'dCy')}
+                for p in patterns
+            }
 
         def calc_gamma_array(df_lv_pattern: pd.DataFrame) -> np.ndarray:
             """
-            nor.Lv = 0 또는 gray=0/255이면 NaN으로 남김
+            Gamma를 계산합니다.
+            ※ nor.Lv = 0 또는 gray=0/255이면 NaN으로 처리
             """
             gamma = np.full(L, np.nan, dtype=np.float32)
             if not df_lv_pattern.empty:
-                lv_dict = dict(zip(df_lv_pattern['Gray_Level'].to_numpy(),
-                                df_lv_pattern['Data'].to_numpy(dtype=np.float32)))
+                lv_dict = dict(
+                    zip(
+                        df_lv_pattern['Gray_Level'].to_numpy(),
+                        df_lv_pattern['Data'].to_numpy(dtype=np.float32)
+                    )
+                )
                 gray = np.arange(L, dtype=np.float32)
                 gray_norm = gray / 255.0
                 lv_norm = np.array([lv_dict.get(int(g), np.nan) for g in gray], dtype=np.float32)
@@ -302,13 +291,12 @@ class VACOutputBuilder:
 
             gamma_t = calc_gamma_array(lv_t)
             gamma_r = calc_gamma_array(lv_r)
-            dGamma = gamma_t - gamma_r
-            dGamma  = dGamma.astype(np.float32)
+            dGamma  = (gamma_t - gamma_r).astype(np.float32)
 
             def diff_component(comp: str) -> np.ndarray:
                 arr = np.zeros(L, np.float32)
                 sub_t = df_target[(df_target['Pattern_Window'] == ptn) & (df_target['Component'] == comp)]
-                sub_r = df_ref[(df_ref['Pattern_Window'] == ptn)      & (df_ref['Component'] == comp)]
+                sub_r = df_ref[(df_ref['Pattern_Window'] == ptn) & (df_ref['Component'] == comp)]
                 if not sub_t.empty and not sub_r.empty:
                     t = sub_t.sort_values('Gray_Level')[['Gray_Level','Data']].to_numpy()
                     r = sub_r.sort_values('Gray_Level')[['Gray_Level','Data']].to_numpy()
@@ -322,13 +310,13 @@ class VACOutputBuilder:
                     arr[:] = np.nan
                 return arr
 
-            dCx = diff_component('Cx')
-            dCy = diff_component('Cy')
-
+            dCx = diff_component('Cx').astype(np.float32)
+            dCy = diff_component('Cy').astype(np.float32)
+            
             y0[ptn] = {
-                'dGamma': dGamma.astype(np.float32),
-                'dCx': dCx.astype(np.float32),
-                'dCy': dCy.astype(np.float32)
+                'dGamma': dGamma,
+                'dCx': dCx,
+                'dCy': dCy
             }
 
         return y0
@@ -460,7 +448,8 @@ class VACOutputBuilder:
                 
         return y2
 
-    def prepare_Y(self, y1_patterns=('W',)):
+    def prepare_Y(self, add_y0: bool = True, add_y1: bool = True, add_y2: bool = True,
+                        y0_patterns=('W', 'R', 'G', 'B'), y1_patterns=('W',)):
         """
         최종 Y 딕셔너리 병합 반환:
         {
@@ -480,14 +469,19 @@ class VACOutputBuilder:
                 }
         }
         """
-        y0 = self.compute_Y0_struct()
-        y1 = self.compute_Y1_struct(patterns=y1_patterns)
-        y2 = self.compute_Y2_struct()
+        out = {}
+        if add_y0:
+            out["Y0"] = self.compute_Y0_struct(patterns=y0_patterns)
+            
+        if add_y1:
+            out["Y1"] = self.compute_Y1_struct(patterns=y1_patterns)
+            
+        if add_y2:
+            out["Y2"] = self.compute_Y2_struct()
         
-        return {"Y0": y0, "Y1": y1, "Y2": y2}
-    
-    
+        return out
+
 if __name__ == "__main__":
-    pk_list = list(range(2973, 2984))
+    pk_list = list(range(2744, 2746))
     builder = VACOutputBuilder(pk=pk_list[0], ref_pk=pk_list[1])
     builder.load_multiple_pk_data_with_chart(pk_list)
