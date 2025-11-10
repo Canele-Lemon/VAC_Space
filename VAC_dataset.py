@@ -1,21 +1,65 @@
 # VAC_dataset.py
 import sys
 import os
+import logging
 import numpy as np
+import pandas as pd
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from torch.utils.data import Dataset
 from src.data_preparation.prepare_input import VACInputBuilder
 from src.data_preparation.prepare_output import VACOutputBuilder
+from config.db_config import engine
+
+logging.basicConfig(level=logging.DEBUG)
+
+MEASUREMENT_INFO_TABLE = "W_VAC_SET_Info"
 
 class VACDataset(Dataset):
-    def __init__(self, pk_list, ref_pk=2582):
-        self.pk_list = list(pk_list)
+    def __init__(self, pk_list, ref_pk=2582, drop_use_flag_N: bool = True):
+
+        self.pk_list_all = list(pk_list)
         self.ref_pk = int(ref_pk)
         self.feature_channels = ('R_High','G_High','B_High')
+        
+        if drop_use_flag_N:
+            self.pk_list = self._filter_by_use_flag(self.pk_list_all)
+        else:
+            self.pk_list = list(pk_list)
+            
+        if not self.pk_list:
+            logging.warning("[VACDataset] 유효한 pk_list가 비어 있습니다.")
+            
         self.samples = []
         self._collect()
+        
+    def _filter_by_use_flag(pk_list):
+        if not pk_list:
+            return []
+        
+        pk_str = ",".join(str(int(pk)) for pk in pk_list)
+        
+        query = f"""
+        SELECT `PK`, `Use_Flag`
+        FROM `{MEASUREMENT_INFO_TABLE}`
+        WHERE `PK` IN ({pk_str})
+        """
+        df = pd.read.sql(query, engine)
+        
+        if df.empty:
+            logging.warning("[VACDataset] Use_Flag 조회 결과가 비었습니다. 입력 pk_list 전체를 사용합니다.")
+            return pk_list
+        
+        valid = df[df["Use_Flag"] != "N"]["PK"].astype(int).tolist()
+        dropped = sorted(set(pk_list) - set(valid))
+        
+        if dropped:
+            logging.info(f"[VACDataset] Use_Flag='N' 이라 제외된 PK: {dropped}")
+        else:
+            logging.info(f"[VACDataset] Use_Flag='N' 으로 제외된 PK가 없습니다.")
+            
+        return valid
 
     def _collect(self):
         for pk in self.pk_list:
@@ -93,14 +137,18 @@ class VACDataset(Dataset):
         return X_mat, y_vec, groups
 
 if __name__ == "__main__":
-    ds = VACDataset(pk_list=[3002], ref_pk=2744)
-    X_mat, y_vec, groups = ds.build_XYdataset_for_jacobian_g(component='dCx')
+    # ds = VACDataset(pk_list=[3002], ref_pk=2744)
+    # X_mat, y_vec, groups = ds.build_XYdataset_for_jacobian_g(component='dCx')
 
-    print("X_mat shape:", X_mat.shape)
-    print("y_vec shape:", y_vec.shape)
+    # print("X_mat shape:", X_mat.shape)
+    # print("y_vec shape:", y_vec.shape)
 
-    # range(n)에서 n 행까지만 출력
-    for i in range(100):
-        print(f"\n--- row {i} ---")
-        print("X:", X_mat[i])
-        print("y:", y_vec[i])
+    # # range(n)에서 n 행까지만 출력
+    # for i in range(100):
+    #     print(f"\n--- row {i} ---")
+    #     print("X:", X_mat[i])
+    #     print("y:", y_vec[i])
+    pk_list = list(range(2743, 3003))
+    ds = VACDataset(pk_list=pk_list, ref_pk=2744)
+    print(self.pk_list)
+    
