@@ -9,7 +9,7 @@ import tempfile
 import webbrowser
 from sklearn.preprocessing import OneHotEncoder
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from config.db_config import engine
 from config.app_config import PANEL_MAKER_CATEGORIES
 
@@ -17,9 +17,9 @@ logging.basicConfig(level=logging.DEBUG)
 
 class VACInputBuilder:
     def __init__(self, pk: int):
-        self.PK = pk
-        self.VAC_SET_INFO_TABLE = "W_VAC_SET_Info"
-        self.VAC_DATA_TABLE = "W_VAC_Info"        
+        self.pk = pk
+        self.MEASUREMENT_INFO_TABLE = "W_VAC_SET_Info"
+        self.VAC_DATA_INFO_TABLE = "W_VAC_Info"        
 
     def downsample_lut(self, lut_4096):
         """
@@ -31,7 +31,7 @@ class VACInputBuilder:
     def _load_vac_set_info_row(self, pk: int):
         """
         내부 유틸:
-        - VAC_SET_INFO_TABLE에서 pk 행 하나 가져오고
+        - MEASUREMENT_INFO_TABLE에서 pk 행 하나 가져오고
         - panel_maker one-hot, frame_rate, model_year, vac_info_pk를 뽑는다.
         - prepare_X0() / prepare_X_delta() 공통 사용
         """
@@ -39,7 +39,7 @@ class VACInputBuilder:
 
         query_set = f"""
         SELECT *
-        FROM `{self.VAC_SET_INFO_TABLE}`
+        FROM `{self.MEASUREMENT_INFO_TABLE}`
         WHERE `PK` = {pk}
         """
         df_set = pd.read_sql(query_set, engine)
@@ -77,12 +77,13 @@ class VACInputBuilder:
             "n_panel": n_panel
         }
         
-    def _load_vacdata_lut4096(self, vac_info_pk: int):
+    def _load_vacdata_lut4096(self, vac_set_info_pk: int):
         """
         내부 유틸:
-        - VAC_DATA_TABLE에서 VAC_Data(JSON)를 읽어와서
-          4096포인트 LUT 배열(dict)을 반환
-        - 채널명 매핑은 prepare_X0()과 동일하게 맞춘다.
+        - W_VAC_SET_Info 테이블에서 주어진 세트 PK(vac_set_info_pk)의 VAC_Info_PK를 먼저 조회한 뒤
+        - 그 VAC_Info_PK를 사용해서 W_VAC_Info 테이블에서 VAC_Data(JSON)를 읽어온다.
+        - 4096포인트 LUT 배열(dict)을 반환.
+
         반환 예:
         {
             "R_Low":  np.array([...], float32)  # len 4096, 정규화 전(raw)
@@ -90,9 +91,23 @@ class VACInputBuilder:
             ...
         }
         """
+        # 1) 세트 테이블에서 VAC_Info_PK 조회
+        query_set = f"""
+        SELECT `VAC_Info_PK`
+        FROM `{self.MEASUREMENT_INFO_TABLE}`
+        WHERE `PK` = {vac_set_info_pk}
+        """
+        df_set = pd.read_sql(query_set, engine)
+        if df_set.empty:
+            logging.warning(f"[VACInputBuilder] No VAC_SET_Info found for PK={vac_set_info_pk}")
+            return None
+
+        vac_info_pk = int(df_set.iloc[0]["VAC_Info_PK"])
+
+        # 2) VAC_Info_PK로 W_VAC_Info에서 VAC_Data 조회
         query_vacdata = f"""
         SELECT `VAC_Data`
-        FROM `{self.VAC_DATA_TABLE}`
+        FROM `{self.VAC_DATA_INFO_TABLE}`
         WHERE `PK` = {vac_info_pk}
         """
         df_vacdata = pd.read_sql(query_vacdata, engine)
@@ -108,6 +123,7 @@ class VACInputBuilder:
             key = ch.replace("_", "channel")  # "R_Low" -> "RchannelLow"
             arr4096 = np.array(vacdata_dict.get(key, [0]*4096), dtype=np.float32)
             lut4096[ch] = arr4096
+
         return lut4096
 
     def _lut4096_to_lut256_norm(self, lut4096_dict: dict):
@@ -160,14 +176,13 @@ class VACInputBuilder:
                     "model_year": 0.0
                 }
             }
-        info = self._load_vac_set_info_row(self.PK)
+        info = self._load_vac_set_info_row(self.pk)
         if info is None:
             return _empty_return()
 
-        vac_info_pk_target = info["vac_info_pk"]
         meta_dict          = info["meta"]
 
-        lut4096_target = self._load_vacdata_lut4096(vac_info_pk_target)
+        lut4096_target = self._load_vacdata_lut4096(self.pk)
         if lut4096_target is None:
             return _empty_return()
 
@@ -181,8 +196,8 @@ class VACInputBuilder:
     def prepare_X_delta(self):
         """
         [자코비안/보정용 데이터셋 생성용]
-        target PK (=self.PK)와
-        reference LUT (= self.VAC_DATA_TABLE에서 PK=1인 행의 VAC_Data)를 비교하여
+        target PK (=self.pk)와
+        reference LUT (= self.VAC_DATA_INFO_TABLE PK=1인 행의 VAC_Data)를 비교하여
         ΔLUT(target - ref)을 256포인트 정규화 기준으로 반환.
 
         meta는 target 패널의 meta 그대로 사용.
@@ -207,20 +222,19 @@ class VACInputBuilder:
             }
 
         # 1) target 쪽 정보 (현재 PK)
-        info_target = self._load_vac_set_info_row(self.PK)
+        info_target = self._load_vac_set_info_row(self.pk)
         if info_target is None:
             return _empty_return()
 
-        vac_info_pk_target = info_target["vac_info_pk"]
         meta_dict          = info_target["meta"]
 
-        lut4096_target = self._load_vacdata_lut4096(vac_info_pk_target)
+        lut4096_target = self._load_vacdata_lut4096(self.pk)
         if lut4096_target is None:
             return _empty_return()
 
         # 2) reference 쪽 정보
-        #    reference LUT은 VAC_DATA_TABLE의 PK=1 고정이라고 하셨습니다.
-        lut4096_ref = self._load_vacdata_lut4096(vac_info_pk=1)
+        #    reference LUT은 VAC_DATA_INFO_TABLE PK=1 고정이라고 하셨습니다.
+        lut4096_ref = self._load_vacdata_lut4096(vac_set_info_pk=1)
         if lut4096_ref is None:
             logging.warning("[VACInputBuilder] No reference LUT found at VAC_Info.PK=1, returning zeros.")
             return _empty_return()
@@ -279,37 +293,29 @@ class VACInputBuilder:
         j = np.clip(j, 0, 4095).astype(np.int32)
         return j
         
-    def prepare_X_delta_raw_with_mapping(self, ref_vac_info_pk: int):
+    def prepare_X_delta_lut_with_mapping(self, ref_pk: int):
         """
-        ref_vac_info_pk: W_VAC_Info 테이블의 'ref' LUT가 들어있는 PK (예: 2582)
-        return:
-            {
-            "lut_delta_raw": { "R_Low": (256,), ... },   # raw 12bit (target - ref) @ mapped j
-            "meta": { panel_maker one-hot, frame_rate, model_year },
-            "mapping_j": (256,) np.int32
-            }
+        X: LUT_index_mapping.csv 파일에 저장되어있는 
+        8bit→12bit 매핑값 기준 normalize 안한 [ΔR_High, ΔG_High, ΔB_High] + [] 준비
         """
-        # 1) 타겟 메타/타겟 LUT(4096)
-        info = self._load_vac_set_info_row(self.PK)
+        info = self._load_vac_set_info_row(self.pk)
         if info is None:
-            raise RuntimeError(f"[X_delta_raw] No VAC_SET_Info for PK={self.PK}")
+            raise RuntimeError(f"[X_delta_raw] No VAC_SET_Info for PK={self.pk}")
 
-        vac_info_pk_target = info["vac_info_pk"]
-        meta_dict          = info["meta"]
+        meta_dict = info["meta"]
 
-        lut4096_target = self._load_vacdata_lut4096(vac_info_pk_target)
+        # 현재 세트 PK(self.pk)의 LUT
+        lut4096_target = self._load_vacdata_lut4096(self.pk)
         if lut4096_target is None:
-            raise RuntimeError(f"[X_delta_raw] No VAC_Data for VAC_Info_PK={vac_info_pk_target}")
+            raise RuntimeError(f"[X_delta_raw] No VAC_Data for VAC_SET_Info.PK={self.pk}")
 
-        # 2) ref LUT(4096) — DB에서 PK로 직접
-        lut4096_ref = self._load_vacdata_lut4096(ref_vac_info_pk)
+        # ref 세트 PK의 LUT
+        lut4096_ref = self._load_vacdata_lut4096(ref_pk)
         if lut4096_ref is None:
-            raise RuntimeError(f"[X_delta_raw] No REF VAC_Data for VAC_Info_PK={ref_vac_info_pk}")
+            raise RuntimeError(f"[X_delta_raw] No REF VAC_Data for VAC_SET_Info.PK={ref_pk}")
 
-        # 3) i(0..255) → j(0..4095) 매핑 로드 (CSV)
-        j_map = self._load_lut_index_mapping()  # (256,) int
+        j_map = self._load_lut_index_mapping()
 
-        # 4) 매핑 지점에서 raw delta(target - ref) 계산 (정규화 없음)
         delta = {}
         for ch in ['R_Low','R_High','G_Low','G_High','B_Low','B_High']:
             tgt = np.asarray(lut4096_target[ch], dtype=np.float32)
@@ -320,19 +326,26 @@ class VACInputBuilder:
 
         return {"lut_delta_raw": delta, "meta": meta_dict, "mapping_j": j_map}
 
-    def debug_dump_delta_with_mapping(self, pk=None, ref_vac_info_pk: int = 1):
+    def debug_dump_delta_with_mapping(self, pk=None, ref_pk: int = 1, verbose_lut: bool = False):
+        # pk 지정되면 세트 PK 교체
         if pk is not None:
-            self.PK = int(pk)
+            self.pk = int(pk)
 
-        pack = self.prepare_X_delta_raw_with_mapping(ref_vac_info_pk=ref_vac_info_pk)
+        # ΔLUT + 메타 + 매핑 먼저 불러오기
+        pack = self.prepare_X_delta_lut_with_mapping(ref_pk=ref_pk)
         delta = pack["lut_delta_raw"]; meta = pack["meta"]; j_map = pack["mapping_j"]
 
-        print(f"\n[DEBUG] ΔLUT(raw, target−ref@PK={ref_vac_info_pk}) @ mapped indices for PK={self.PK}")
+        print(f"\n[DEBUG] ΔLUT(raw, target−ref @ VAC_SET_Info.PK={ref_pk}) "
+            f"@ mapped indices for VAC_SET_Info.PK={self.pk}")
         print("[META]")
         print(f"  panel_maker one-hot: {meta['panel_maker']}")
         print(f"  frame_rate         : {meta['frame_rate']}")
         print(f"  model_year         : {meta['model_year']}")
         print("\n[MAPPING] j[0..10] =", j_map[:11].tolist(), "...")
+
+        # ---- 원본 4096 LUT도 같이 로딩 (세트 PK 기준) ----
+        lut4096_target = self._load_vacdata_lut4096(self.pk)
+        lut4096_ref    = self._load_vacdata_lut4096(ref_pk)
 
         channels = ['R_Low','R_High','G_Low','G_High','B_Low','B_High']
         for ch in channels:
@@ -340,9 +353,19 @@ class VACInputBuilder:
             print(f"\n--- {ch} ---  shape={arr.shape}, dtype={arr.dtype}")
             for g in (0,1,32,128,255):
                 if 0 <= g < len(arr):
-                    print(f"  gray {g:3d} @ j={int(j_map[g]):4d} : Δ={float(arr[g]): .3f}")
+                    j = int(j_map[g])
+                    print(f"  gray {g:3d} @ j={j:4d} : Δ={float(arr[g]): .3f}")
 
+                    if verbose_lut:
+                        tgt_val = float(lut4096_target[ch][j])
+                        ref_val = float(lut4096_ref[ch][j])
+                        diff    = tgt_val - ref_val
+                        print(
+                            f"      target[{ch}][{j}]={tgt_val: .3f}, "
+                            f"ref[{ch}][{j}]={ref_val: .3f}, "
+                            f"target - ref={diff: .3f}"
+                        )
 
 if __name__ == "__main__":
-    builder = VACInputBuilder(pk=2635)
-    builder.debug_dump_delta_with_mapping(pk=2635, ref_vac_info_pk=2582)
+    builder = VACInputBuilder(pk=2757)
+    builder.debug_dump_delta_with_mapping(pk=2861, ref_pk=2744, verbose_lut=True)
