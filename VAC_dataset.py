@@ -34,7 +34,7 @@ class VACDataset(Dataset):
         self.samples = []
         self._collect()
         
-    def _filter_by_use_flag(pk_list):
+    def _filter_by_use_flag(self, pk_list):
         if not pk_list:
             return []
         
@@ -45,7 +45,7 @@ class VACDataset(Dataset):
         FROM `{MEASUREMENT_INFO_TABLE}`
         WHERE `PK` IN ({pk_str})
         """
-        df = pd.read.sql(query, engine)
+        df = pd.read_sql(query, engine)
         
         if df.empty:
             logging.warning("[VACDataset] Use_Flag 조회 결과가 비었습니다. 입력 pk_list 전체를 사용합니다.")
@@ -150,5 +150,5 @@ if __name__ == "__main__":
     #     print("y:", y_vec[i])
     pk_list = list(range(2743, 3003))
     ds = VACDataset(pk_list=pk_list, ref_pk=2744)
-    print(self.pk_list)
+    print(ds.pk_list)
     
