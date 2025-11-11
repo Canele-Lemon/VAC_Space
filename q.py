@@ -1,60 +1,9 @@
-def _on_vac_btn_computeY_clicked(self):
-    """
-    vac_btn_computeY 클릭 시:
-    - dL_R / dL_G / dL_B(=ΔR/ΔG/ΔB) 읽어서
-    - J_g · ΔX로 ΔCx / ΔCy / ΔGamma 예측
-    - 결과를 lineEdit_dCx / dCy / dGamma에 표시
-    """
-    # 1) ΔX 입력값 읽기 (빈 문자열/잘못된 값은 0으로 처리)
-    def _read_float_safe(line_edit):
-        text = line_edit.text().strip()
-        if not text:
-            return 0.0
-        try:
-            return float(text)
-        except ValueError:
-            logging.warning(f"[VAC] invalid float in {line_edit.objectName()}: {text!r} → 0.0 사용")
-            return 0.0
+	Base			B+50			B+100			R+50			R+100			G+50			G+100			R+100 G+100			R+100 B+100			R+100 G+100 B+100		
+	Lv	Cx	Cy	Lv	Cx	Cy	Lv	Cx	Cy	Lv	Cx	Cy	Lv	Cx	Cy	Lv	Cx	Cy	Lv	Cx	Cy	Lv	Cx	Cy	Lv	Cx	Cy	Lv	Cx	Cy
+0	0.04																													
+128	74	0.2711	0.2764	74.21	0.2691	0.2722	74.32	0.267	0.2679	74.48	0.273	0.2766	74.9	0.2748	0.2769	75.95	0.2714	0.2803	78.02	0.2717	0.2847	79.08	0.2753	0.2851	75.4	0.2707	0.2685	79.48	0.2713	0.2766
+255	307.5	0.2729	0.2782																											
+실제					-0.002	-0.0042		-0.0041	-0.0085		0.0019	0.0002		0.0037	0.0005		0.0003	0.0039		0.0006	0.0083		0.0042	0.0087		-0.0004	-0.0079		0.0002	0.0002
+계산				-0.005456	-0.005187	-0.035361	-0.010912	-0.010373	-0.070723	-0.00205	0.001814	0.000309	-0.004099	0.003628	0.000619	-0.004344	0.000493	0.004254	-0.008688	0.000986	0.008509	-0.012787	0.004614	0.009128	-0.015011	-0.006745	-0.070104	-0.023699	-0.005759	-0.061595
 
-    dR = _read_float_safe(self.ui.vac_lineEdit_dL_R)
-    dG = _read_float_safe(self.ui.vac_lineEdit_dL_G)
-    dB = _read_float_safe(self.ui.vac_lineEdit_dL_B)
-
-    dX = np.array([dR, dG, dB], dtype=np.float32)  # (3,)
-
-    # 2) 사용할 gray index 가져오기
-    # 예시: spin box에서 현재 gray 선택
-    try:
-        g = int(self.ui.vac_spin_gray.value())
-    except Exception:
-        # 혹시 그런 위젯이 없으면, 기본으로 128 같은 값 사용해도 됨
-        g = 128
-
-    if not hasattr(self, "_J_dense"):
-        logging.error("[VAC] _J_dense(자코비안)가 없습니다.")
-        return
-
-    if g < 0 or g >= len(self._J_dense):
-        logging.error(f"[VAC] invalid gray index g={g}, J_dense length={len(self._J_dense)}")
-        return
-
-    # 3) J_g 가져와서 ΔY = J_g · ΔX 계산
-    Jg = np.asarray(self._J_dense[g], dtype=np.float32)
-
-    # 혹시 shape이 (3,3)이 아니면 reshape
-    Jg = Jg.reshape(3, 3)
-
-    # ΔY_pred = [ΔCx, ΔCy, ΔGamma]
-    dY = Jg @ dX
-    dCx, dCy, dGamma = map(float, dY)
-
-    logging.info(
-        f"[VAC] computeY @ gray {g}: "
-        f"ΔX=[ΔR={dR:.3f}, ΔG={dG:.3f}, ΔB={dB:.3f}] → "
-        f"ΔY_pred=[ΔCx={dCx:+.6f}, ΔCy={dCy:+.6f}, ΔGamma={dGamma:+.6f}]"
-    )
-
-    # 4) UI 업데이트 (보기 좋게 포맷팅)
-    self.ui.vac_lineEdit_dCx.setText(f"{dCx:+.6f}")
-    self.ui.vac_lineEdit_dCy.setText(f"{dCy:+.6f}")
-    self.ui.vac_lineEdit_dGamma.setText(f"{dGamma:+.6f}")
+위처럼 실제와 계산 결과가 나왔는데 이게 맞는건 맞는데 틀린건 완전 틀리네요..
