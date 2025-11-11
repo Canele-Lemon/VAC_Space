@@ -12,8 +12,8 @@ import numpy as np
 import pandas as pd
 import datetime
 
-CURRENT_DIR  = os.path.dirname(os.path.abspath(__file__))          # .../module/scripts
-PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))    # .../module
+CURRENT_DIR  = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
@@ -258,17 +258,17 @@ def main():
     #                                         변수 지정                                        
     # ========================================================================================= #
     # 1. Sweep 데이터로 사용할 PK(s) 리스트
-    pks = "2456-2677,!2456"
+    pks = "2743-3002,!2743,!2744,!2984"
     pk_list = parse_pks(pks)
     
     # 2. 기준(reference) LUT PK
-    ref_pk = 2582
+    ref_pk = 2744
     
     # 3. 리지 정규화 계수
     lam = 1e-3
     
     # 4. delta-window
-    delta_window = 50
+    delta_window = 900
     
     # 5. gauss-sigma
     gauss_sigma = 30
