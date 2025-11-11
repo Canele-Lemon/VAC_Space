@@ -21,7 +21,7 @@ def main():
     print("dCx/dCy/dGamma vs gray 엑셀 + 그래프 생성 중 ...")
 
     # ------------------------------------------------------------
-    # 1) 절대값 Y0_abs (각 PK 자체의 Cx/Cy/Gamma)
+    # 1) 절대값 (각 PK 자체의 Cx/Cy/Gamma)
     # ------------------------------------------------------------
     builder_ref = VACOutputBuilder(pk=ref_pk,    ref_pk=ref_pk)
     builder_tgt = VACOutputBuilder(pk=target_pk, ref_pk=ref_pk)
@@ -45,7 +45,7 @@ def main():
     dG_manual  = G_tgt  - G_ref
 
     # ------------------------------------------------------------
-    # 3) prepare_Y() 기준 ΔY (자코비안에서 사용하는 값)
+    # 3) prepare_Y() 기준 ΔY
     # ------------------------------------------------------------
     builder_tgt_rel = VACOutputBuilder(pk=target_pk, ref_pk=ref_pk)
     Y_target = builder_tgt_rel.prepare_Y(
@@ -59,26 +59,27 @@ def main():
     dG_prepare  = y0_tgt["dGamma"].astype(np.float32)
 
     # ------------------------------------------------------------
-    # 4) DataFrame 구성 (엑셀로 내보낼 데이터)
+    # 4) DataFrame 구성 (gray>=2만)
     # ------------------------------------------------------------
     df = pd.DataFrame({
         "gray": grays,
-
         "Cx_ref": Cx_ref,
         "Cx_tgt": Cx_tgt,
         "dCx_manual":  dCx_manual,
         "dCx_prepare": dCx_prepare,
-
         "Cy_ref": Cy_ref,
         "Cy_tgt": Cy_tgt,
         "dCy_manual":  dCy_manual,
         "dCy_prepare": dCy_prepare,
-
         "Gamma_ref": G_ref,
         "Gamma_tgt": G_tgt,
         "dGamma_manual":  dG_manual,
         "dGamma_prepare": dG_prepare,
     })
+
+    # gray 0,1 제외
+    df = df[df["gray"] >= 2].reset_index(drop=True)
+    nrows = len(df)
 
     # ------------------------------------------------------------
     # 5) 엑셀 임시파일 생성 + 그래프 (dCx / dCy / dGamma)
@@ -93,79 +94,44 @@ def main():
         workbook  = writer.book
         worksheet = writer.sheets[sheet_name]
 
-        nrows = len(df)
-        # 각 컬럼 인덱스
-        col_gray = df.columns.get_loc("gray")
+        # 컬럼 인덱스
+        col_gray  = df.columns.get_loc("gray")
+        col_dCx_m = df.columns.get_loc("dCx_manual")
+        col_dCx_p = df.columns.get_loc("dCx_prepare")
+        col_dCy_m = df.columns.get_loc("dCy_manual")
+        col_dCy_p = df.columns.get_loc("dCy_prepare")
+        col_dG_m  = df.columns.get_loc("dGamma_manual")
+        col_dG_p  = df.columns.get_loc("dGamma_prepare")
 
-        col_dCx_m  = df.columns.get_loc("dCx_manual")
-        col_dCx_p  = df.columns.get_loc("dCx_prepare")
-
-        col_dCy_m  = df.columns.get_loc("dCy_manual")
-        col_dCy_p  = df.columns.get_loc("dCy_prepare")
-
-        col_dG_m   = df.columns.get_loc("dGamma_manual")
-        col_dG_p   = df.columns.get_loc("dGamma_prepare")
-
-        # 공통 category (x축: gray)
+        # 공통 X축 (gray)
         categories = [sheet_name, 1, col_gray, nrows, col_gray]
 
-        # ---------- dCx chart ----------
-        chart_dcx = workbook.add_chart({'type': 'line'})
-        chart_dcx.set_title({'name': f'dCx vs gray (pattern={pattern})'})
-        chart_dcx.set_x_axis({'name': 'gray'})
-        chart_dcx.set_y_axis({'name': 'dCx'})
+        def make_chart(title, yname, col_m, col_p):
+            chart = workbook.add_chart({'type': 'line'})
+            chart.set_title({'name': f'{title} vs gray (pattern={pattern})'})
+            chart.set_x_axis({'name': 'gray'})
+            chart.set_y_axis({'name': yname})
+            chart.add_series({
+                'name': f'{yname}_manual',
+                'categories': categories,
+                'values': [sheet_name, 1, col_m, nrows, col_m],
+            })
+            chart.add_series({
+                'name': f'{yname}_prepareY',
+                'categories': categories,
+                'values': [sheet_name, 1, col_p, nrows, col_p],
+            })
+            return chart
 
-        chart_dcx.add_series({
-            'name': 'dCx_manual',
-            'categories': categories,
-            'values': [sheet_name, 1, col_dCx_m, nrows, col_dCx_m],
-        })
-        chart_dcx.add_series({
-            'name': 'dCx_prepareY',
-            'categories': categories,
-            'values': [sheet_name, 1, col_dCx_p, nrows, col_dCx_p],
-        })
+        chart_dcx = make_chart("dCx", "dCx", col_dCx_m, col_dCx_p)
+        chart_dcy = make_chart("dCy", "dCy", col_dCy_m, col_dCy_p)
+        chart_dg  = make_chart("dGamma", "dGamma", col_dG_m, col_dG_p)
 
-        # ---------- dCy chart ----------
-        chart_dcy = workbook.add_chart({'type': 'line'})
-        chart_dcy.set_title({'name': f'dCy vs gray (pattern={pattern})'})
-        chart_dcy.set_x_axis({'name': 'gray'})
-        chart_dcy.set_y_axis({'name': 'dCy'})
-
-        chart_dcy.add_series({
-            'name': 'dCy_manual',
-            'categories': categories,
-            'values': [sheet_name, 1, col_dCy_m, nrows, col_dCy_m],
-        })
-        chart_dcy.add_series({
-            'name': 'dCy_prepareY',
-            'categories': categories,
-            'values': [sheet_name, 1, col_dCy_p, nrows, col_dCy_p],
-        })
-
-        # ---------- dGamma chart ----------
-        chart_dg = workbook.add_chart({'type': 'line'})
-        chart_dg.set_title({'name': f'dGamma vs gray (pattern={pattern})'})
-        chart_dg.set_x_axis({'name': 'gray'})
-        chart_dg.set_y_axis({'name': 'dGamma'})
-
-        chart_dg.add_series({
-            'name': 'dGamma_manual',
-            'categories': categories,
-            'values': [sheet_name, 1, col_dG_m, nrows, col_dG_m],
-        })
-        chart_dg.add_series({
-            'name': 'dGamma_prepareY',
-            'categories': categories,
-            'values': [sheet_name, 1, col_dG_p, nrows, col_dG_p],
-        })
-
-        # 차트를 시트 오른쪽에 세로로 배치
-        # (row, col) = (시작 행, 시작 열)
-        base_col = df.shape[1] + 2   # 데이터 오른쪽에 차트 배치
-        worksheet.insert_chart(1,  base_col,     chart_dcx)
-        worksheet.insert_chart(20, base_col,     chart_dcy)
-        worksheet.insert_chart(39, base_col,     chart_dg)
+        # 시트 오른쪽에 세로로 배치
+        base_col = df.shape[1] + 2
+        worksheet.insert_chart(1,  base_col, chart_dcx)
+        worksheet.insert_chart(20, base_col, chart_dcy)
+        worksheet.insert_chart(39, base_col, chart_dg)
 
     # ------------------------------------------------------------
     # 6) 엑셀 자동 열기
