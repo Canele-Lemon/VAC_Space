@@ -280,3 +280,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+위 코드를 다음과 같이 수정해주세요:
+1. LUT_gray_merged_256.csv 파일이 왜 저장되는지 모르겠는데 filedialog 나오면서 저장하는 기능는 없애주세요. 저장 안해도 됩니다.
+2. 최종 R_Low	R_High	G_Low	G_High	B_Low	B_High 4096 데이터 csv 임시파일만 뜨게 해 주세요.
+3. 생성 완료 window 안내창 안뜨게 해 주세요.
