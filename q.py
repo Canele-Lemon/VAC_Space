@@ -9,8 +9,7 @@ import tempfile
 # ----- GUI -----
 try:
     import tkinter as tk
-    from tkinter.filedialog import askopenfilename, asksaveasfilename
-    from tkinter import messagebox
+    from tkinter.filedialog import askopenfilename
     use_gui = True
 except Exception:
     use_gui = False
@@ -109,43 +108,7 @@ def _load_low_4096(csv_path: str) -> pd.DataFrame:
         raise ValueError("LOW_LUT_CSV 행 수가 4096보다 작습니다.")
     return out.iloc[:4096].reset_index(drop=True)
 
-# ====== 3) Gray→j 보간(단조/규칙 반영) + 256 그레이 테이블 ======
-def _gray_to_j_dense(df_gray_lutj: pd.DataFrame) -> np.ndarray:
-    """
-    Gray, LUT_j 앵커로 Gray→j를 보간해서 256 길이의 정수 j 배열 생성.
-    - 단조 증가(비감소) 강제
-    - gray=254 → 4092 (규칙 유지)
-    - gray=255 → 4095 (끝점 강제)
-    """
-    # 같은 Gray가 여러 번이면 마지막 행 유지
-    df = df_gray_lutj.dropna(subset=["Gray","LUT_j"]).copy()
-    df["Gray"] = df["Gray"].astype(int)
-    df = df.sort_values(["Gray"], kind="mergesort")
-    df = df.groupby("Gray", as_index=False).tail(1)
-
-    gray_anchor = df["Gray"].to_numpy(dtype=np.float64)
-    j_anchor    = df["LUT_j"].to_numpy(dtype=np.float64)
-
-    if gray_anchor.size < 2:
-        raise ValueError("Gray→LUT_j 보간을 위해서는 서로 다른 Gray 앵커가 최소 2개 필요합니다.")
-
-    full_gray = np.arange(256, dtype=np.float64)
-    lut_j_dense = np.interp(full_gray, gray_anchor, j_anchor)  # Gray축 보간된 j(g)
-
-    # 정수화 + 경계 클립
-    lut_j_dense = np.rint(lut_j_dense).astype(np.int32)
-    lut_j_dense = np.clip(lut_j_dense, 0, 4095)
-
-    # 단조 증가(비감소) 강제
-    lut_j_dense = np.maximum.accumulate(lut_j_dense)
-
-    # 규칙 반영
-    lut_j_dense[254] = 4092          # 규칙 유지
-    lut_j_dense[255] = 4095          # 끝점 강제
-    lut_j_dense[:255] = np.minimum(lut_j_dense[:255], 4095)
-
-    return lut_j_dense
-
+# ====== 3) High 4096 생성 ======
 def _compute_high_full_4096_from_sparse(sparse_high_csv: str) -> pd.DataFrame:
     df_s = pd.read_csv(sparse_high_csv)
     _ensure_sparse_columns(df_s)
@@ -158,55 +121,11 @@ def _compute_high_full_4096_from_sparse(sparse_high_csv: str) -> pd.DataFrame:
     )
     return _interp_high_to_4096(df_anchor)  # (4096행 DataFrame)
 
-def build_gray_table(sparse_high_csv: str, low_4096_csv: str) -> pd.DataFrame:
-    """
-    (요구1) 256개 Gray에 대해 보간된 j(g)를 사용해 Low/High를 샘플링한 256행 테이블
-    """
-    # 희소 High 로드
-    df_s = pd.read_csv(sparse_high_csv)
-    _ensure_sparse_columns(df_s)
-    _coerce_sparse_types(df_s)
-    _apply_gray254_rule(df_s)
-
-    # High 4096 보간
-    df_high4096 = _compute_high_full_4096_from_sparse(sparse_high_csv).set_index("LUT_j")
-    # Low 4096 로드
-    df_low4096 = _load_low_4096(low_4096_csv).set_index("LUT_j")
-
-    # Gray→j(g) 보간(단조/규칙 반영)
-    lut_j_dense = _gray_to_j_dense(df_s[["Gray","LUT_j"]])
-
-    # 256행 테이블 생성
-    rows = []
-    for g in range(256):
-        j = int(lut_j_dense[g])
-
-        R_low = df_low4096.at[j, "R_Low_full"]
-        G_low = df_low4096.at[j, "G_Low_full"]
-        B_low = df_low4096.at[j, "B_Low_full"]
-
-        R_hih = df_high4096.at[j, "R_High_full"]
-        G_hih = df_high4096.at[j, "G_High_full"]
-        B_hih = df_high4096.at[j, "B_High_full"]
-
-        rows.append({
-            "GrayLevel_window": g,
-            "LUT_j": j,
-            "R_Low":  int(round(R_low)),
-            "R_High": int(round(R_hih)),
-            "G_Low":  int(round(G_low)),
-            "G_High": int(round(G_hih)),
-            "B_Low":  int(round(B_low)),
-            "B_High": int(round(B_hih)),
-        })
-
-    df_out256 = pd.DataFrame(rows)
-    return df_out256
-
+# ====== 4) 최종 4096 테이블 구성 ======
 def build_full_4096_table(sparse_high_csv: str, low_4096_csv: str) -> pd.DataFrame:
     """
-    (요구2) LUT_j=0..4095 전 구간 4096행 테이블 생성
-      컬럼: LUT_j, R_Low, R_High, G_Low, G_High, B_Low, B_High
+    LUT_j=0..4095 전 구간 4096행 테이블 생성
+      (출력 컬럼은 나중에 저장 시 6개만 선택)
     - Low: 원본 4096 그대로
     - High: 희소를 LUT_j축으로 보간한 4096
     """
@@ -227,61 +146,40 @@ def build_full_4096_table(sparse_high_csv: str, low_4096_csv: str) -> pd.DataFra
         df[c] = np.rint(df[c]).astype(int)
     return df
 
-# ====== 4) 메인 플로우 ======
+# ====== 5) 메인 플로우 ======
 def main():
     if use_gui:
         root = tk.Tk(); root.withdraw()
 
-    # 1) 희소 High CSV 선택
+    # 1) 희소 High CSV 선택 (필수)
     if use_gui:
         sparse_csv = askopenfilename(title="Gray-LUT_j-High(희소) CSV 선택",
                                      filetypes=[("CSV Files","*.csv"),("All Files","*.*")])
         if not sparse_csv:
-            print("@INFO: 입력 파일을 선택하지 않아 종료합니다."); return
+            print("@INFO: 입력 파일을 선택하지 않아 종료합니다.")
+            return
     else:
         sparse_csv = input("희소 High CSV 경로: ").strip()
+        if not sparse_csv:
+            print("@INFO: 입력 파일 경로가 비었습니다.")
+            return
 
-    # 2) 256 그레이 테이블 생성 + 저장(선택)
-    df_gray = build_gray_table(sparse_high_csv=sparse_csv, low_4096_csv=LOW_LUT_CSV)
-
-    if use_gui:
-        save_csv_256 = asksaveasfilename(title="병합 LUT(256) CSV 저장",
-                                         defaultextension=".csv",
-                                         initialfile="LUT_gray_merged_256.csv",
-                                         filetypes=[("CSV Files","*.csv")])
-        if not save_csv_256:
-            base, ext = os.path.splitext(sparse_csv)
-            save_csv_256 = f"{base}_merged_256.csv"
-    else:
-        base, ext = os.path.splitext(sparse_csv)
-        save_csv_256 = f"{base}_merged_256.csv"
-
-    df_gray.to_csv(save_csv_256, index=False, encoding="utf-8-sig")
-    print(f"[OK] 256 그레이 LUT CSV 저장: {save_csv_256}")
-
-    # 3) 4096 풀 테이블 생성
+    # 2) 4096 풀 테이블 생성
     df_full4096 = build_full_4096_table(sparse_high_csv=sparse_csv, low_4096_csv=LOW_LUT_CSV)
 
-    # 4) 임시 파일로 저장 후 바로 열기
+    # 3) 임시 파일로 저장 (요청: 최종 6컬럼만, LUT_j 제외)
     with tempfile.NamedTemporaryFile(delete=False, suffix="_LUT_full4096.csv") as tmp:
         tmp_path = tmp.name
-    df_full4096.to_csv(tmp_path, index=False, encoding="utf-8-sig")
+
+    cols6 = ["R_Low","R_High","G_Low","G_High","B_Low","B_High"]
+    df_full4096.to_csv(tmp_path, index=False, encoding="utf-8-sig", columns=cols6)
     print(f"[OK] 4096-포인트 LUT CSV(임시) 저장: {tmp_path}")
 
-    # Windows에서 열기 시도
+    # 4) Windows에서 바로 열기 시도
     try:
         os.startfile(tmp_path)  # type: ignore[attr-defined]
     except Exception:
         pass
 
-    if use_gui:
-        messagebox.showinfo("완료",
-                            f"CSV 생성 완료\n\n256 Gray: {save_csv_256}\n4096 LUT(임시): {tmp_path}")
-
 if __name__ == "__main__":
     main()
-
-위 코드를 다음과 같이 수정해주세요:
-1. LUT_gray_merged_256.csv 파일이 왜 저장되는지 모르겠는데 filedialog 나오면서 저장하는 기능는 없애주세요. 저장 안해도 됩니다.
-2. 최종 R_Low	R_High	G_Low	G_High	B_Low	B_High 4096 데이터 csv 임시파일만 뜨게 해 주세요.
-3. 생성 완료 window 안내창 안뜨게 해 주세요.
