@@ -1,82 +1,151 @@
-def export_mapped_lut_to_csv(self, pk=None, ref_pk=None, out_path=None, open_after=True):
-    """
-    LUT_index_mapping.csv의 매핑 j(0..4095)를 사용해
-    Gray i(0..255)별로 j에서의 LUT 값을 CSV로 저장합니다.
+12bit의 R_Low, G_Low, B_Low값이 저장되어있는 
+LOW_LUT_CSV   = r"D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\Gen VAC\Random VAC\4. 기준 LUT + OFFSET\기준 LUT\LUT_low_values_SIN1300.csv"
+를 인터폴레이션 한 R_High, G_High, B_High 열과 붙여 GrayLevel_window	R_Low	R_High	G_Low	G_High	B_Low	B_High 제목행으로 시작하는 csv 파일이 되게 하고 싶습니다.
 
-    포함 컬럼:
-      Gray, LUT_j,
-      <ch>_tgt, <ch>_ref, <ch>_delta   for ch in [R_Low, R_High, G_Low, G_High, B_Low, B_High]
+그리고 최종적으로 
 
-    Parameters
-    ----------
-    pk : int | None
-        내보낼 target VAC_SET_Info PK (None이면 self.pk 유지)
-    ref_pk : int | None
-        비교할 reference VAC_SET_Info PK (None이면 delta/참조 없이 target만 기록)
-    out_path : str | None
-        저장 경로 (None이면 ./artifacts/mapped_lut_<pk>[_ref<ref_pk>]_<timestamp>.csv)
-    open_after : bool
-        저장 후 파일을 기본 앱으로 열지 여부
-    """
-    import pandas as pd
-    import numpy as np
-    import os, datetime, webbrowser
-    os.makedirs("artifacts", exist_ok=True)
+    def write_default_data(file, table_format):
+    if table_format == "txt":
+        default_data = """{    																			
+0,	1,	1,																	
+//DRV_valc_ctrl_t																			
+{																			
+	//DRV_valc_pattern_ctrl_t																		
+	{																		
+		11,	1,																
+		{																	
+			{1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	}, //line 0
+			{0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	}, //line 1
+			{1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	}, //line 2
+			{0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	}, //line 3
+			{1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	}, //line 4
+			{0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	}, //line 5
+			{1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	}, //line 6
+			{0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	}, //line 7
+		}																	
+	},																		
+	// DRV_valc_sat_ctrl_t																		
+	{																		
+		{0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	},	
+	},																		
+	// DRV_valc_hpf_ctrl_t																		
+	{																		
+		{0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	},	
+		1,																	
+	},																		
+},																			
+"""
+    
+    elif table_format == "json":
+        default_data = """{																					
+"DRV_valc_major_ctrl"	:	[	0,	1	],																
+"DRV_valc_pattern_ctrl_0"	:	[	5,	1	],																
+"DRV_valc_pattern_ctrl_1"	:	[	[	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0	],	
+			[	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1	],	
+			[	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0	],	
+			[	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1	],	
+			[	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0	],	
+			[	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1	],	
+			[	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0	],	
+			[	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1,	0,	1	]      	 ],
+"DRV_valc_sat_ctrl"	:	[	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0	],		
+"DRV_valc_hpf_ctrl_0"	:	[	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0,	0	],		
+"DRV_valc_hpf_ctrl_1"	:		1,																		
+"""
+    file.write(default_data)
+    
+    
+    
+def write_LUT_data(file, input_file_path, table_format):
+    LUT = pd.read_csv(input_file_path)
+    
+    if table_format == "txt":        
+        channels = {
+            "R Channel": ['R_Low', 'R_High'],
+            "G Channel": ['G_Low', 'G_High'],
+            "B Channel": ['B_Low', 'B_High']
+        }
+        
+        file.write("//LUT\n{\n")
 
-    if pk is not None:
-        self.pk = int(pk)
+        for channel_name, cols in channels.items():
+            file.write(f"\t// {channel_name}\n\t")
+            file.write("{\n")
+            for col in cols:
+                file.write("\t\t{\n")
+                data = LUT[col].values
+                reshaped_data = np.reshape(data, (256, 16))
+                for row in reshaped_data:
+                    formatted_row = '\t\t' + ',\t'.join(map(lambda x: str(int(x)), row)) + ','
+                    file.write(formatted_row + '\n')
+                file.write("\t\t},\n")
+            file.write("\t},\n")
+        file.write("},\n};")
+        
+    elif table_format == "json":
+        channels = {
+            "RchannelLow": 'R_Low',
+            "RchannelHigh": 'R_High',
+            "GchannelLow": 'G_Low',
+            "GchannelHigh": 'G_High',
+            "BchannelLow": 'B_Low',
+            "BchannelHigh": 'B_High'
+        }
+        
+        for i, (channel_name, col) in enumerate(channels.items()):
+            file.write(f'"{channel_name}"\t:\t[\t')
+            data = LUT[col].values
+            reshaped_data = np.reshape(data, (256, 16)).tolist()
 
-    # 매핑 j 불러오기
-    j_map = self._load_lut_index_mapping()  # (256,) int32
+            for row_index, row in enumerate(reshaped_data):
+                formatted_row = ',\t'.join(map(lambda x: str(int(x)), row))
+                if row_index == 0:
+                    file.write(f'{formatted_row},\n')
+                elif row_index == len(reshaped_data) - 1:
+                    file.write(f'\t\t\t{formatted_row}')
+                else:
+                    file.write(f'\t\t\t{formatted_row},\n')
 
-    # 타깃/레퍼런스 4096 LUT 불러오기
-    lut4096_tgt = self._load_vacdata_lut4096(self.pk)
-    if lut4096_tgt is None:
-        raise RuntimeError(f"[export] No VAC_Data for target VAC_SET_Info.PK={self.pk}")
+            if i == len(channels) - 1:
+                file.write("\t]\n")
+            else:
+                file.write("\t],\n")
 
-    lut4096_ref = None
-    if ref_pk is not None:
-        lut4096_ref = self._load_vacdata_lut4096(int(ref_pk))
-        if lut4096_ref is None:
-            raise RuntimeError(f"[export] No VAC_Data for reference VAC_SET_Info.PK={ref_pk}")
+        file.write("}")
 
-    channels = ['R_Low','R_High','G_Low','G_High','B_Low','B_High']
+def main():
+    Tk().withdraw()
+    
+    table_format= input("Select Table Format (txt/json): ").strip().lower()
+    if table_format not in ["txt", "json"]:
+        print("@INFO: Invalid table format selected. Exiting.")
+        return
+    
+    input_file_path = askopenfilename(title="Select Input CSV File", filetypes=[("CSV Files", "*.csv")])
+    if not input_file_path:
+        print("@INFO: Input file not selected. Exiting.")
+        return
+    
+    output_file_path = f"../Gen DGA/STEP4 LUT Formatting & Loading/LUT_DGA.{table_format}"
+    
+    with open(output_file_path, 'w') as f:
+        if table_format == "txt":
+            write_default_data(f, "txt")
+            write_LUT_data(f, input_file_path, "txt")
+        elif table_format == "json":
+            write_default_data(f, "json")
+            write_LUT_data(f, input_file_path, "json")
 
-    rows = []
-    for i in range(256):  # gray 0..255
-        j = int(j_map[i])
-        row = {"Gray": i, "LUT_j": j}
-        for ch in channels:
-            v_tgt = float(lut4096_tgt[ch][j]) if lut4096_tgt is not None else np.nan
-            row[f"{ch}_tgt"] = v_tgt
-            if lut4096_ref is not None:
-                v_ref = float(lut4096_ref[ch][j])
-                row[f"{ch}_ref"] = v_ref
-                row[f"{ch}_delta"] = v_tgt - v_ref
-        rows.append(row)
+    print(f"@INFO: Data has been successfully written to {output_file_path}")
+    absolute_path = os.path.abspath(output_file_path)
+    
+    # Windows 환경에서 파일 열기
+    try:
+        os.startfile(absolute_path)  
+    except FileNotFoundError:
+        print(f'@ERROR: File not found')
 
-    df = pd.DataFrame(rows)
+if __name__ == "__main__":
+    main()
 
-    # 컬럼 정렬(가독성)
-    ordered_cols = ["Gray", "LUT_j"]
-    for ch in channels:
-        ordered_cols += [f"{ch}_tgt"]
-        if lut4096_ref is not None:
-            ordered_cols += [f"{ch}_ref", f"{ch}_delta"]
-    df = df[ordered_cols]
-
-    # 저장 경로
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    if out_path is None:
-        tag = f"mapped_lut_pk{self.pk}"
-        if ref_pk is not None:
-            tag += f"_ref{int(ref_pk)}"
-        out_path = os.path.join("artifacts", f"{tag}_{ts}.csv")
-
-    df.to_csv(out_path, index=False, encoding="utf-8-sig")
-    print(f"[OK] CSV saved → {out_path}")
-
-    if open_after:
-        webbrowser.open(f"file://{os.path.abspath(out_path)}")
-
-    return out_path
+이 함수를 사용해 table_format == "json"으로 포멧변환하여 json 파일이 생성되도록 해 주세요. 
