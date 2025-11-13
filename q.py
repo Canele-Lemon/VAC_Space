@@ -15,6 +15,84 @@ except Exception:
     use_gui = False
 # ---------------
 
+# ===== 공통 상수/유틸 =====
+FULL_POINTS = 4096
+EPS_HIGH_OVER_LOW = 1.0  # High ≥ Low + 1 보장
+
+def _clip_round_12bit(a):
+    return np.clip(np.rint(a), 0, 4095).astype(np.uint16)
+
+def _enforce_monotone(a):
+    """
+    1D 배열 a에 대해 앞에서 뒤로 갈수록 감소하지 않도록 (비감소) 강제.
+    """
+    a = np.asarray(a, float).copy()
+    for i in range(1, len(a)):
+        if a[i] < a[i-1]:
+            a[i] = a[i-1]
+    return a
+
+def _enforce_with_locks_12bit(high, low, eps=1.0):
+    """
+    gen_random_ref_offset.py에서 사용한 로직과 동일한 컨셉.
+
+    high, low: 길이 4096 배열
+    잠금 인덱스: 0, 1, 4092, 4095
+      - high[0] = high[1] = 0
+      - high[4092] = 4092
+      - high[4095] = 4095
+    그 외 인덱스:
+      - high[j] >= low[j] + eps
+      - 전체 단조 증가(비감소)
+      - 단, 잠금 인덱스는 그대로 두고,
+        잠금 인덱스 주변 값이 잠금값을 넘으면 잠금값으로 끌어내린다.
+    """
+    high = np.asarray(high, float).copy()
+    low  = np.asarray(low,  float).copy()
+
+    # 1) 잠금 값 정의
+    LOCK_VALS = {
+        0:    0.0,
+        1:    0.0,
+        4092: 4092.0,
+        4095: 4095.0,
+    }
+    lock_idx = np.array(sorted(LOCK_VALS.keys()), dtype=int)
+
+    # 2) 잠금 인덱스에 원하는 값 강제 세팅
+    for j, v in LOCK_VALS.items():
+        if 0 <= j < FULL_POINTS:
+            high[j] = v
+
+    # 3) low+eps 제약: 잠금 인덱스를 제외한 곳에만 적용
+    mask = np.ones_like(high, dtype=bool)
+    mask[lock_idx] = False
+    high[mask] = np.maximum(high[mask], low[mask] + eps)
+
+    # 4) 중간 구간(2 ~ 4091)에 대해 단조 증가(비감소) 강제
+    start_mid = 2
+    end_mid   = 4091
+    high[start_mid:end_mid+1] = np.maximum.accumulate(high[start_mid:end_mid+1])
+
+    # 5) 0,1 쪽도 음수로 가는 일 방지 (이론상 없지만 방어용)
+    high[:2] = np.maximum(high[:2], 0.0)
+
+    # 6) 고계조 쪽이 잠금값(4092, 4095)을 넘지 않도록 clamp
+    #    - 0~4091 구간이 4092보다 클 수 없도록
+    high[:4092] = np.minimum(high[:4092], high[4092])
+    #    - 4092~4095 구간 단조/상한 유지
+    high[4092:4095] = np.maximum.accumulate(high[4092:4095])
+    high[4092:4096] = np.minimum(high[4092:4096], high[4095])
+
+    # 7) 마지막으로 잠금 인덱스를 한 번 더 덮어써서
+    #    중간 과정에서 값이 바뀌지 않았음을 보장
+    for j, v in LOCK_VALS.items():
+        if 0 <= j < FULL_POINTS:
+            high[j] = v
+
+    return high
+
+# ===== 입력 Low LUT 경로 =====
 LOW_LUT_CSV = r"D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\Gen VAC\Random VAC\4. 기준 LUT + OFFSET\기준 LUT\LUT_low_values_SIN1300.csv"
 
 # ====== 1) High 희소 → 4096 보간 유틸 ======
@@ -23,8 +101,10 @@ REQUIRED_SPARSE_COLS = ["Gray", "LUT_j", "R_High", "G_High", "B_High"]
 def _ensure_sparse_columns(df: pd.DataFrame):
     missing = [c for c in REQUIRED_SPARSE_COLS if c not in df.columns]
     if missing:
-        raise ValueError(f"입력 CSV에 필수 컬럼이 없습니다: {missing}\n"
-                         f"필수 컬럼: {REQUIRED_SPARSE_COLS}")
+        raise ValueError(
+            f"입력 CSV에 필수 컬럼이 없습니다: {missing}\n"
+            f"필수 컬럼: {REQUIRED_SPARSE_COLS}"
+        )
 
 def _coerce_sparse_types(df: pd.DataFrame):
     df["Gray"] = pd.to_numeric(df["Gray"], errors="coerce").astype("Int64")
@@ -33,7 +113,7 @@ def _coerce_sparse_types(df: pd.DataFrame):
         df[ch] = pd.to_numeric(df[ch], errors="coerce")
 
 def _apply_gray254_rule(df: pd.DataFrame):
-    # gray=254는 항상 4092
+    # gray=254는 항상 LUT_j=4092 로 매핑
     m254 = df["Gray"] == 254
     if m254.any():
         df.loc[m254, "LUT_j"] = 4092
@@ -54,6 +134,7 @@ def _collapse_duplicate_j_keep_last(df: pd.DataFrame, gray_col: str | None = Non
 def _interp_high_to_4096(df_anchor: pd.DataFrame) -> pd.DataFrame:
     """
     LUT_j축 앵커들을 0..4095로 선형보간해 High 4096포인트 생성
+    (gen_random_ref_offset에서 gray12축으로 np.interp 하던 것과 같은 원리)
     """
     x = df_anchor["LUT_j"].to_numpy(dtype=np.float64)
     r = df_anchor["R_High"].to_numpy(dtype=np.float64)
@@ -62,7 +143,7 @@ def _interp_high_to_4096(df_anchor: pd.DataFrame) -> pd.DataFrame:
     # 유일성 확보
     x, idx = np.unique(x, return_index=True)
     r = r[idx]; g = g[idx]; b = b[idx]
-    full_j = np.arange(0, 4096, dtype=np.int32)
+    full_j = np.arange(0, FULL_POINTS, dtype=np.int32)
     r_full = np.interp(full_j, x, r)
     g_full = np.interp(full_j, x, g)
     b_full = np.interp(full_j, x, b)
@@ -82,7 +163,7 @@ def _load_low_4096(csv_path: str) -> pd.DataFrame:
     """
     df = pd.read_csv(csv_path)
     if "LUT_j" not in df.columns:
-        df.insert(0, "LUT_j", np.arange(4096, dtype=np.int32))
+        df.insert(0, "LUT_j", np.arange(FULL_POINTS, dtype=np.int32))
 
     def pick_col(cands):
         for c in cands:
@@ -94,7 +175,9 @@ def _load_low_4096(csv_path: str) -> pd.DataFrame:
     col_g = pick_col(["G_Low","G","G_low","GChannelLow","GchannelLow"])
     col_b = pick_col(["B_Low","B","B_low","BChannelLow","BchannelLow"])
     if not all([col_r, col_g, col_b]):
-        raise ValueError("LOW_LUT_CSV에서 R_Low/G_Low/B_Low 열을 찾을 수 없습니다. 열 이름을 확인하세요.")
+        raise ValueError(
+            "LOW_LUT_CSV에서 R_Low/G_Low/B_Low 열을 찾을 수 없습니다. 열 이름을 확인하세요."
+        )
 
     out = pd.DataFrame({
         "LUT_j": pd.to_numeric(df["LUT_j"], errors="coerce").astype("Int64"),
@@ -104,9 +187,16 @@ def _load_low_4096(csv_path: str) -> pd.DataFrame:
     })
     if out["LUT_j"].isna().any():
         raise ValueError("LOW_LUT_CSV의 LUT_j에 NaN이 있습니다.")
-    if out.shape[0] < 4096:
+    if out.shape[0] < FULL_POINTS:
         raise ValueError("LOW_LUT_CSV 행 수가 4096보다 작습니다.")
-    return out.iloc[:4096].reset_index(drop=True)
+    out = out.iloc[:FULL_POINTS].reset_index(drop=True)
+
+    # Low도 혹시 모를 비단조 구간을 정리
+    out["R_Low_full"] = _enforce_monotone(out["R_Low_full"].to_numpy(float))
+    out["G_Low_full"] = _enforce_monotone(out["G_Low_full"].to_numpy(float))
+    out["B_Low_full"] = _enforce_monotone(out["B_Low_full"].to_numpy(float))
+
+    return out
 
 # ====== 3) High 4096 생성 ======
 def _compute_high_full_4096_from_sparse(sparse_high_csv: str) -> pd.DataFrame:
@@ -125,25 +215,39 @@ def _compute_high_full_4096_from_sparse(sparse_high_csv: str) -> pd.DataFrame:
 def build_full_4096_table(sparse_high_csv: str, low_4096_csv: str) -> pd.DataFrame:
     """
     LUT_j=0..4095 전 구간 4096행 테이블 생성
-      (출력 컬럼은 나중에 저장 시 6개만 선택)
-    - Low: 원본 4096 그대로
-    - High: 희소를 LUT_j축으로 보간한 4096
+      (출력 컬럼은 저장 시 6개만 선택)
+    - Low: 원본 4096 (단조 보정 포함)
+    - High: 희소를 LUT_j축으로 보간한 4096 + Low+eps + 단조 + lock 인덱스 제약
     """
     df_high4096 = _compute_high_full_4096_from_sparse(sparse_high_csv)
     df_low4096  = _load_low_4096(low_4096_csv)
 
+    # numpy 배열로 꺼내기
+    Rl = df_low4096["R_Low_full"].to_numpy(float)
+    Gl = df_low4096["G_Low_full"].to_numpy(float)
+    Bl = df_low4096["B_Low_full"].to_numpy(float)
+
+    Rh = df_high4096["R_High_full"].to_numpy(float)
+    Gh = df_high4096["G_High_full"].to_numpy(float)
+    Bh = df_high4096["B_High_full"].to_numpy(float)
+
+    # gen_random_ref_offset.py와 유사하게:
+    # - High ≥ Low + eps
+    # - 단조 증가
+    # - j=0,1,4092,4095 잠금
+    Rh = _enforce_with_locks_12bit(Rh, Rl, EPS_HIGH_OVER_LOW)
+    Gh = _enforce_with_locks_12bit(Gh, Gl, EPS_HIGH_OVER_LOW)
+    Bh = _enforce_with_locks_12bit(Bh, Bl, EPS_HIGH_OVER_LOW)
+
     df = pd.DataFrame({
-        "LUT_j": np.arange(4096, dtype=np.int32),
-        "R_Low":  df_low4096["R_Low_full"].to_numpy(dtype=np.float64),
-        "R_High": df_high4096["R_High_full"].to_numpy(dtype=np.float64),
-        "G_Low":  df_low4096["G_Low_full"].to_numpy(dtype=np.float64),
-        "G_High": df_high4096["G_High_full"].to_numpy(dtype=np.float64),
-        "B_Low":  df_low4096["B_Low_full"].to_numpy(dtype=np.float64),
-        "B_High": df_high4096["B_High_full"].to_numpy(dtype=np.float64),
+        "LUT_j": np.arange(FULL_POINTS, dtype=np.int32),
+        "R_Low":  _clip_round_12bit(Rl),
+        "R_High": _clip_round_12bit(Rh),
+        "G_Low":  _clip_round_12bit(Gl),
+        "G_High": _clip_round_12bit(Gh),
+        "B_Low":  _clip_round_12bit(Bl),
+        "B_High": _clip_round_12bit(Bh),
     })
-    # 정수화(필요 시)
-    for c in ["R_Low","R_High","G_Low","G_High","B_Low","B_High"]:
-        df[c] = np.rint(df[c]).astype(int)
     return df
 
 # ====== 5) 메인 플로우 ======
@@ -153,8 +257,10 @@ def main():
 
     # 1) 희소 High CSV 선택 (필수)
     if use_gui:
-        sparse_csv = askopenfilename(title="Gray-LUT_j-High(희소) CSV 선택",
-                                     filetypes=[("CSV Files","*.csv"),("All Files","*.*")])
+        sparse_csv = askopenfilename(
+            title="Gray-LUT_j-High(희소) CSV 선택",
+            filetypes=[("CSV Files","*.csv"),("All Files","*.*")]
+        )
         if not sparse_csv:
             print("@INFO: 입력 파일을 선택하지 않아 종료합니다.")
             return
@@ -165,9 +271,12 @@ def main():
             return
 
     # 2) 4096 풀 테이블 생성
-    df_full4096 = build_full_4096_table(sparse_high_csv=sparse_csv, low_4096_csv=LOW_LUT_CSV)
+    df_full4096 = build_full_4096_table(
+        sparse_high_csv=sparse_csv,
+        low_4096_csv=LOW_LUT_CSV
+    )
 
-    # 3) 임시 파일로 저장 (요청: 최종 6컬럼만, LUT_j 제외)
+    # 3) 임시 파일로 저장 (요청: 최종 6컬럼만)
     with tempfile.NamedTemporaryFile(delete=False, suffix="_LUT_full4096.csv") as tmp:
         tmp_path = tmp.name
 
