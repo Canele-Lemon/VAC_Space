@@ -12,8 +12,6 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QStandardItemModel, QStandardItem
 from PySide6.QtCore import Qt
 
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
 import pyqtgraph as pg
 
 from ui_app import Ui_MainWindow
@@ -41,16 +39,36 @@ class LUTEditor(QMainWindow):
         # create pyqtgraph plot
         self._create_plot()
 
-
         # 디폴트 Low LUT 표시
         self.load_and_plot_low_lut()
 
         # connect signals
+        # ★ dataChanged 시그널은 (topLeft, bottomRight, roles) 인자가 오므로 *args로 받게 수정할 예정
         self.model.dataChanged.connect(self.on_table_changed)
         self.ui.actionOpen_control_points_value.triggered.connect(self.load_csv)
         self.ui.actionExpert_LUT_CSV.triggered.connect(self.save_csv)
         self.ui.actionExport_vacparam_json.triggered.connect(self.export_json)
 
+        ### NEW: 체크박스 → 커브 표시/숨김
+        # UI에 다음 이름의 체크박스가 있다고 가정:
+        # ckBox_R_High, ckBox_G_High, ckBox_B_High,
+        # ckBox_R_Low,  ckBox_G_Low,  ckBox_B_Low
+        if hasattr(self.ui, "ckBox_R_High"):
+            self.ui.ckBox_R_High.toggled.connect(self.update_curve_visibility)
+        if hasattr(self.ui, "ckBox_G_High"):
+            self.ui.ckBox_G_High.toggled.connect(self.update_curve_visibility)
+        if hasattr(self.ui, "ckBox_B_High"):
+            self.ui.ckBox_B_High.toggled.connect(self.update_curve_visibility)
+        if hasattr(self.ui, "ckBox_R_Low"):
+            self.ui.ckBox_R_Low.toggled.connect(self.update_curve_visibility)
+        if hasattr(self.ui, "ckBox_G_Low"):
+            self.ui.ckBox_G_Low.toggled.connect(self.update_curve_visibility)
+        if hasattr(self.ui, "ckBox_B_Low"):
+            self.ui.ckBox_B_Low.toggled.connect(self.update_curve_visibility)
+
+        # 초기 상태에서 체크박스 상태에 맞춰 가시성 세팅
+        self.update_curve_visibility()
+        ### NEW 끝
 
         # initialize Gray column
         for i in range(256):
@@ -87,8 +105,8 @@ class LUTEditor(QMainWindow):
         self.curve_B_low = self.plot_widget.plot(
             pen=pg.mkPen(color=(100, 100, 255), width=1, style=Qt.DashLine),
             name="B_Low"
-)
-        
+        )
+
     # Low LUT 
     def load_low_lut_4096(self):
         df = pd.read_csv(LOW_LUT_CSV)
@@ -109,9 +127,7 @@ class LUTEditor(QMainWindow):
         Bl = df[col_b].to_numpy(dtype=float)[:4096]
 
         return Rl, Gl, Bl
-    
 
-        
     def load_and_plot_low_lut(self):
         Rl, Gl, Bl = self.load_low_lut_4096()
         x = np.arange(4096)
@@ -119,7 +135,7 @@ class LUTEditor(QMainWindow):
         self.curve_R_low.setData(x, Rl)
         self.curve_G_low.setData(x, Gl)
         self.curve_B_low.setData(x, Bl)
-    
+
     # ---------------------------------------------------------
     # Load CSV
     # ---------------------------------------------------------
@@ -132,7 +148,7 @@ class LUTEditor(QMainWindow):
 
         df = pd.read_csv(fname)
 
-        # expect columns: Gray, Gray12, R_High, G_High, B_High
+        # expect columns: Gray8, Gray12, R_High, G_High, B_High
         for r in range(256):
             self.model.setItem(r, 0, QStandardItem(str(df.iloc[r]["Gray8"])))
             self.model.setItem(r, 1, QStandardItem(str(df.iloc[r]["Gray12"])))
@@ -140,12 +156,17 @@ class LUTEditor(QMainWindow):
             self.model.setItem(r, 3, QStandardItem(str(df.iloc[r]["G_High"])))
             self.model.setItem(r, 4, QStandardItem(str(df.iloc[r]["B_High"])))
 
+        # CSV 불러온 직후에도 0~4095 클램프 + 그래프 업데이트
+        self.clamp_table_values()
         self.update_plot()
 
     # ---------------------------------------------------------
     # Save CSV
     # ---------------------------------------------------------
     def save_csv(self):
+        # 저장하기 전에 한 번 더 클램프
+        self.clamp_table_values()
+
         fname, _ = QFileDialog.getSaveFileName(self, "CSV 저장", "", "CSV Files (*.csv)")
         if not fname:
             return
@@ -166,12 +187,15 @@ class LUTEditor(QMainWindow):
             columns=["Gray8", "Gray12", "R_High", "G_High", "B_High"]
         )
         df.to_csv(fname, index=False)
-        
+
     def build_full_LUT_dataframe(self):
         """
         현재 테이블의 256개 High knot 값 + Low LUT(4096) + 보간 결과를 담아
         GrayLevel_window, R_Low, R_High, ... B_High 총 4096행 DataFrame 반환
         """
+        # LUT 사용 전에도 안전하게 클램프
+        self.clamp_table_values()
+
         # --- Low LUT ---
         Rl, Gl, Bl = self.load_low_lut_4096()
         j_axis = np.arange(4096)
@@ -251,7 +275,6 @@ class LUTEditor(QMainWindow):
 """
         file.write(default_data)
 
-
     def write_LUT_data(self, file, LUT):
         channels = {
             "RchannelLow": 'R_Low',
@@ -318,9 +341,44 @@ class LUTEditor(QMainWindow):
         print(f"[OK] JSON 저장 완료 → {fname}")
 
     # ---------------------------------------------------------
+    # LUT 테이블 값 클램프 (0 ~ 4095)
+    # ---------------------------------------------------------
+    def clamp_table_values(self):
+        """
+        테이블의 LUT Index / R_High / G_High / B_High 값을
+        0 ~ 4095 범위로 강제하고, 클램프된 값은 셀에도 반영.
+        """
+        old_block = self.model.blockSignals(True)  # 재귀 방지
+
+        try:
+            for r in range(256):
+                for c in (1, 2, 3, 4):  # LUT Index, R_High, G_High, B_High
+                    item = self.model.item(r, c)
+                    if item is None:
+                        continue
+                    txt = item.text().strip()
+                    if txt == "":
+                        continue
+                    try:
+                        v = float(txt)
+                    except ValueError:
+                        # 숫자 아니면 스킵
+                        continue
+
+                    v_clamped = max(0.0, min(4095.0, v))
+
+                    if v_clamped != v:
+                        item.setText(str(int(round(v_clamped))))
+        finally:
+            self.model.blockSignals(old_block)
+
+    # ---------------------------------------------------------
     # When user edits R/G/B
     # ---------------------------------------------------------
-    def on_table_changed(self):
+    def on_table_changed(self, *args):
+        # 먼저 값 클램프
+        self.clamp_table_values()
+        # 그 다음 그래프 업데이트
         self.update_plot()
 
     # ---------------------------------------------------------
@@ -338,7 +396,7 @@ class LUTEditor(QMainWindow):
             item_g   = self.model.item(r, 3)
             item_b   = self.model.item(r, 4)
 
-            # ★ 빈 셀(None) 또는 빈 문자열("")이면 업데이트 중단
+            # 빈 셀(None) 또는 빈 문자열("")이면 업데이트 중단
             if (item_g12 is None or item_g12.text().strip() == "" or
                 item_r   is None or item_r.text().strip() == "" or
                 item_g   is None or item_g.text().strip() == "" or
@@ -370,6 +428,35 @@ class LUTEditor(QMainWindow):
         self.curve_R.setData(j_axis, R_full)
         self.curve_G.setData(j_axis, G_full)
         self.curve_B.setData(j_axis, B_full)
+
+    # ---------------------------------------------------------
+    # 체크박스로 커브 on/off
+    # ---------------------------------------------------------
+    def update_curve_visibility(self):
+        """
+        체크박스 상태에 따라 각 곡선의 표시/숨김 제어
+        """
+        ck_R_H = getattr(self.ui, "ckBox_R_High", None)
+        ck_G_H = getattr(self.ui, "ckBox_G_High", None)
+        ck_B_H = getattr(self.ui, "ckBox_B_High", None)
+        ck_R_L = getattr(self.ui, "ckBox_R_Low", None)
+        ck_G_L = getattr(self.ui, "ckBox_G_Low", None)
+        ck_B_L = getattr(self.ui, "ckBox_B_Low", None)
+
+        if ck_R_H is not None:
+            self.curve_R.setVisible(ck_R_H.isChecked())
+        if ck_G_H is not None:
+            self.curve_G.setVisible(ck_G_H.isChecked())
+        if ck_B_H is not None:
+            self.curve_B.setVisible(ck_B_H.isChecked())
+
+        if ck_R_L is not None:
+            self.curve_R_low.setVisible(ck_R_L.isChecked())
+        if ck_G_L is not None:
+            self.curve_G_low.setVisible(ck_G_L.isChecked())
+        if ck_B_L is not None:
+            self.curve_B_low.setVisible(ck_B_L.isChecked())
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
