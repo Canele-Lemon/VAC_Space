@@ -1,67 +1,43 @@
-    def build_full_LUT_dataframe(self):
+    # ---------------------------------------------------------
+    # When user edits R/G/B (또는 Gray12)
+    # ---------------------------------------------------------
+    def on_table_changed(self, *args):
         """
-        현재 테이블의 256개 High knot 값 + Low LUT(4096) + 보간 결과를 담아
-        GrayLevel_window, R_Low, R_High, ... B_High 총 4096행 DataFrame 반환
+        - 사용자가 테이블 값을 수정할 때 호출
+        - R/G/B/Gray12 값들을 0~4095로 클램프
+        - 클램프된 값으로 다시 테이블을 업데이트
+        - 그리고 나서 그래프(update_plot) 다시 그림
         """
-        # --- Low LUT ---
-        Rl, Gl, Bl = self.load_low_lut_4096()
-        j_axis = np.arange(4096)
+        # 재진입 방지 플래그 (setText()가 다시 dataChanged를 발생시키기 때문)
+        if getattr(self, "_in_table_changed", False):
+            return
 
-        # --- High knot 읽기 ---
-        Gray12 = []
-        Rvals = []
-        Gvals = []
-        Bvals = []
+        self._in_table_changed = True
 
+        # 1~4열: LUT Index, R_High, G_High, B_High
         for r in range(256):
-            item_g12 = self.model.item(r, 1)
-            item_r   = self.model.item(r, 2)
-            item_g   = self.model.item(r, 3)
-            item_b   = self.model.item(r, 4)
+            for c in (1, 2, 3, 4):
+                item = self.model.item(r, c)
+                if item is None:
+                    continue
+                txt = item.text().strip()
+                if txt == "":
+                    continue
 
-            if (item_g12 is None or item_g12.text().strip() == "" or
-                item_r   is None or item_r.text().strip() == "" or
-                item_g   is None or item_g.text().strip() == "" or
-                item_b   is None or item_b.text().strip() == ""):
-                # High LUT 불완전 → None 반환
-                return None
+                try:
+                    v = float(txt)
+                except ValueError:
+                    # 숫자 아닌 값이면 일단 건너뜀 (원하시면 0으로 강제해도 됨)
+                    continue
 
-            Gray12.append(float(item_g12.text()))
-            Rvals.append(float(item_r.text()))
-            Gvals.append(float(item_g.text()))
-            Bvals.append(float(item_b.text()))
+                # 0 ~ 4095로 클램프
+                v_clamped = max(0, min(4095, v))
 
-        # numpy 변환 & sort
-        Gray12 = np.array(Gray12, float)
-        Rvals = np.array(Rvals, float)
-        Gvals = np.array(Gvals, float)
-        Bvals = np.array(Bvals, float)
+                # 실제 값이 바뀌는 경우에만 setText (불필요한 dataChanged 방지)
+                if v_clamped != v:
+                    item.setText(str(int(v_clamped)))
 
-        idx = np.argsort(Gray12)
-        Gray12 = Gray12[idx]
-        Rvals = Rvals[idx]
-        Gvals = Gvals[idx]
-        Bvals = Bvals[idx]
+        self._in_table_changed = False
 
-        # 보간
-        R_full = np.interp(j_axis, Gray12, Rvals)
-        G_full = np.interp(j_axis, Gray12, Gvals)
-        B_full = np.interp(j_axis, Gray12, Bvals)
-
-        # DataFrame 구성
-        LUT = pd.DataFrame({
-            "GrayLevel_window": j_axis,
-            "R_Low":  Rl,
-            "R_High": R_full,
-            "G_Low":  Gl,
-            "G_High": G_full,
-            "B_Low":  Bl,
-            "B_High": B_full,
-        })
-
-        for c in ["R_Low","R_High","G_Low","G_High","B_Low","B_High"]:
-            LUT[c] = np.rint(LUT[c]).astype(int)
-    
-        return LUT
-
-이 코드가 현재 tableView_LUT 테이블의 256knots 값들에 대해 interpolation 하는 코드인가요?
+        # 클램프가 끝난 후, 그래프 업데이트
+        self.update_plot()
