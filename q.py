@@ -1,76 +1,69 @@
-def _predict_and_correct_vac(self, base_vac_dict):
+def _predictive_first_optimize(self, vac_data_json, *, 
+                               n_iters=2, wG=0.4, wC=1.0, lambda_ridge=1e-3,
+                               optimize_focus='balanced',   # ← 추가
+                               gamma_soft=0.0               # ← 'chroma_soft'일 때 >0로
+                               ):
     """
-    Base VAC LUT에 대해:
-      1) ML 모델로 ΔCx, ΔCy, ΔGamma 예측
-      2) 예측 결과를 이용해 LUT를 한 번 보정
-    반환: 보정된 vac_dict
+    optimize_focus: 'balanced' | 'chroma' | 'chroma_soft'
+      - balanced   : 기존과 동일
+      - chroma     : Cx/Cy만 사용 (Gamma 완전 배제)
+      - chroma_soft: Cx/Cy 위주 + ΔGamma≈0 소프트 제약 (gamma_soft로 강도 조절)
     """
-    # ------------------------------------------------------
-    # 1) feature vector 구성
-    # ------------------------------------------------------
-    # off_store: VAC OFF 측정 결과 (이미 _run_off_baseline_then_on()에서 채워진다고 가정)
-    off_store = getattr(self, "_off_store", None)
-    if off_store is None:
-        logging.warning("[ML] off_store가 없습니다. Base VAC만 그대로 사용합니다.")
-        return base_vac_dict
-
-    # 패널/프레임레이트/연도 등 메타 정보
-    panel = self.ui.vac_cmb_PanelMaker.currentText().strip()
-    fr_text = self.ui.vac_cmb_FrameRate.currentText().strip()
     try:
-        fr = int(fr_text)
-    except ValueError:
-        fr = 60  # fallback
+        vac_dict = json.loads(vac_data_json)
+        # ... (중략: 기존 코드 동일) ...
 
-    prod_year_text = getattr(self.ui, "vac_cmb_ProdYear", None)
-    if prod_year_text is not None:
-        prod_year = self.ui.vac_cmb_ProdYear.currentText().strip()
-    else:
-        prod_year = "24"  # 필요시 수정
+        for it in range(1, n_iters + 1):
+            # (예측/디버그 동일)
+            y_pred = self._predict_Y0W_from_models(
+                lut256_for_pred,
+                panel_text=panel, frame_rate=fr, model_year=model_year
+            )
+            self._debug_dump_predicted_Y0W(
+                y_pred, tag=f"iter{it}_{panel}_fr{int(fr)}_my{int(model_year)%100:02d}", save_csv=True
+            )
 
-    # VACInputBuilder 쪽에 맞는 인자 이름으로 넣어주세요.
-    # 예: build_input(panel, fr, prod_year, vac_dict, off_store, ...)
-    X = self._vac_input_builder.build_input(
-        vac_dict=base_vac_dict,
-        off_store=off_store,
-        panel=panel,
-        frame_rate=fr,
-        prod_year=prod_year,
-    )
-    # shape: (1, n_features) 또는 (n_samples, n_features) 여야 함
+            # Δ 타깃
+            d_targets = self._delta_targets_vs_OFF_from_pred(y_pred, self._off_store)
 
-    # ------------------------------------------------------
-    # 2) Cx / Cy / Gamma 예측
-    # ------------------------------------------------------
-    try:
-        y_cx_pred = self._cx_model.predict(X)
-        y_cy_pred = self._cy_model.predict(X)
-        y_gamma_pred = self._gamma_model.predict(X)
-    except Exception:
-        logging.exception("[ML] VAC 예측 중 오류 발생 - Base VAC만 사용합니다.")
-        return base_vac_dict
+            # ====== ★ 선형계 구성: 모드별로 다르게 ======
+            blocks = []
+            rhs    = []
+            if optimize_focus == 'balanced':
+                if np.any(np.isfinite(d_targets["Gamma"])):
+                    blocks.append(wG*self.A_Gamma)
+                    rhs.append( -wG*d_targets["Gamma"] )
+                blocks.append(wC*self.A_Cx); rhs.append( -wC*d_targets["Cx"] )
+                blocks.append(wC*self.A_Cy); rhs.append( -wC*d_targets["Cy"] )
 
-    # ------------------------------------------------------
-    # 3) 예측값을 기반으로 LUT 보정
-    # ------------------------------------------------------
-    # VACOutputBuilder 에 맞게 포맷 조립
-    # (여기 부분은 실제 구현에 맞게 수정 필요)
-    pred_dict = self._vac_output_builder.build_pred_dict(
-        y_cx=y_cx_pred,
-        y_cy=y_cy_pred,
-        y_gamma=y_gamma_pred,
-    )
+            elif optimize_focus == 'chroma':
+                # 감마 완전히 제외
+                blocks.append(wC*self.A_Cx); rhs.append( -wC*d_targets["Cx"] )
+                blocks.append(wC*self.A_Cy); rhs.append( -wC*d_targets["Cy"] )
 
-    # 예: output_builder.apply_correction(base_vac_dict, pred_dict, spec, ...)
-    corrected_vac_dict = self._vac_output_builder.apply_correction(
-        base_vac_dict=base_vac_dict,
-        pred_metrics=pred_dict,
-        thr_gamma=0.05,
-        thr_c=0.003,
-    )
+            elif optimize_focus == 'chroma_soft':
+                # Cx/Cy는 정상, 감마는 '0 타깃' 소프트 제약
+                blocks.append(wC*self.A_Cx); rhs.append( -wC*d_targets["Cx"] )
+                blocks.append(wC*self.A_Cy); rhs.append( -wC*d_targets["Cy"] )
+                if gamma_soft > 0.0:
+                    blocks.append(gamma_soft * self.A_Gamma)
+                    rhs.append( np.zeros(256, dtype=np.float32) )  # ΔGamma≈0 제약
 
-    # 0~4095 clip, monotonic 보장 등 후처리가 있다면 여기에서
-    corrected_vac_dict = self._vac_output_builder.postprocess_lut(corrected_vac_dict)
+            else:
+                logging.warning(f"[PredictOpt] unknown optimize_focus={optimize_focus}, fallback balanced")
+                blocks.append(wG*self.A_Gamma); rhs.append( -wG*d_targets["Gamma"] )
+                blocks.append(wC*self.A_Cx);   rhs.append( -wC*d_targets["Cx"] )
+                blocks.append(wC*self.A_Cy);   rhs.append( -wC*d_targets["Cy"] )
 
-    logging.info("[ML] Base VAC에 대한 1차 예측/보정 완료")
-    return corrected_vac_dict
+            A_cat = np.vstack([b.astype(np.float32) for b in blocks])
+            b_cat = -np.concatenate([r.astype(np.float32) for r in rhs])
+
+            mask  = np.isfinite(b_cat)
+            A_use = A_cat[mask,:]; b_use = b_cat[mask]
+
+            ATA = A_use.T @ A_use
+            rhs = A_use.T @ b_use
+            ATA[np.diag_indices_from(ATA)] += float(lambda_ridge)
+            delta_h = np.linalg.solve(ATA, rhs).astype(np.float32)
+
+            # 이후 곡선적용/클램프 동일 ...
