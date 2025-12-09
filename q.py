@@ -1,69 +1,46 @@
-def _predictive_first_optimize(self, vac_data_json, *, 
-                               n_iters=2, wG=0.4, wC=1.0, lambda_ridge=1e-3,
-                               optimize_focus='balanced',   # ← 추가
-                               gamma_soft=0.0               # ← 'chroma_soft'일 때 >0로
-                               ):
+def _debug_dump_predicted_Y0W(self, y_pred: dict, *, tag: str = "", save_csv: bool = True):
     """
-    optimize_focus: 'balanced' | 'chroma' | 'chroma_soft'
-      - balanced   : 기존과 동일
-      - chroma     : Cx/Cy만 사용 (Gamma 완전 배제)
-      - chroma_soft: Cx/Cy 위주 + ΔGamma≈0 소프트 제약 (gamma_soft로 강도 조절)
+    예측된 'W' 패턴 256포인트 (Gamma, Cx, Cy)를 로그로 요약 + (옵션) CSV 저장
+
+    Parameters
+    ----------
+    y_pred : {"Gamma": (256,), "Cx": (256,), "Cy": (256,)}
+    tag    : 로그/파일명 식별용 태그 (예: "iter1_INX_60_Y26")
+    save_csv : True면 임시 CSV 파일로 저장 후 경로 로깅
     """
-    try:
-        vac_dict = json.loads(vac_data_json)
-        # ... (중략: 기존 코드 동일) ...
+    import numpy as np, pandas as pd, tempfile, os, logging
 
-        for it in range(1, n_iters + 1):
-            # (예측/디버그 동일)
-            y_pred = self._predict_Y0W_from_models(
-                lut256_for_pred,
-                panel_text=panel, frame_rate=fr, model_year=model_year
-            )
-            self._debug_dump_predicted_Y0W(
-                y_pred, tag=f"iter{it}_{panel}_fr{int(fr)}_my{int(model_year)%100:02d}", save_csv=True
-            )
+    # 안전 가드
+    req_keys = ("Gamma", "Cx", "Cy")
+    if not all(k in y_pred for k in req_keys):
+        logging.warning(f"[Predict/Debug] y_pred keys invalid: {list(y_pred.keys())}")
+        return
 
-            # Δ 타깃
-            d_targets = self._delta_targets_vs_OFF_from_pred(y_pred, self._off_store)
+    g = np.asarray(y_pred["Gamma"], dtype=np.float32)
+    cx= np.asarray(y_pred["Cx"],    dtype=np.float32)
+    cy= np.asarray(y_pred["Cy"],    dtype=np.float32)
 
-            # ====== ★ 선형계 구성: 모드별로 다르게 ======
-            blocks = []
-            rhs    = []
-            if optimize_focus == 'balanced':
-                if np.any(np.isfinite(d_targets["Gamma"])):
-                    blocks.append(wG*self.A_Gamma)
-                    rhs.append( -wG*d_targets["Gamma"] )
-                blocks.append(wC*self.A_Cx); rhs.append( -wC*d_targets["Cx"] )
-                blocks.append(wC*self.A_Cy); rhs.append( -wC*d_targets["Cy"] )
+    # ── 1) 통계 요약 로그
+    def _stat(a, name):
+        with np.errstate(invalid="ignore"):
+            logging.debug(f"[Predict/Debug] {name}: "
+                          f"shape={a.shape}, mean={np.nanmean(a):.6g}, std={np.nanstd(a):.6g}, "
+                          f"min={np.nanmin(a):.6g}, max={np.nanmax(a):.6g}")
+    _stat(g, "Gamma")
+    _stat(cx,"Cx")
+    _stat(cy,"Cy")
 
-            elif optimize_focus == 'chroma':
-                # 감마 완전히 제외
-                blocks.append(wC*self.A_Cx); rhs.append( -wC*d_targets["Cx"] )
-                blocks.append(wC*self.A_Cy); rhs.append( -wC*d_targets["Cy"] )
+    # ── 2) 특정 인덱스 원소 출력 (0,1,2,127,128,129,254,255)
+    idx_probe = [0,1,2,127,128,129,254,255]
+    for i in idx_probe:
+        if 0 <= i < 256:
+            logging.debug(f"[Predict/Debug] g={i:3d} | Gamma={g[i]!r:>12} | Cx={cx[i]:.6f} | Cy={cy[i]:.6f}")
 
-            elif optimize_focus == 'chroma_soft':
-                # Cx/Cy는 정상, 감마는 '0 타깃' 소프트 제약
-                blocks.append(wC*self.A_Cx); rhs.append( -wC*d_targets["Cx"] )
-                blocks.append(wC*self.A_Cy); rhs.append( -wC*d_targets["Cy"] )
-                if gamma_soft > 0.0:
-                    blocks.append(gamma_soft * self.A_Gamma)
-                    rhs.append( np.zeros(256, dtype=np.float32) )  # ΔGamma≈0 제약
-
-            else:
-                logging.warning(f"[PredictOpt] unknown optimize_focus={optimize_focus}, fallback balanced")
-                blocks.append(wG*self.A_Gamma); rhs.append( -wG*d_targets["Gamma"] )
-                blocks.append(wC*self.A_Cx);   rhs.append( -wC*d_targets["Cx"] )
-                blocks.append(wC*self.A_Cy);   rhs.append( -wC*d_targets["Cy"] )
-
-            A_cat = np.vstack([b.astype(np.float32) for b in blocks])
-            b_cat = -np.concatenate([r.astype(np.float32) for r in rhs])
-
-            mask  = np.isfinite(b_cat)
-            A_use = A_cat[mask,:]; b_use = b_cat[mask]
-
-            ATA = A_use.T @ A_use
-            rhs = A_use.T @ b_use
-            ATA[np.diag_indices_from(ATA)] += float(lambda_ridge)
-            delta_h = np.linalg.solve(ATA, rhs).astype(np.float32)
-
-            # 이후 곡선적용/클램프 동일 ...
+    # ── 3) (옵션) CSV 저장
+    if save_csv:
+        df = pd.DataFrame({"Gamma": g, "Cx": cx, "Cy": cy})
+        safe_tag = "".join(ch if ch.isalnum() or ch in ("-","_") else "_" for ch in str(tag))
+        with tempfile.NamedTemporaryFile(prefix=f"y0W_{safe_tag}_", suffix=".csv", delete=False, mode="w", newline="", encoding="utf-8") as f:
+            df.to_csv(f.name, index_label="Gray")
+            csv_path = f.name
+        logging.info(f"[Predict/Debug] Y0(W) 256pts saved → {csv_path}")
