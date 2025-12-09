@@ -1,3 +1,45 @@
+    def _predict_Y0W_from_models(self, lut256_dict, *, panel_text, frame_rate, model_year):
+        """
+        저장된 hybrid_*_model.pkl 3개로 'W' 패턴 256 포인트의 (Gamma, Cx, Cy) 예측 벡터를 생성
+        """
+        # ✅ LUT는 반드시 0..1 스케일로 맞춘다
+        def _norm01(a): 
+            return np.clip(np.asarray(a, np.float32) / 4095.0, 0.0, 1.0)
+        lut256_norm = {
+            "R_Low":  _norm01(lut256_dict["R_Low"]),
+            "R_High": _norm01(lut256_dict["R_High"]),
+            "G_Low":  _norm01(lut256_dict["G_Low"]),
+            "G_High": _norm01(lut256_dict["G_High"]),
+            "B_Low":  _norm01(lut256_dict["B_Low"]),
+            "B_High": _norm01(lut256_dict["B_High"]),
+        }
+
+        # 256행 피처 매트릭스
+        # ✅ _build_runtime_feature_row_W의 파라미터명은 model_year_2digit 입니다.
+        X_rows = [ self._build_runtime_feature_row_W(
+                        lut256_norm, g,
+                        panel_text=panel_text,
+                        frame_rate=frame_rate,
+                        model_year_2digit=float(model_year)  # 두 자리 숫자 가정
+                ) for g in range(256) ]
+        X = np.vstack(X_rows).astype(np.float32)
+
+        def _pred_one(payload):
+            lin = payload["linear_model"]; rf = payload["rf_residual"]
+            tgt = payload["target_scaler"]; y_mean = float(tgt["mean"]); y_std = float(tgt["std"])
+            base_s  = lin.predict(X).astype(np.float32)
+            resid_s = rf.predict(X).astype(np.float32)
+            y = (base_s + resid_s) * y_std + y_mean
+            return y.astype(np.float32)
+
+        yG  = _pred_one(self.models_Y0_bundle["Gamma"])
+        yCx = _pred_one(self.models_Y0_bundle["Cx"])
+        yCy = _pred_one(self.models_Y0_bundle["Cy"])
+
+        # Gamma 0/255는 NaN
+        yG[0] = np.nan; yG[255] = np.nan
+        return {"Gamma": yG, "Cx": yCx, "Cy": yCy}
+
 def _predictive_first_optimize(self, vac_data_json, *, n_iters=2, wG=0.4, wC=1.0, lambda_ridge=1e-3):
     try:
         vac_dict = json.loads(vac_data_json)
