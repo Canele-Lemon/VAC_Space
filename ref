@@ -1,30 +1,38 @@
+# gen_random_ref_offset.py
+
 import os
 import tempfile
 import numpy as np
 import pandas as pd
 
 # ─────────────────────────────
-# 경로/설정 (※ 실제 경로로 바꿔서 사용하세요)
+# 경로/설정
 # ─────────────────────────────
-BASE_LUT_CSV = r"D:\path\to\your\base_lut.csv"  # Gray8/Gray12/Low/High 256행짜리 CSV
-OUTPUT_DIR   = r"D:\path\to\output_dir"
-BASE_NAME    = "LUT_from_base"
+BASE_LUT_CSV    = r"D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\Gen VAC\Random VAC\4. 기준 LUT + OFFSET\기준 LUT\LUT_3.csv"
+OUTPUT_DIR      = r"D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\Gen VAC\Random VAC\4. 기준 LUT + OFFSET\LUT_3\CSV"
+BASE_NAME       = "LUT_3"
 
 FULL_POINTS = 4096
-
 
 # ─────────────────────────────
 # 유틸
 # ─────────────────────────────
 def clip_round(a):
-    """0~4095에서 반올림 + 클리핑 + int 변환"""
     return np.clip(np.rint(a), 0, 4095).astype(int)
-
 
 def ensure_output_dir(path):
     os.makedirs(path, exist_ok=True)
-
-
+    
+def build_offset_values():
+    vals = []
+    
+    vals += list(range(1, 11, 1))
+    vals += list(range(15, 71, 5))
+    
+    full = sorted({0} | set(vals) | set([-v for v in vals]))
+    
+    return full
+    
 # ─────────────────────────────
 # Base LUT 로드 (256점 knot용)
 # ─────────────────────────────
@@ -169,8 +177,7 @@ def save_lut_df(df, out_dir, base_name, R_off, G_off, B_off):
 # main: R / G / B 각각 -50~+50 sweep
 # ─────────────────────────────
 def main():
-    # 예시: -50 ~ +50, step 10
-    offsets = list(range(-50, 51, 10))
+    offsets = build_offset_values()
 
     # 1) 기준 LUT (0,0,0) 하나는 기본적으로 생성
     df_base = build_single_lut(BASE_LUT_CSV, 0, 0, 0)
