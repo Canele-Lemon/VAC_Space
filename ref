@@ -1,208 +1,37 @@
-# gen_random_ref_offset.py
-
-import os
-import tempfile
-import numpy as np
-import pandas as pd
-
 # ─────────────────────────────
-# 경로/설정
-# ─────────────────────────────
-BASE_LUT_CSV    = r"D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\Gen VAC\Random VAC\4. 기준 LUT + OFFSET\기준 LUT\LUT_3.csv"
-OUTPUT_DIR      = r"D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\Gen VAC\Random VAC\4. 기준 LUT + OFFSET\LUT_3\CSV"
-BASE_NAME       = "LUT_3"
-
-FULL_POINTS = 4096
-
-# ─────────────────────────────
-# 유틸
-# ─────────────────────────────
-def clip_round(a):
-    return np.clip(np.rint(a), 0, 4095).astype(int)
-
-def ensure_output_dir(path):
-    os.makedirs(path, exist_ok=True)
-    
-def build_offset_values():
-    vals = []
-    
-    vals += list(range(1, 11, 1))
-    vals += list(range(15, 71, 5))
-    
-    full = sorted({0} | set(vals) | set([-v for v in vals]))
-    
-    return full
-    
-# ─────────────────────────────
-# Base LUT 로드 (256점 knot용)
-# ─────────────────────────────
-def load_base_knots(csv_path):
-    """
-    Gray8, Gray12, R_Low, G_Low, B_Low, R_High, G_High, B_High
-    256행짜리 Base LUT CSV 로드
-
-    Returns
-    -------
-    gray8    : (256,) int
-    gray12   : (256,) float
-    Rl,Gl,Bl : (256,) float
-    Rh,Gh,Bh : (256,) float
-    """
-    df = pd.read_csv(csv_path)
-
-    # 컬럼명 공백/대소문자 방지용
-    cols = {c.strip().lower(): c for c in df.columns}
-
-    def get_col(name):
-        key = name.lower()
-        if key not in cols:
-            raise ValueError(f"[BaseLUT] Column '{name}' not found in CSV (columns={df.columns})")
-        return df[cols[key]]
-
-    gray8  = get_col("Gray8").to_numpy(dtype=np.int32)
-    gray12 = get_col("Gray12").to_numpy(dtype=float)
-
-    Rl = get_col("R_Low").to_numpy(dtype=float)
-    Gl = get_col("G_Low").to_numpy(dtype=float)
-    Bl = get_col("B_Low").to_numpy(dtype=float)
-
-    Rh = get_col("R_High").to_numpy(dtype=float)
-    Gh = get_col("G_High").to_numpy(dtype=float)
-    Bh = get_col("B_High").to_numpy(dtype=float)
-
-    # 혹시 Gray8이 섞여 있으면 gray8 순서대로 정렬
-    sort_idx = np.argsort(gray8)
-    gray8  = gray8[sort_idx]
-    gray12 = gray12[sort_idx]
-    Rl, Gl, Bl = Rl[sort_idx], Gl[sort_idx], Bl[sort_idx]
-    Rh, Gh, Bh = Rh[sort_idx], Gh[sort_idx], Bh[sort_idx]
-
-    return gray8, gray12, Rl, Gl, Bl, Rh, Gh, Bh
-
-
-# ─────────────────────────────
-# 256점 knot + offset → 4096 LUT 생성
-# ─────────────────────────────
-def build_lut_4096_from_base(gray12, Rl_k, Gl_k, Bl_k, Rh_k, Gh_k, Bh_k,
-                             R_OFFSET, G_OFFSET, B_OFFSET):
-    """
-    Base LUT의 256개 knot 값과 offset을 이용해서
-    4096 포인트 R/G/B Low/High LUT를 생성한다.
-
-    - Low: offset 적용 없이 base knot 그대로 사용 후, Gray12 기준 선형 보간
-    - High: base knot에 offset 적용 후, Gray12 기준 선형 보간
-    - Gray12: 0~4095 범위의 단조 증가 배열이라고 가정
-    """
-    gray12_f = np.asarray(gray12, dtype=float)
-
-    # --- Low: offset 없이 그대로 보간 ---
-    j = np.arange(FULL_POINTS, dtype=float)
-
-    Rl_4096 = np.interp(j, gray12_f, Rl_k)
-    Gl_4096 = np.interp(j, gray12_f, Gl_k)
-    Bl_4096 = np.interp(j, gray12_f, Bl_k)
-
-    # --- High knot에 offset 적용 ---
-    Rh_k_off = Rh_k.astype(float).copy()
-    Gh_k_off = Gh_k.astype(float).copy()
-    Bh_k_off = Bh_k.astype(float).copy()
-
-    Rh_k_off += float(R_OFFSET)
-    Gh_k_off += float(G_OFFSET)
-    Bh_k_off += float(B_OFFSET)
-
-    # 필요하다면 여기에서 0~4095 clip이나 단조성 보강 로직 추가 가능
-    # 예: Rh_k_off = np.clip(Rh_k_off, 0, 4095)
-
-    Rh_4096 = np.interp(j, gray12_f, Rh_k_off)
-    Gh_4096 = np.interp(j, gray12_f, Gh_k_off)
-    Bh_4096 = np.interp(j, gray12_f, Bh_k_off)
-
-    # 반올림+클리핑은 최종 DataFrame 만들 때 수행
-    return Rl_4096, Gl_4096, Bl_4096, Rh_4096, Gh_4096, Bh_4096
-
-
-def build_single_lut(base_lut_csv, R_OFFSET, G_OFFSET, B_OFFSET):
-    """
-    Base LUT CSV 하나와 (R/G/B) offset을 받아
-    4096 포인트 LUT DataFrame을 생성한다.
-    """
-    gray8, gray12, Rl_k, Gl_k, Bl_k, Rh_k, Gh_k, Bh_k = load_base_knots(base_lut_csv)
-
-    Rl_4096, Gl_4096, Bl_4096, Rh_4096, Gh_4096, Bh_4096 = build_lut_4096_from_base(
-        gray12, Rl_k, Gl_k, Bl_k, Rh_k, Gh_k, Bh_k,
-        R_OFFSET, G_OFFSET, B_OFFSET
-    )
-
-    df = pd.DataFrame({
-        "GrayLevel_window": np.arange(FULL_POINTS, dtype=int),
-        "R_Low":  clip_round(Rl_4096),
-        "R_High": clip_round(Rh_4096),
-        "G_Low":  clip_round(Gl_4096),
-        "G_High": clip_round(Gh_4096),
-        "B_Low":  clip_round(Bl_4096),
-        "B_High": clip_round(Bh_4096),
-    })
-    return df
-
-
-def save_lut_df(df, out_dir, base_name, R_off, G_off, B_off):
-    """
-    offset 조합에 따른 파일 이름을 만들어 CSV 저장
-    """
-    ensure_output_dir(out_dir)
-
-    name_parts = [base_name]
-
-    # 기준 LUT라면 Base suffix만
-    if R_off == 0 and G_off == 0 and B_off == 0:
-        name_parts.append("Base")
-    else:
-        if R_off != 0:
-            name_parts.append(f"R{R_off:+d}")
-        if G_off != 0:
-            name_parts.append(f"G{G_off:+d}")
-        if B_off != 0:
-            name_parts.append(f"B{B_off:+d}")
-
-    fname = "_".join(name_parts) + ".csv"
-    out_path = os.path.join(out_dir, fname)
-
-    df.to_csv(out_path, index=False, encoding="utf-8-sig")
-    print(f"[OK] LUT saved → {out_path}")
-    return out_path
-
-
-# ─────────────────────────────
-# main: R / G / B 각각 -50~+50 sweep
+# main: R / G / B / RG / RB / GB / RGB 조합 sweep
 # ─────────────────────────────
 def main():
-    offsets = build_offset_values()
+    offsets = build_offset_values()  # [-70 ~ 70, 0 포함 45개]
 
-    # 1) 기준 LUT (0,0,0) 하나는 기본적으로 생성
-    df_base = build_single_lut(BASE_LUT_CSV, 0, 0, 0)
-    save_lut_df(df_base, OUTPUT_DIR, BASE_NAME, 0, 0, 0)
+    # 모든 (R,G,B) offset 조합을 set으로 모아서 중복 제거
+    combos = set()
 
-    # 2) R만 바꾸는 경우
-    for R_off in offsets:
-        if R_off == 0:
-            continue
-        df = build_single_lut(BASE_LUT_CSV, R_off, 0, 0)
-        save_lut_df(df, OUTPUT_DIR, BASE_NAME, R_off, 0, 0)
+    # 1) 기준 LUT (0,0,0)
+    combos.add((0, 0, 0))
 
-    # 3) G만 바꾸는 경우
-    for G_off in offsets:
-        if G_off == 0:
-            continue
-        df = build_single_lut(BASE_LUT_CSV, 0, G_off, 0)
-        save_lut_df(df, OUTPUT_DIR, BASE_NAME, 0, G_off, 0)
+    for o in offsets:
+        # 2) 단일 채널 변화: R-only / G-only / B-only
+        combos.add((o, 0, 0))  # R-only
+        combos.add((0, o, 0))  # G-only
+        combos.add((0, 0, o))  # B-only
 
-    # 4) B만 바꾸는 경우
-    for B_off in offsets:
-        if B_off == 0:
-            continue
-        df = build_single_lut(BASE_LUT_CSV, 0, 0, B_off)
-        save_lut_df(df, OUTPUT_DIR, BASE_NAME, 0, 0, B_off)
+        # 3) 두 채널 동시 변화: RG / RB / GB (같은 offset)
+        combos.add((o, o, 0))  # RG
+        combos.add((o, 0, o))  # RB
+        combos.add((0, o, o))  # GB
+
+        # 4) 세 채널 동시 변화: RGB
+        combos.add((o, o, o))  # RGB
+
+    combos = sorted(combos)  # 정렬해서 항상 같은 순서로 생성되도록
+
+    print(f"[INFO] total unique (R,G,B) offset combos = {len(combos)}")
+
+    # 실제 LUT 생성 & 저장
+    for (R_off, G_off, B_off) in combos:
+        df = build_single_lut(BASE_LUT_CSV, R_off, G_off, B_off)
+        save_lut_df(df, OUTPUT_DIR, BASE_NAME, R_off, G_off, B_off)
 
     print("\n[✅ 모든 LUT 생성 완료]")
 
