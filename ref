@@ -1,46 +1,221 @@
+# gen_random_ref_offset.py
+
+import os
+import tempfile
+import numpy as np
+import pandas as pd
+
+# ─────────────────────────────
+# 경로/설정
+# ─────────────────────────────
+LOW_LUT_CSV   = r"D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\Gen VAC\Random VAC\4. 기준 LUT + OFFSET\기준 LUT\LUT_low_values_SIN1300_254gray를4092로변경.csv"
+HIGH_KNOT_CSV   = r"D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\Gen VAC\Random VAC\4. 기준 LUT + OFFSET\기준 LUT\LUT_3_high_256knots_values.csv"
+OUTPUT_DIR      = r"D:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\Gen VAC\Random VAC\4. 기준 LUT + OFFSET\CSV_LUT_3"
+BASE_NAME       = "LUT_3"
+
+FULL_POINTS = 4096
+EPS_HIGH_OVER_LOW = 1
+ENFORCE_MONOTONE = True
+
+# ───────────────────────────────────────────────
+# 유틸
+# ───────────────────────────────────────────────
+def clip_round(a):
+    return np.clip(np.rint(a), 0, 4095).astype(int)
+
+
+def load_low_lut_4096(csv_path):
+    """
+    4096개 Low LUT 불러오기 (단조나 eps 없음)
+    """
+    df = pd.read_csv(csv_path)
+
+    def pick(cands):
+        for c in cands:
+            if c in df.columns: return c
+        raise ValueError("Low LUT CSV.columns 에서 R_Low/G_Low/B_Low 못 찾음")
+
+    col_r = pick(["R_Low","R_low","R"])
+    col_g = pick(["G_Low","G_low","G"])
+    col_b = pick(["B_Low","B_low","B"])
+
+    Rl = df[col_r].to_numpy(float)[:4096]
+    Gl = df[col_g].to_numpy(float)[:4096]
+    Bl = df[col_b].to_numpy(float)[:4096]
+    return Rl, Gl, Bl
+
+
+# ───────────────────────────────────────────────
+# OFFSET + LOCK + overshoot 최소 규칙
+# ───────────────────────────────────────────────
+def apply_offset_with_lock(gray12, vals, offset):
+    """
+    새 표준 규칙
+      - 순수 보간 기반
+      - Gray8 = 0,1,254,255 → High 고정 (offset 금지)
+      - offset 적용 후 neighbor 초과 불가 → clamp
+    """
+    vals = vals.astype(float).copy()
+
+    # Gray8 index 그대로 사용 (CSV가 Gray8=0~255이라고 가정)
+    LOCK = {
+        0: 0.0,
+        1: 0.0,
+        254: 4092.0,
+        255: 4095.0
+    }
+
+    # A) lock 적용 (offset 금지)
+    for k, v in LOCK.items():
+        vals[k] = v
+
+    # B) offset 적용
+    for i in range(len(vals)):
+        if i not in LOCK:
+            vals[i] += offset
+
+    # C) overshoot 방지
+    # vals[i] ∈ [vals[i-1], vals[i+1]]
+    for i in range(1, len(vals)-1):
+        low  = vals[i-1]
+        high = vals[i+1]
+        vals[i] = np.clip(vals[i], low, high)
+
+    # 양 끝 보정
+    vals[1]   = np.clip(vals[1],   vals[0],   vals[2])
+    vals[-2]  = np.clip(vals[-2],  vals[-3],  vals[-1])
+
+    return np.clip(vals, 0, 4095)
+
+
+# ───────────────────────────────────────────────
+# 보간 4096 LUT 만들기
+# ───────────────────────────────────────────────
+def build_high_4096_from_knots(gray12, Rk, Gk, Bk, Rl, Gl, Bl,
+                               R_OFFSET, G_OFFSET, B_OFFSET):
+    """
+    순수 보간 + 최소 Lock/overshoot 규칙만 적용한 4096 LUT 생성기
+    """
+
+    # --- offset + lock ---
+    Rk2 = apply_offset_with_lock(gray12, Rk, R_OFFSET)
+    Gk2 = apply_offset_with_lock(gray12, Gk, G_OFFSET)
+    Bk2 = apply_offset_with_lock(gray12, Bk, B_OFFSET)
+
+    # --- 순수 보간 ---
+    j = np.arange(4096)
+    Rh = np.interp(j, gray12, Rk2)
+    Gh = np.interp(j, gray12, Gk2)
+    Bh = np.interp(j, gray12, Bk2)
+
+    return Rh, Gh, Bh
+
+
+# ───────────────────────────────────────────────
+# 256 → 4096 LUT 생성
+# ───────────────────────────────────────────────
+def build_single_lut(R_OFFSET, G_OFFSET, B_OFFSET):
+
+    # Low
+    Rl, Gl, Bl = load_low_lut_4096(LOW_LUT_CSV)
+
+    # High knots
+    dfk = pd.read_csv(HIGH_KNOT_CSV)
+    gray12 = dfk["Gray12"].to_numpy(float)
+    Rk     = dfk["R_High"].to_numpy(float)
+    Gk     = dfk["G_High"].to_numpy(float)
+    Bk     = dfk["B_High"].to_numpy(float)
+
+    Rh, Gh, Bh = build_high_4096_from_knots(
+        gray12, Rk, Gk, Bk,
+        Rl, Gl, Bl,
+        R_OFFSET, G_OFFSET, B_OFFSET
+    )
+
+    # DataFrame 반환 (반올림)
+    df = pd.DataFrame({
+        "GrayLevel_window": np.arange(4096),
+        "R_Low":  clip_round(Rl),
+        "R_High": clip_round(Rh),
+        "G_Low":  clip_round(Gl),
+        "G_High": clip_round(Gh),
+        "B_Low":  clip_round(Bl),
+        "B_High": clip_round(Bh)
+    })
+    return df
+
+# ───────────────────────
+# 배치 조합 루프
+# ───────────────────────
 def main():
-    # 1) offset 범위 (원하시면 여기서 -900~900, step 50으로 바꾸면 됨)
-    offset_values = list(range(-100, 101, 10))  # 예: -100 ~ 100, step 10
+    # 테스트: offset = +500 한 세트만 생성
+    R_off = 500
+    G_off = 500
+    B_off = 500
 
-    channel_combos = [
-        ("R",), ("G",), ("B",),
-        ("R","G"), ("R","B"), ("G","B"),
-        ("R","G","B")
-    ]
-    base_name = BASE_NAME
+    df = build_single_lut(R_off, G_off, B_off)
 
-    # 2) 먼저 (R,G,B) offset 조합을 unique하게 모으기
-    unique_offsets = set()
+    # 임시 파일로 열기
+    tmp = tempfile.NamedTemporaryFile(delete=False,
+                                      suffix=f"_NewLUT_R{R_off}_G{G_off}_B{B_off}.csv")
+    tmp_path = tmp.name
+    tmp.close()
 
-    for combo in channel_combos:
-        for off in offset_values:
-            R_off = off if "R" in combo else 0
-            G_off = off if "G" in combo else 0
-            B_off = off if "B" in combo else 0
-            unique_offsets.add((R_off, G_off, B_off))
+    df.to_csv(tmp_path, index=False, encoding="utf-8-sig")
+    print(f"[OK] Temp LUT saved → {tmp_path}")
 
-    # 혹시 offset_values에 0이 없어도 대비해서 기준 (0,0,0)은 무조건 추가
-    unique_offsets.add((0, 0, 0))
+    try:
+        os.startfile(tmp_path)
+    except:
+        pass
+    
+    
+    
+    # # 1) offset 범위 (원하시면 여기서 -900~900, step 50으로 바꾸면 됨)
+    # offset_values = list(range(-500, 501, 25))  # 예: -100 ~ 100, step 10
 
-    print(f"[INFO] unique LUT set: {len(unique_offsets)} combinations")
+    # channel_combos = [
+    #     ("R",), ("G",), ("B",),
+    #     ("R","G"), ("R","B"), ("G","B"),
+    #     ("R","G","B")
+    # ]
+    # base_name = BASE_NAME
 
-    total = 0
-    for (R_off, G_off, B_off) in sorted(unique_offsets):
-        name_parts = [base_name]
+    # # 2) 먼저 (R,G,B) offset 조합을 unique하게 모으기
+    # unique_offsets = set()
 
-        # 기준 LUT라면 Base라는 suffix만 붙이기
-        if R_off == 0 and G_off == 0 and B_off == 0:
-            name_parts.append("Base")
-        else:
-            if R_off != 0:
-                name_parts.append(f"R{R_off:+d}")
-            if G_off != 0:
-                name_parts.append(f"G{G_off:+d}")
-            if B_off != 0:
-                name_parts.append(f"B{B_off:+d}")
+    # for combo in channel_combos:
+    #     for off in offset_values:
+    #         R_off = off if "R" in combo else 0
+    #         G_off = off if "G" in combo else 0
+    #         B_off = off if "B" in combo else 0
+    #         unique_offsets.add((R_off, G_off, B_off))
 
-        fname = "_".join(name_parts)
-        _build_single_lut(R_off, G_off, B_off, fname)
-        total += 1
+    # # 혹시 offset_values에 0이 없어도 대비해서 기준 (0,0,0)은 무조건 추가
+    # unique_offsets.add((0, 0, 0))
 
-    print(f"\n[총 {total}개 LUT 생성 완료 ✅]")
+    # print(f"[INFO] unique LUT set: {len(unique_offsets)} combinations")
+
+    # total = 0
+    # for (R_off, G_off, B_off) in sorted(unique_offsets):
+    #     name_parts = [base_name]
+
+    #     # 기준 LUT라면 Base라는 suffix만 붙이기
+    #     if R_off == 0 and G_off == 0 and B_off == 0:
+    #         name_parts.append("Base")
+    #     else:
+    #         if R_off != 0:
+    #             name_parts.append(f"R{R_off:+d}")
+    #         if G_off != 0:
+    #             name_parts.append(f"G{G_off:+d}")
+    #         if B_off != 0:
+    #             name_parts.append(f"B{B_off:+d}")
+
+    #     fname = "_".join(name_parts)
+    #     _build_single_lut(R_off, G_off, B_off, fname)
+    #     total += 1
+
+    # print(f"\n[총 {total}개 LUT 생성 완료 ✅]")
+
+if __name__ == "__main__":
+    main()
