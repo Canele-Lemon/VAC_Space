@@ -1,136 +1,185 @@
-    def _load_jacobian_bundle_npy(self):
-        """
-        bundle["J"]   : (256,3,3)
-        bundle["n"]   : (256,)
-        bundle["cond"]: (256,)
-        """
-        if hasattr(self, "_jac_bundle") and self._jac_bundle is not None:
-            return
-        
-        try:
-            jac_path = cf.get_normalized_path(__file__, '.', 'models', 'jacobian_bundle_ref2744_lam0.001_dw900.0_gs30.0_20251110_105631.npy')
-            if not os.path.exists(jac_path):
-                raise FileNotFoundError(f"Jacobian npy not found: {jac_path}")
+def _generate_predicted_vac_lut(
+    self,
+    vac_dict,
+    *,
+    n_iters: int = 2,
+    wG: float = 0.4,
+    wC: float = 1.0,
+    lambda_ridge: float = 1e-3
+):
+    """
+    Base VAC LUT(vac_dict)을 입력으로 받아,
+    예측 모델(OFF 대비 dCx/dCy/dGamma 예측) + 자코비안 J_g 를 이용해
+    High LUT(R/G/B)를 n_iters 회 반복 보정한 후,
+    4096포인트 LUT와 TV write용 VAC JSON을 생성해서 반환한다.
 
-            bundle = np.load(jac_path, allow_pickle=True).item()
-            J = np.asarray(bundle["J"], dtype=np.float32) # (256, 3, 3)
-            n = np.asarray(bundle["n"], dtype=np.int32)   # (256,)
-            cond = np.asarray(bundle["cond"], dtype=np.float32)
+    Returns
+    -------
+    vac_json_optimized : str or None
+        TV에 write할 VAC JSON (표준 포맷). 실패 시 None.
+    new_lut_4096 : dict or None
+        최종 4096포인트 LUT 딕셔너리. 실패 시 None.
+    """
+    try:
+        # ------------------------------------------------------------------
+        # 1) 4096 → 256 다운샘플 (12bit 스케일 그대로)
+        # ------------------------------------------------------------------
+        lut256 = {
+            "R_Low":  self._down4096_to_256_float(vac_dict["RchannelLow"]),
+            "R_High": self._down4096_to_256_float(vac_dict["RchannelHigh"]),
+            "G_Low":  self._down4096_to_256_float(vac_dict["GchannelLow"]),
+            "G_High": self._down4096_to_256_float(vac_dict["GchannelHigh"]),
+            "B_Low":  self._down4096_to_256_float(vac_dict["BchannelLow"]),
+            "B_High": self._down4096_to_256_float(vac_dict["BchannelHigh"]),
+        }
 
-            self._jac_bundle = bundle
-            self._J_dense = J
-            self._J_n = n
-            self._J_cond = cond
+        # 자코비안 번들이 준비되어 있는지 확인
+        if not hasattr(self, "_J_dense") or self._J_dense is None:
+            logging.error("[PredictOpt] J_g bundle (_J_dense) not prepared.")
+            return None, None
 
-            logging.info(f"[Jacobian] dense J bundle loaded: {jac_path}, J.shape={J.shape}")
+        # 패널 메타데이터 (예측 모델 입력용)
+        panel, fr, model_year = self._get_ui_meta()
 
-        except Exception:
-            logging.exception("[Jacobian] Jacobian load failed")
-            raise
+        # 보정 대상 High LUT (12bit 스케일, 256포인트)
+        high_R = lut256["R_High"].copy()
+        high_G = lut256["G_High"].copy()
+        high_B = lut256["B_High"].copy()
 
-이런식으로 Jg를 로드하고 있고 아래처럼 사용하고 있어요
+        # ------------------------------------------------------------------
+        # 2) 반복 보정 루프
+        # ------------------------------------------------------------------
+        for it in range(1, n_iters + 1):
+            # 2-1) 예측에 사용할 LUT를 0~1 스케일로 정규화
+            lut256_for_pred = {
+                k: np.asarray(v, np.float32) / 4095.0
+                for k, v in {
+                    "R_Low":  lut256["R_Low"],
+                    "G_Low":  lut256["G_Low"],
+                    "B_Low":  lut256["B_Low"],
+                    "R_High": high_R,
+                    "G_High": high_G,
+                    "B_High": high_B,
+                }.items()
+            }
 
-    def _solve_delta_rgb_for_gray(
-        self,
-        g: int,
-        d_targets: dict,
-        lam: float = 1e-3,
-        # --- (옵션1) 기존처럼 직접 weight 지정하고 싶을 때 ---
-        wCx: float | None = None,
-        wCy: float | None = None,
-        wG:  float | None = None,
-        # --- (옵션2) NG 정도에 따라 자동 가중치 계산 ---
-        thr_c: float | None = None,
-        thr_gamma: float | None = None,
-        base_wCx: float = 1.0,
-        base_wCy: float = 1.0,
-        base_wG:  float = 1.0,
-        boost: float = 3.0,
-        keep: float = 0.2,
-    ):
-        """
-        주어진 gray g에서, 현재 ΔY = [dCx, dCy, dGamma]를
-        자코비안 J_g를 이용해 줄이기 위한 ΔX = [ΔR_H, ΔG_H, ΔB_H]를 푼다.
-
-        관계식:  ΔY_new ≈ ΔY + J_g · ΔX
-        우리가 원하는 건 ΔY_new ≈ 0 이므로, J_g · ΔX ≈ -ΔY 를 풀어야 함.
-
-        리지 가중 최소자승:
-            argmin_ΔX || W (J_g ΔX + ΔY) ||^2 + λ ||ΔX||^2
-            → (J^T W^2 J + λI) ΔX = - J^T W^2 ΔY
-
-        - thr_c, thr_gamma가 주어지면:
-            NG 여부에 따라 (base_w * boost) / (base_w * keep)로 가중치 자동 계산
-        - thr_c, thr_gamma가 None 이고 wCx/wCy/wG가 주어지면:
-            예전 방식처럼 고정 weight 사용
-        """
-        Jg = np.asarray(self._J_dense[g], dtype=np.float32)  # (3,3)
-        if not np.isfinite(Jg).all():
-            logging.warning(f"[BATCH CORR] g={g}: J_g has NaN/inf → skip")
-            return None
-
-        dCx_g = float(d_targets["Cx"][g])
-        dCy_g = float(d_targets["Cy"][g])
-        dG_g  = float(d_targets["Gamma"][g])
-        dy = np.array([dCx_g, dCy_g, dG_g], dtype=np.float32)  # (3,)
-
-        # target이 NaN/Inf인 경우
-        if not np.isfinite(dy).all():
-            logging.warning(
-                f"[BATCH CORR] g={g}: dY has NaN/inf "
-                f"(dCx, dCy, dG) = ({dCx_g}, {dCy_g}, {dG_g}) → skip this gray"
+            # 2-2) VAC OFF 대비 dCx/dCy/dGamma 예측
+            #      (모델이 이미 ON-OFF 값을 학습했다고 가정)
+            y_pred = self._predict_Y0W_from_models(
+                lut256_for_pred,
+                panel_text=panel,
+                frame_rate=fr,
+                model_year=model_year,
             )
-            return None
-        
-        # 이미 거의 0이면 굳이 보정 안 해도 됨
-        if np.all(np.abs(dy) < 1e-6):
-            return None
+            # 디버그용 CSV 덤프 (선택)
+            self._debug_dump_predicted_Y0W(
+                y_pred,
+                tag=f"iter{it}_{panel}_fr{int(fr)}_my{int(model_year) % 100:02d}",
+                save_csv=True,
+            )
 
-        # ---------------------------------------------
-        # 1) 가중치 계산
-        #    - 우선순위:
-        #      (1) thr_c/thr_gamma가 있으면 NG 기반 자동 가중치
-        #      (2) 아니면 (wCx,wCy,wG) 직접 지정값 사용
-        #      (3) 둘 다 없으면 base_w* 그대로 사용
-        # ---------------------------------------------
-        if thr_c is not None and thr_gamma is not None:
-            def w_for(err: float, thr: float, base: float) -> float:
-                ratio = abs(err) / max(thr, 1e-6)
-                ratio_clamped = min(ratio, 1.0)
-                w = base * (keep) + (boost - keep) * ratio_clamped
-                return w
+            # 2-3) Δtarget 벡터 구성
+            #      예측 결과 자체가 OFF 대비 (dCx, dCy, dGamma)이므로 그대로 사용
+            d_targets = {
+                "Cx":    np.asarray(y_pred["Cx"],    dtype=np.float32),
+                "Cy":    np.asarray(y_pred["Cy"],    dtype=np.float32),
+                "Gamma": np.asarray(y_pred["Gamma"], dtype=np.float32),
+            }
 
-            wCx_eff = w_for(dCx_g, thr_c, base_wCx)
-            wCy_eff = w_for(dCy_g, thr_c, base_wCy)
-            wG_eff  = w_for(dG_g,  thr_gamma, base_wG)
+            # 2-4) gray별 ΔR/ΔG/ΔB 계산
+            dR_vec = np.zeros(256, dtype=np.float32)
+            dG_vec = np.zeros(256, dtype=np.float32)
+            dB_vec = np.zeros(256, dtype=np.float32)
 
-        elif (wCx is not None) and (wCy is not None) and (wG is not None):
-            # 옛날 방식: 직접 weight 지정
-            wCx_eff, wCy_eff, wG_eff = float(wCx), float(wCy), float(wG)
+            # 스펙 기준값 (가중치 자동 계산용)
+            thr_c = 0.003
+            thr_gamma = 0.05
 
-        else:
-            # fallback: 그냥 base weight 사용
-            wCx_eff, wCy_eff, wG_eff = base_wCx, base_wCy, base_wG
+            for g in range(256):
+                # 양 끝단(0,1,254,255)은 자코비안 신뢰도/감마 정의 문제로 스킵
+                if g < 2 or g > 253:
+                    continue
 
-        w_vec = np.array([wCx_eff, wCy_eff, wG_eff], dtype=np.float32)
+                res = self._solve_delta_rgb_for_gray(
+                    g,
+                    d_targets,
+                    lam=lambda_ridge,
+                    # NG 정도에 따라 자동 가중치 사용
+                    thr_c=thr_c,
+                    thr_gamma=thr_gamma,
+                    base_wCx=wC,
+                    base_wCy=wC,
+                    base_wG=wG,
+                    boost=3.0,
+                    keep=0.2,
+                )
+                if res is None:
+                    continue
 
-        # ---------------------------------------------
-        # 2) 가중 least squares (기존 로직 그대로)
-        # ---------------------------------------------
-        WJ = w_vec[:, None] * Jg   # (3,3)
-        Wy = w_vec * dy            # (3,)
+                dR, dG, dB, wCx_eff, wCy_eff, wG_eff, step_gain = res
+                dR_vec[g] = dR
+                dG_vec[g] = dG
+                dB_vec[g] = dB
 
-        A = WJ.T @ WJ + float(lam) * np.eye(3, dtype=np.float32)  # (3,3)
-        b = - WJ.T @ Wy                                           # (3,)
+            # 2-5) LUT 갱신 (12bit 스케일에서 적용 + 단조성 강제 + 클리핑)
+            high_R = np.clip(self._enforce_monotone(high_R + dR_vec), 0, 4095)
+            high_G = np.clip(self._enforce_monotone(high_G + dG_vec), 0, 4095)
+            high_B = np.clip(self._enforce_monotone(high_B + dB_vec), 0, 4095)
 
+            logging.info(
+                f"[PredictOpt(Jg)] iter {it} done. "
+                f"(wG={wG}, wC={wC}, λ={lambda_ridge})"
+            )
+
+        # ------------------------------------------------------------------
+        # 3) 256 → 4096 업샘플 + 최종 LUT/JSON 생성
+        # ------------------------------------------------------------------
+        new_lut_4096 = {
+            "RchannelLow":  np.asarray(vac_dict["RchannelLow"], dtype=np.float32),
+            "GchannelLow":  np.asarray(vac_dict["GchannelLow"], dtype=np.float32),
+            "BchannelLow":  np.asarray(vac_dict["BchannelLow"], dtype=np.float32),
+            "RchannelHigh": self._up256_to_4096(high_R),
+            "GchannelHigh": self._up256_to_4096(high_G),
+            "BchannelHigh": self._up256_to_4096(high_B),
+        }
+
+        # 정수 0~4095 범위로 정리
+        for k in new_lut_4096:
+            new_lut_4096[k] = np.clip(
+                np.round(new_lut_4096[k]), 0, 4095
+            ).astype(np.uint16)
+
+        # GUI 그래프/테이블 업데이트용
+        lut_plot = {
+            "R_Low":  new_lut_4096["RchannelLow"],
+            "R_High": new_lut_4096["RchannelHigh"],
+            "G_Low":  new_lut_4096["GchannelLow"],
+            "G_High": new_lut_4096["GchannelHigh"],
+            "B_Low":  new_lut_4096["BchannelLow"],
+            "B_High": new_lut_4096["BchannelHigh"],
+        }
+        time.sleep(5)
+        self._update_lut_chart_and_table(lut_plot)
+
+        # TV write용 표준 VAC JSON 조립
+        vac_json_optimized = self.build_vacparam_std_format(
+            base_vac_dict=vac_dict,
+            new_lut_tvkeys=new_lut_4096,
+        )
+
+        # Step2 완료 아이콘 업데이트
         try:
-            dX = np.linalg.solve(A, b).astype(np.float32)
-        except np.linalg.LinAlgError:
-            dX = np.linalg.lstsq(A, b, rcond=None)[0].astype(np.float32)
+            self._step_done(2)
+        except Exception:
+            pass
 
-        step_gain = 1.0
-        dR, dG, dB = (float(dX[0]) * step_gain,
-                    float(dX[1]) * step_gain,
-                    float(dX[2]) * step_gain)
+        return vac_json_optimized, new_lut_4096
 
-        return dR, dG, dB, wCx_eff, wCy_eff, wG_eff, step_gain
+    except Exception:
+        logging.exception("[PredictOpt] failed")
+        # 실패해도 Step2 로딩 애니는 정리
+        try:
+            self._step_done(2)
+        except Exception:
+            pass
+        return None, None
