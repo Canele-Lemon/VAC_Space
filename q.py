@@ -1,122 +1,103 @@
-    def _build_features_for_gray_pred(self, X_dict, gray: int) -> np.ndarray:
+    def debug_dump_delta_with_mapping(
+        self,
+        pk: int | None = None,
+        ref_pk: int = 1,
+        verbose_lut: bool = False,
+        preview_grays: list[int] | None = None,
+    ):
         """
-        예측모델(Y0) 학습용 feature row 구성.
+        ΔLUT(raw, target−ref @ LUT_index_mapping) 를
+        '데이터셋 느낌'으로 요약해서 출력하는 디버그용 메서드.
 
-        X_row(g) = [
-            dR_Low, dG_Low, dB_Low,
-            dR_High, dG_High, dB_High,
-            panel_maker(one-hot...),
-            frame_rate,
-            model_year,
-            gray_norm (= g/255),
-            LUT_index_j (mapping_j[g])
-        ]
-
-        여기서 dR_Low 등은 VACInputBuilder.prepare_X_delta_lut_with_mapping()
-        에서 bypass LUT 기준 ΔLUT로 계산된 값이라고 가정한다.
+        Parameters
+        ----------
+        pk : int | None
+            target VAC_SET_Info PK (None이면 self.pk 그대로 사용)
+        ref_pk : int
+            reference VAC_SET_Info PK (보통 bypass LUT 세트 PK)
+        verbose_lut : bool
+            True이면 target/ref 원본 LUT 값도 함께 출력 (상세 검증용)
+        preview_grays : list[int] | None
+            테이블로 미리보기할 gray 인덱스 리스트.
+            None이면 [0, 1, 32, 128, 255]를 기본 사용.
         """
-        delta_lut = X_dict["lut_delta_raw"]   # dict: ch -> (256,) float32 (bypass 기준 ΔLUT)
-        meta      = X_dict["meta"]            # dict: panel_maker(one-hot), frame_rate, model_year
-        j_map     = X_dict["mapping_j"]       # (256,) int32
+        import pandas as pd
+        import numpy as np
 
-        row = []
+        # pk 지정되면 세트 PK 교체
+        if pk is not None:
+            self.pk = int(pk)
 
-        # 1) dLUT 6채널 (Low + High)
-        for ch in ("R_Low", "G_Low", "B_Low", "R_High", "G_High", "B_High"):
-            row.append(float(delta_lut[ch][gray]))
+        # 1) ΔLUT + 메타 + 매핑 먼저 생성
+        pack = self.prepare_X_delta_lut_with_mapping(ref_pk=ref_pk)
+        delta = pack["lut_delta_raw"]   # dict[ch] = (256,) float32
+        meta  = pack["meta"]            # panel_maker, frame_rate, model_year
+        j_map = pack["mapping_j"]       # (256,) int32
 
-        # 2) panel_maker one-hot
-        row.extend(np.asarray(meta["panel_maker"], dtype=np.float32).tolist())
+        print(f"\n[DEBUG] ΔLUT(raw, target−ref @ VAC_SET_Info.PK={ref_pk}) "
+              f"@ mapped indices for VAC_SET_Info.PK={self.pk}")
 
-        # 3) frame_rate, model_year
-        row.append(float(meta["frame_rate"]))
-        row.append(float(meta["model_year"]))
+        # 2) META 요약
+        print("\n[META]")
+        print(f"  panel_maker one-hot: {meta['panel_maker']}")
+        print(f"  frame_rate         : {meta['frame_rate']}")
+        print(f"  model_year         : {meta['model_year']}")
 
-        # 4) gray_norm
-        row.append(gray / 255.0)
+        # 3) MAPPING 요약
+        print("\n[MAPPING] j[0..10] =", j_map[:11].tolist(), "...")
+        print(f"  mapping_j shape = {j_map.shape}, dtype={j_map.dtype}")
 
-        # 5) LUT index (mapping)
-        j_idx = int(j_map[gray])  # 0..4095
-        row.append(float(j_idx))
+        # 4) 각 채널별 shape 정보
+        channels = ['R_Low','R_High','G_Low','G_High','B_Low','B_High']
+        print("\n[ΔLUT SHAPES]")
+        for ch in channels:
+            arr = delta[ch]
+            print(f"  {ch:7s}: shape={arr.shape}, dtype={arr.dtype}, "
+                  f"min={np.nanmin(arr): .1f}, max={np.nanmax(arr): .1f}")
 
-        return np.asarray(row, dtype=np.float32)
-        
-        
-        
-    def build_XYdataset_for_prediction_Y0(self, pattern: str = "W"):
-        """
-        예측모델(Y0: dCx, dCy, dGamma) 학습용 X, Y0, groups를 생성한다.
+        # 5) Dataset 스타일 미리보기 (몇 개 gray에 대해 행 구성)
+        if preview_grays is None:
+            preview_grays = [0, 1, 32, 128, 255]
 
-        - X: bypass 기준 dR/G/B_Low/High + panel meta + gray_norm + LUT index
-        - Y0: pattern(기본 'W') 기준 (target 측정 - bypass 측정) 값
-              "dCx", "dCy", "dGamma" 3개 타깃을 한 번에 반환
-
-        Returns
-        -------
-        X : np.ndarray (N, D)
-        Y0: dict[str, np.ndarray]
-            {
-              "dCx":    (N,),
-              "dCy":    (N,),
-              "dGamma": (N,),
+        rows = []
+        for g in preview_grays:
+            if not (0 <= g < len(j_map)):
+                continue
+            j = int(j_map[g])
+            row = {
+                "gray": g,
+                "LUT_j": j,
             }
-        groups : np.ndarray (N,)
-            각 행이 어느 PK에서 왔는지 나타내는 그룹 벡터
-            (GroupKFold / GroupShuffleSplit 등에 사용)
-        """
-        X_rows = []
-        y_dCx  = []
-        y_dCy  = []
-        y_dG   = []
-        groups = []
+            for ch in channels:
+                row[f"d{ch}"] = float(delta[ch][g])
+            rows.append(row)
 
-        for s in self.samples:
-            pk = s["pk"]
-            Xd = s["X"]  # {"lut_delta_raw":..., "meta":..., "mapping_j":...}
-            Yd = s["Y"]  # {"Y0": {...}, ...}
-
-            if "Y0" not in Yd:
-                logging.warning(f"[VACDataset] PK={pk}: Y dict에 'Y0'가 없습니다. 건너뜀.")
-                continue
-            if pattern not in Yd["Y0"]:
-                logging.warning(f"[VACDataset] PK={pk}: Y0에 pattern='{pattern}'가 없습니다. 건너뜀.")
-                continue
-
-            y0 = Yd["Y0"][pattern]   # {"dCx":(256,), "dCy":(256,), "dGamma":(256,)}
-
-            vec_cx = np.asarray(y0["dCx"],    dtype=np.float32)
-            vec_cy = np.asarray(y0["dCy"],    dtype=np.float32)
-            vec_g  = np.asarray(y0["dGamma"], dtype=np.float32)
-
-            for g in range(256):
-                # target이 NaN/inf면 해당 gray는 학습에서 제외
-                if not (np.isfinite(vec_cx[g]) and np.isfinite(vec_cy[g]) and np.isfinite(vec_g[g])):
-                    continue
-
-                feat_row = self._build_features_for_gray_pred(X_dict=Xd, gray=g)
-                X_rows.append(feat_row)
-                y_dCx.append(float(vec_cx[g]))
-                y_dCy.append(float(vec_cy[g]))
-                y_dG.append(float(vec_g[g]))
-                groups.append(pk)
-
-        if not X_rows:
-            logging.warning("[VACDataset] build_XYdataset_for_prediction_Y0: 유효한 샘플이 없습니다.")
-            X_mat      = np.empty((0, 0), dtype=np.float32)
-            y_cx_vec   = np.empty((0,), dtype=np.float32)
-            y_cy_vec   = np.empty((0,), dtype=np.float32)
-            y_g_vec    = np.empty((0,), dtype=np.float32)
-            groups_arr = np.empty((0,), dtype=np.int64)
+        if rows:
+            df_preview = pd.DataFrame(rows)
+            print("\n[PREVIEW] ΔLUT per gray (깊이 있는 Dataset 느낌) :")
+            print(df_preview.to_string(index=False, float_format=lambda x: f"{x: .3f}"))
         else:
-            X_mat      = np.vstack(X_rows).astype(np.float32)
-            y_cx_vec   = np.asarray(y_dCx, dtype=np.float32)
-            y_cy_vec   = np.asarray(y_dCy, dtype=np.float32)
-            y_g_vec    = np.asarray(y_dG,  dtype=np.float32)
-            groups_arr = np.asarray(groups, dtype=np.int64)
+            print("\n[PREVIEW] no valid rows for preview_grays =", preview_grays)
 
-        Y0 = {
-            "dCx":    y_cx_vec,
-            "dCy":    y_cy_vec,
-            "dGamma": y_g_vec,
-        }
-        return X_mat, Y0, groups_arr
+        # 6) 원본 4096 LUT와의 일치 여부를 점검하고 싶을 때 (옵션)
+        if verbose_lut:
+            print("\n[VERBOSE] 타깃/레퍼런스 원본 LUT 값까지 검증:")
+
+            lut4096_target = self._load_vacdata_lut4096(self.pk)
+            lut4096_ref    = self._load_vacdata_lut4096(ref_pk)
+
+            for ch in channels:
+                print(f"\n--- {ch} ---")
+                arr = delta[ch]
+                for g in preview_grays:
+                    if 0 <= g < len(arr):
+                        j = int(j_map[g])
+                        tgt_val = float(lut4096_target[ch][j])
+                        ref_val = float(lut4096_ref[ch][j])
+                        diff    = tgt_val - ref_val
+                        print(
+                            f"  gray {g:3d} @ j={j:4d} : "
+                            f"Δ(from pack)={float(arr[g]): .3f}, "
+                            f"target={tgt_val: .3f}, ref={ref_val: .3f}, "
+                            f"target-ref={diff: .3f}"
+                        )
