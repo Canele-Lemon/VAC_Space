@@ -18,104 +18,13 @@ from config.db_config import engine
 logging.basicConfig(level=logging.DEBUG)
 
 class VACOutputBuilder:
-    def __init__(self, pk: int, ref_pk: int = 2154):
+    def __init__(self, pk: int, ref_pk: int):
         self.pk = pk
         self.ref_pk = ref_pk
         
         self.MEASUREMENT_INFO_TABLE = "W_VAC_SET_Info"
         self.MEASUREMENT_DATA_TABLE = "W_VAC_SET_Measure"
         
-    def load_set_info_pk_data(self, pk):
-        """
-        pk : `W_VAC_SET_Info` 테이블의 `PK`
-        
-        지정한 pk에 해당하는 측정 데이터를 DataFrame으로 반환
-        
-        return :
-        - df_front_pivot: VAC_Gamma_W_Gray
-        - df_side_pivot: VAC_GammaLinearity_60_W_Gray
-
-        """
-        query = f"""
-        SELECT `VAC_SET_Info_PK`, `Parameter`, `Component`, `Data`
-        FROM `{self.MEASUREMENT_DATA_TABLE}`
-        WHERE `VAC_SET_Info_PK` = {pk}
-        """
-        df_all = pd.read_sql(query, engine)
-        
-        df_front = df_all[df_all['Parameter'].str.contains('VAC_Gamma_W_Gray', na=False)]
-        df_front_pivot = df_front.pivot(index=['VAC_SET_Info_PK', 'Parameter'], columns='Component', values='Data').reset_index()
-        df_front_pivot.insert(0, 'Gray', range(len(df_front_pivot)))
-        lv_values = pd.to_numeric(df_front_pivot['Lv'], errors='coerce')
-        lv_min, lv_max = lv_values.min(), lv_values.max()
-        
-        def calc_gamma(lv_on_g, g):
-            if not np.isfinite(lv_on_g) or lv_max <= lv_min:
-                return float("nan")
-            nor = (lv_on_g - lv_min) / (lv_max - lv_min)
-            gray_norm = g / 255.0
-            if nor <= 0 or gray_norm <= 0 or gray_norm >= 1:
-                return float("nan")
-            return float(np.log(nor) / np.log(gray_norm))
-        
-        df_front_pivot['Gamma'] = [calc_gamma(lv, g) for lv, g in zip(lv_values, df_front_pivot['Gray'])]
-
-        df_side = df_all[df_all['Parameter'].str.contains('VAC_GammaLinearity_60_W_Gray', na=False)]
-        df_side_pivot = df_side.pivot(index=['VAC_SET_Info_PK', 'Parameter'], columns='Component', values='Data').reset_index()
-        df_side_pivot.insert(0, 'Gray', range(len(df_side_pivot)))
-        lv_side_values = pd.to_numeric(df_side_pivot['Lv'], errors='coerce')
-        lv_side_min, lv_side_max = lv_side_values.min(), lv_side_values.max()
-        df_side_pivot['Nor. Lv'] = (lv_side_values - lv_side_min) / (lv_side_max - lv_side_min)
-  
-        query_version = f"""
-        SELECT `VAC_Version`
-        FROM `{self.MEASUREMENT_INFO_TABLE}`
-        WHERE `PK` = {pk}
-        """
-        version_df = pd.read_sql(query_version, engine)
-        vac_version = version_df['VAC_Version'].iloc[0] if not version_df.empty else f"PK_{pk}"
-        
-        logging.debug(f"[load_set_info_pk_data] Loading complete for `VAC_SET_Info_PK`={pk} from table=`{self.MEASUREMENT_DATA_TABLE}` (VAC Version={vac_version})")
-        
-        return vac_version, df_front_pivot, df_side_pivot
-
-    def load_multiple_pk_data_with_chart(self, pk_list):
-        """
-        pk 리스트를 받아서 하나의 Excel 파일에 pk별 시트 생성
-        각 시트에:
-        - VAC_Gamma_W_Gray 데이터
-        - VAC_GammaLinearity_60_W_Gray 데이터
-        - Gray vs Lv_normalized 차트
-        """
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_file:
-            with pd.ExcelWriter(tmp_file.name, engine='xlsxwriter') as writer:
-                workbook = writer.book
-
-                for pk in pk_list:
-                    vac_version, df_front_pivot, df_side_pivot = self.load_set_info_pk_data(pk)
-                    sheet_name = str(vac_version)
-
-                    # 데이터 쓰기
-                    df_front_pivot.to_excel(writer, sheet_name=sheet_name, startrow=0, index=False)
-                    start_row_side = len(df_front_pivot) + 3
-                    df_side_pivot.to_excel(writer, sheet_name=sheet_name, startrow=start_row_side, index=False)
-
-                    # 차트 추가
-                    worksheet = writer.sheets[sheet_name]
-                    chart = workbook.add_chart({'type': 'line'})
-                    chart.add_series({
-                        'name': 'Nor. Lv',
-                        'categories': [sheet_name, start_row_side + 1, 0, start_row_side + len(df_side_pivot), 0],  # Gray
-                        'values': [sheet_name, start_row_side + 1, df_side_pivot.columns.get_loc('Nor. Lv'),
-                                start_row_side + len(df_side_pivot), df_side_pivot.columns.get_loc('Nor. Lv')],
-                    })
-                    chart.set_title({'name': 'Side View Luminance'})
-                    chart.set_x_axis({'name': 'Gray'})
-                    chart.set_y_axis({'name': 'Nor. Lv'})
-                    worksheet.insert_chart(0, 10, chart)
-
-            webbrowser.open(f"file://{tmp_file.name}")
-
     def _load_measure_data(self, pk, parameters=None, components=('Lv', 'Cx', 'Cy'), normalize_lv_flag=True):
         # [STEP 1] 데이터 로드
         parameter_condition = " OR ".join([f"`Parameter` LIKE '{p}'" for p in parameters])
@@ -129,7 +38,7 @@ class VACOutputBuilder:
         AND `Component` IN {components_str}
         """
         df = pd.read_sql(query, engine)
-        # logging.debug(f"[STEP 1] Raw data loaded:\n{df.head()}")
+        logging.debug(f"[STEP 1] Raw data loaded:\n{df.head()}")
         
         df['Data'] = df['Data'].astype(float)
         df['Pattern_Window'] = df['Parameter'].str.extract(
@@ -208,7 +117,7 @@ class VACOutputBuilder:
         
         return df
 
-    def compute_Y0_struct(self, patterns=('W', 'R', 'G', 'B')):
+    def compute_Y0_struct(self, patterns=('W',)):
         """
         Y[0] detailed: 패턴별(W/R/G/B) self.pk와 self.ref_pk 간 Gamma, Cx, Cy 차이 => dGamma, dCx, dCy
         Gamma(g) = log(nor.Lv_g) / log(gray_norm_g)
@@ -392,18 +301,18 @@ class VACOutputBuilder:
               'B': (18,)
             }
         """
-        all_params = [
-            "VAC_GammaLinearity_60_W_Gray____",
-            "VAC_GammaLinearity_60_R_Gray____",
-            "VAC_GammaLinearity_60_G_Gray____",
-            "VAC_GammaLinearity_60_B_Gray____"
-        ]
-        patterns = tuple(p for p in patterns if p in all_params)
+        all_pattern_map = {
+            'W': "VAC_GammaLinearity_60_W_Gray____",
+            'R': "VAC_GammaLinearity_60_R_Gray____",
+            'G': "VAC_GammaLinearity_60_G_Gray____",
+            'B': "VAC_GammaLinearity_60_B_Gray____",
+        }
+        patterns = tuple(p for p in patterns if p in all_pattern_map)
         if not patterns:
             logging.warning("[Y1] No valid patterns requested, returning empty dict.")
             return {}
         
-        parameters = [all_params[p] for p in patterns]
+        parameters = [all_pattern_map[p] for p in patterns]
         
         df = self._load_measure_data(self.pk, components=('Lv',), parameters=parameters)
         
@@ -457,7 +366,9 @@ class VACOutputBuilder:
                 # 데이터가 너무 부족한 경우 fallback
                 y1[ptn] = np.full(len(seg_starts), np.nan, dtype=np.float32)
             else:
-                y1[ptn] = np.asarray(slopes, dtype=np.float32)
+                arr = np.asarray(slopes, dtype=np.float32)
+                arr = np.abs(arr) # 절대값 처리
+                y1[ptn] = arr
 
         return y1
 
@@ -505,7 +416,7 @@ class VACOutputBuilder:
         return y2
 
     def prepare_Y(self, add_y0: bool = True, add_y1: bool = True, add_y2: bool = True,
-                        y0_patterns=('W', 'R', 'G', 'B'), y1_patterns=('W',)):
+                        y0_patterns=('W',), y1_patterns=('W',)):
         """
         병합된 최종 Y 딕셔너리 반환:
         {
@@ -539,7 +450,7 @@ class VACOutputBuilder:
     
     def debug_Y0_dataset(
         self,
-        patterns=('W', 'R', 'G', 'B'),
+        patterns=('W',),
         gray_samples=None,
     ):
         """
@@ -649,7 +560,7 @@ class VACOutputBuilder:
         
     def debug_full_Y_dataset(
         self,
-        y0_patterns=('W', 'R', 'G', 'B'),
+        y0_patterns=('W',),
         y1_patterns=('W',),
         gray_samples_Y0=None,
     ):
@@ -672,21 +583,221 @@ class VACOutputBuilder:
 
         # Y2
         self.debug_Y2_dataset()
+        
+    def export_measure_data_to_csv(
+        self,
+        pk_list=None,
+        parameters=None,
+        components=('Lv', 'Cx', 'Cy'),
+        normalize_lv_flag: bool = True,
+        with_chart: bool = False,
+        open_after: bool = True,
+    ):
+        """
+        _load_measure_data()를 이용해 측정 데이터를 내보내는 통합 헬퍼.
+
+        사용 모드 2가지:
+
+        1) with_chart=False  (기본값)
+           - pk_list 각각에 대해 _load_measure_data 결과를 CSV(1파일/PK)로 저장
+           - 디버그용 원본 테이블 보기용
+
+        2) with_chart=True
+           - pk_list (여러 개 가능)에 대해,
+             'VAC_Gamma_W_Gray____' + 'VAC_GammaLinearity_60_W_Gray____' 데이터를
+             한 개의 Excel(xlsx)에서 PK별 시트로 저장하고,
+             각 시트에 Nor.Lv(측면) 라인 차트까지 포함.
+           - 이 모드는 내부에서 parameters/components를 자동으로 설정합니다.
+        """
+        # pk_list 정규화
+        if pk_list is None:
+            pk_list = [self.pk]
+        elif isinstance(pk_list, int):
+            pk_list = [pk_list]
+        else:
+            pk_list = list(pk_list)
+
+        # -------------------------
+        # ❶ CSV only 모드 (기본)
+        # -------------------------
+        if not with_chart:
+            if parameters is None:
+                raise ValueError(
+                    "[export_measure_data_to_csv] with_chart=False 모드에서는 "
+                    "'parameters' 인자가 필요합니다.\n"
+                    "예: parameters=['VAC_Gamma_W_Gray____', 'VAC_GammaLinearity_60_W_Gray____']"
+                )
+
+            for pk in pk_list:
+                df = self._load_measure_data(
+                    pk=pk,
+                    parameters=parameters,
+                    components=components,
+                    normalize_lv_flag=normalize_lv_flag,
+                )
+
+                if df is None or df.empty:
+                    print(f"[export_measure_data_to_csv] PK={pk} 에 대해 로드된 데이터가 없습니다.")
+                    continue
+
+                tmp = tempfile.NamedTemporaryFile(
+                    delete=False,
+                    suffix=f"_VAC_measure_pk{pk}.csv"
+                )
+                tmp_path = tmp.name
+                tmp.close()
+
+                df.to_csv(tmp_path, index=False, encoding="utf-8-sig")
+                print(f"[OK] measure data CSV saved → {tmp_path}")
+
+                if open_after:
+                    webbrowser.open(f"file://{os.path.abspath(tmp_path)}")
+
+            return  # CSV 모드 종료
+
+        # -------------------------
+        # ❷ Excel + chart 모드
+        #    (옛 load_multiple_pk_data_with_chart 통합)
+        # -------------------------
+        # 이 모드는 W 패턴 정면/측면 Gamma 데이터 전용으로 설계
+        #   - 정면:  VAC_Gamma_W_Gray____
+        #   - 측면:  VAC_GammaLinearity_60_W_Gray____
+        front_param = "VAC_Gamma_W_Gray____"
+        side_param  = "VAC_GammaLinearity_60_W_Gray____"
+
+        # 임시 엑셀 파일 생성
+        tmp_xlsx = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+        xlsx_path = tmp_xlsx.name
+        tmp_xlsx.close()
+
+        with pd.ExcelWriter(xlsx_path, engine="xlsxwriter") as writer:
+            workbook = writer.book
+
+            for pk in pk_list:
+                # ---- 정면 W Gamma 측정 데이터 (정규화 Lv 포함) ----
+                df_front = self._load_measure_data(
+                    pk=pk,
+                    parameters=[front_param],
+                    components=('Lv', 'Cx', 'Cy'),
+                    normalize_lv_flag=True,  # Nor.Lv로 쓰기 위해 True
+                )
+
+                # ---- 측면 60도 W GammaLinearity 데이터 (Nor.Lv) ----
+                df_side = self._load_measure_data(
+                    pk=pk,
+                    parameters=[side_param],
+                    components=('Lv',),
+                    normalize_lv_flag=True,  # 여기서도 Nor.Lv로 사용
+                )
+
+                sheet_name = f"PK_{pk}"
+
+                # --------- 시트에 front/side 테이블 쓰기 ---------
+                start_row_side = 0
+
+                if df_front is not None and not df_front.empty:
+                    # 정면: Pattern_Window='W' 인 것만 pivot
+                    sub_f = df_front[
+                        (df_front["Pattern_Window"] == "W")
+                        & df_front["Component"].isin(["Lv", "Cx", "Cy"])
+                    ].copy()
+
+                    if not sub_f.empty:
+                        front_pivot = (
+                            sub_f
+                            .pivot(index="Gray_Level", columns="Component", values="Data")
+                            .reset_index()
+                            .rename(columns={"Gray_Level": "Gray"})
+                        )
+                        front_pivot.to_excel(
+                            writer, sheet_name=sheet_name,
+                            startrow=0, index=False
+                        )
+                        start_row_side = len(front_pivot) + 3  # 아래에 side 테이블 배치
+
+                if df_side is not None and not df_side.empty:
+                    # 측면: Pattern_Window='W', Component='Lv' 만 사용 (이미 Nor.Lv)
+                    sub_s = df_side[
+                        (df_side["Pattern_Window"] == "W")
+                        & (df_side["Component"] == "Lv")
+                    ].copy()
+
+                    if not sub_s.empty:
+                        sub_s = sub_s.sort_values("Gray_Level")
+                        side_df = sub_s[["Gray_Level", "Data"]].rename(
+                            columns={"Gray_Level": "Gray", "Data": "Nor. Lv"}
+                        )
+                        side_df.to_excel(
+                            writer, sheet_name=sheet_name,
+                            startrow=start_row_side, index=False
+                        )
+
+                        # --------- Nor. Lv 차트 추가 ---------
+                        worksheet = writer.sheets[sheet_name]
+                        chart = workbook.add_chart({"type": "line"})
+
+                        # 엑셀 내에서의 컬럼 위치 계산
+                        col_gray = side_df.columns.get_loc("Gray")      # 보통 0
+                        col_nlv  = side_df.columns.get_loc("Nor. Lv")   # 보통 1
+
+                        first_row = start_row_side + 1     # 헤더 아래부터
+                        last_row  = start_row_side + len(side_df)
+
+                        chart.add_series({
+                            "name": "Nor. Lv (60deg, W)",
+                            "categories": [
+                                sheet_name, first_row, col_gray,
+                                last_row,  col_gray
+                            ],
+                            "values": [
+                                sheet_name, first_row, col_nlv,
+                                last_row,  col_nlv
+                            ],
+                        })
+                        chart.set_title({"name": "Side View Nor. Lv (W, 60deg)"})
+                        chart.set_x_axis({"name": "Gray"})
+                        chart.set_y_axis({"name": "Nor. Lv"})
+
+                        worksheet.insert_chart(0, 10, chart)
+
+        print(f"[OK] Excel with charts saved → {xlsx_path}")
+
+        if open_after:
+            webbrowser.open(f"file://{os.path.abspath(xlsx_path)}")
             
 if __name__ == "__main__":
     TARGET_PK = 3008
     BYPASS_PK = 3007
         
     builder = VACOutputBuilder(pk=TARGET_PK, ref_pk=BYPASS_PK)
-    builder.debug_full_Y_dataset(
-        y0_patterns=('W',),
-        y1_patterns=('W',),
-    )
+    
+    # # builder.debug_full_Y_dataset(
+    # #     y0_patterns=('W',),
+    # #     y1_patterns=('W',),
+    # # )
+    
 
+    # builder.export_measure_data_to_csv(
+    #     pk_list = [3007, 3008],
+    #     parameters = [
+    #         "VAC_Gamma_W_Gray____",
+    #         "VAC_GammaLinearity_60_W_Gray____",
+    #     ],
+    #     components=('Lv', 'Cx', 'Cy'),
+    #     normalize_lv_flag=True,
+    #     with_chart=True,
+    # )
+    
+    builder._load_measure_data(pk=TARGET_PK, parameters="VAC_Gamma_W_Gray____")
 
-이렇게 하고 실행했는데 
-[DEBUG Y1] pk=3008, patterns=('W',)
-WARNING:root:[Y1] No valid patterns requested, returning empty dict.
-[DEBUG Y1] empty Y1 struct (데이터 없음)
-
-데이터가 있는데 데이터가 없다고 나오네요
+왜 여기서 아래 에러가 발생할까요?
+Traceback (most recent call last):
+  File "d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project\src\data_preparation\prepare_output.py", line 791, in <module>
+    builder._load_measure_data(pk=TARGET_PK, parameters="VAC_Gamma_W_Gray____")
+  File "d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project\src\data_preparation\prepare_output.py", line 60, in _load_measure_data
+    lv_0 = lv_df[lv_df['Gray_Level'] == 0].set_index('Pattern_Window')['Data'].to_dict()
+  File "C:\python310\lib\site-packages\pandas\core\frame.py", line 4102, in __getitem__
+    indexer = self.columns.get_loc(key)
+  File "C:\python310\lib\site-packages\pandas\core\indexes\base.py", line 3812, in get_loc
+    raise KeyError(key) from err
+KeyError: 'Gray_Level'
