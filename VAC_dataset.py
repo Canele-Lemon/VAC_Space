@@ -21,7 +21,6 @@ class VACDataset(Dataset):
 
         self.pk_list_all = list(pk_list)
         self.ref_pk = int(ref_pk)
-        self.feature_channels = ('R_High','G_High','B_High')
         
         if drop_use_flag_N:
             self.pk_list = self._filter_by_use_flag(self.pk_list_all)
@@ -73,7 +72,7 @@ class VACDataset(Dataset):
 
             self.samples.append({"pk": pk, "X": X, "Y": Y})
 
-    def _build_features_for_gray(self, X_dict, gray: int) -> np.ndarray:
+    def _build_features_for_gray(self, X_dict, gray: int, channels) -> np.ndarray:
         """
         한 행(feature) 구성:
         [ΔR_High, ΔG_High, ΔB_High, panel_maker(one-hot), frame_rate, model_year, gray_norm(=g/255), LUT_index_j(g)]
@@ -89,7 +88,7 @@ class VACDataset(Dataset):
 
         # 2) 채널 부분: 지정된 feature_channels만 사용 (보통 High 3채널)
         row = []
-        for ch in self.feature_channels:
+        for ch in channels:
             row.append(float(delta_lut[ch][gray]))   # raw delta (정규화 없음)
 
         # 3) 메타 부착
@@ -106,13 +105,15 @@ class VACDataset(Dataset):
 
         return np.asarray(row, dtype=np.float32)
 
-    def build_XYdataset_for_jacobian_g(self, component='dGamma'):
+    def _build_XY0_for_jacobian_g(self, component='dGamma'):
         """
-        White 패턴만 선택, y = dGamma/dCx/dCy (target - ref).
-        X는 raw ΔLUT(High 3채널) + 메타 + gray_norm(+ pattern onehot=White) + LUT index
+        - X: raw ΔLUT(High 3채널) + meta + gray_norm + LUT index
+        - y: dGamma / dCx / dCy (White 패턴, target - ref)
         """
         assert component in ('dGamma','dCx','dCy')
 
+        jac_channels = ('R_High', 'G_High', 'B_High')
+        
         X_rows, y_vals, groups = [], [], []
 
         for s in self.samples:
@@ -126,7 +127,11 @@ class VACDataset(Dataset):
                 y_val = y_vec[g]
                 if not np.isfinite(y_val):
                     continue
-                feat_row = self._build_features_for_gray(X_dict=Xd, gray=g)
+                feat_row = self._build_features_for_gray(
+                    X_dict=Xd, 
+                    gray=g,
+                    channels=jac_channels
+                )
                 X_rows.append(feat_row)
                 y_vals.append(float(y_val))
                 groups.append(pk)
@@ -135,20 +140,147 @@ class VACDataset(Dataset):
         y_vec = np.asarray(y_vals, dtype=np.float32)
         groups = np.asarray(groups, dtype=np.int64)
         return X_mat, y_vec, groups
+    
+    def _build_XY0(
+        self,
+        component: str = "dGamma",
+        channels=('R_Low','R_High','G_Low','G_High','B_Low','B_High'),
+        patterns=('W',),
+    ):
+        """
+        Y0 예측용(X→ΔGamma/ΔCx/ΔCy) per-gray 데이터셋.
+        - X: ΔLUT(지정 채널) + meta + gray_norm + LUT index
+        - y: 선택한 component (ΔGamma/ΔCx/ΔCy), 지정된 패턴들(W/R/G/B)
+        """
+        assert component in ('dGamma', 'dCx', 'dCy')
+
+        X_rows, y_vals, groups = [], [], []
+
+        for s in self.samples:
+            pk  = s["pk"]
+            Xd  = s["X"]  # {"lut_delta_raw":..., "meta":..., "mapping_j":...}
+            Yd  = s["Y"]  # {"Y0": {...}, "Y1": {...}, "Y2": {...}}
+
+            for p in patterns:
+                if "Y0" not in Yd or p not in Yd["Y0"]:
+                    continue
+                y_vec = Yd["Y0"][p][component]  # (256,)
+                for g in range(256):
+                    y_val = y_vec[g]
+                    if not np.isfinite(y_val):
+                        continue
+                    feat_row = self._build_features_for_gray(
+                        X_dict=Xd,
+                        gray=g,
+                        channels=channels,
+                    )
+                    X_rows.append(feat_row)
+                    y_vals.append(float(y_val))
+                    groups.append(pk)
+
+        X_mat = np.vstack(X_rows).astype(np.float32) if X_rows else np.empty((0,0), np.float32)
+        y_vec = np.asarray(y_vals, dtype=np.float32)
+        groups = np.asarray(groups, dtype=np.int64)
+        return X_mat, y_vec, groups
+    
+    def build_XY_dataset(
+        self,
+        target: str,
+        component: str | None = None,
+        channels=None,
+        patterns=('W',),
+    ):
+        """
+        통합 XY 데이터셋 빌더.
+
+        Parameters
+        ----------
+        target : {'Y0', 'Y1', 'Y2', 'jacobian'}
+            어떤 타겟을 예측할지 선택.
+        component : str | None
+            - target='Y0' 또는 'jacobian' 일 때: {'dGamma','dCx','dCy'}
+            - target='Y1','Y2' 에서는 사용 안 함(또는 향후 확장 용도).
+        channels : tuple[str] | None
+            X에 사용할 LUT 채널 리스트.
+            - target='jacobian' 인 경우: None이면 ('R_High','G_High','B_High')
+            - target='Y0' 인 경우: None이면 ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
+        patterns : tuple[str]
+            사용할 패턴 (지금은 보통 ('W',) 로 쓰는 걸 가정)
+
+        Returns
+        -------
+        X_mat : np.ndarray
+        y_vec : np.ndarray
+        groups : np.ndarray
+        """
+        target = target.lower()
+
+        if target == "jacobian":
+            # 자코비안: High 3채널 고정, 기존 메서드 재사용
+            if component is None:
+                component = "dGamma"
+            return self._build_XY0_for_jacobian_g(component=component)
+
+        if target == "y0":
+            if component is None:
+                raise ValueError("target='Y0'일 때 component('dGamma','dCx','dCy')가 필요합니다.")
+            if channels is None:
+                channels = ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
+            return self._build_XY0(component=component, channels=channels, patterns=patterns)
+
+        if target == "y1":
+            if channels is None:
+                channels = ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
+            return self._build_XY1(channels=channels, patterns=patterns)
+
+        if target == "y2":
+            if channels is None:
+                channels = ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
+            return self._build_XY2(channels=channels)
+
+        raise ValueError(f"Unknown target='{target}'. (지원: 'jacobian','Y0','Y1','Y2')")
 
 if __name__ == "__main__":
-    # ds = VACDataset(pk_list=[3002], ref_pk=2744)
-    # X_mat, y_vec, groups = ds.build_XYdataset_for_jacobian_g(component='dCx')
-
-    # print("X_mat shape:", X_mat.shape)
-    # print("y_vec shape:", y_vec.shape)
-
-    # # range(n)에서 n 행까지만 출력
-    # for i in range(100):
-    #     print(f"\n--- row {i} ---")
-    #     print("X:", X_mat[i])
-    #     print("y:", y_vec[i])
-    pk_list = list(range(2743, 3003))
-    ds = VACDataset(pk_list=pk_list, ref_pk=2744)
-    print(ds.pk_list)
+    pk_list = [3008]
+    BYPASS_PK = 3007
     
+    dataset = VACDataset(pk_list=pk_list, ref_pk=BYPASS_PK)
+    
+    channels = ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
+    
+    X_dG, y_dG, grp_dG = dataset.build_XY_dataset(
+        target="Y0",
+        component="dGamma",
+        channels=channels,
+        patterns=('W',),
+    )
+    
+    print("X_dG shape:", X_dG.shape)
+    print("y_dG shape:", y_dG.shape)
+    print("groups shape:", grp_dG.shape)
+    
+    # -------- 앞 몇 행만 'dataset 느낌'으로 보기 --------
+    n_preview = min(30, X_dG.shape[0])  # 30행까지만
+
+    # panel_maker one-hot 길이 가져오기 (첫 샘플 meta 이용)
+    first_meta = dataset.samples[0]["X"]["meta"]
+    panel_dim = len(first_meta["panel_maker"])
+
+    feature_names = (
+        [f"d{ch}" for ch in channels] +              # ΔLUT (Low/High 6채널)
+        [f"panel_{i}" for i in range(panel_dim)] +   # panel maker one-hot
+        ["frame_rate", "model_year", "gray_norm", "LUT_j"]
+    )
+
+    df = pd.DataFrame(X_dG[:n_preview, :], columns=feature_names)
+    df["y"] = y_dG[:n_preview]
+    df["pk_group"] = grp_dG[:n_preview]
+
+    # 예쁘게 출력
+    print("\n[PREVIEW] Y0-dGamma XY dataset (first rows)")
+    print(df.to_string(index=False, float_format=lambda x: f"{x: .6f}"))
+
+
+네 그러면 dCx, dCy 데이터셋은 0~5 gray는 학습에서 제외할 수 있도록 위 코드를 수정해주시고 _build_XY1과 _build_XY2는 다음과 같은 조건으로 만들게요.
+_build_XY1: per-segment이기 때문에 중앙 gray의 델타 RGB Low LUT와 RGB High LUT 값으로 X를 뽑을게요. (예: 88-96 gray slope면 (88+96)/2 gray의 RGB LUT High와 Low 값. 그러면 행 수가 아마 15행이 되겠군여)
+_build_XY2: _build_XY1와 동일하게 X를 구성할게요
