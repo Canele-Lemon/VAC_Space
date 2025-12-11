@@ -1,440 +1,122 @@
-def _interp_256_to_4096_with_map(self, ctrl_vals_256: np.ndarray, idx_map: np.ndarray) -> np.ndarray:
-    """
-    256개 control 값(ctrl_vals_256)을
-    12bit LUT index 매핑(idx_map, shape=(256,))을 기준으로
-    4096포인트로 선형 보간.
+    def _build_features_for_gray_pred(self, X_dict, gray: int) -> np.ndarray:
+        """
+        예측모델(Y0) 학습용 feature row 구성.
 
-    - idx_map[k] 위치에서 LUT 값은 ctrl_vals_256[k]
-    - idx_map[k] ~ idx_map[k+1] 구간은 선형 interpolation
-    - 첫 구간 이전 / 마지막 구간 이후는 양 끝값을 유지
-    """
-    ctrl = np.asarray(ctrl_vals_256, dtype=np.float32)
-    idx  = np.asarray(idx_map,       dtype=np.int32)
+        X_row(g) = [
+            dR_Low, dG_Low, dB_Low,
+            dR_High, dG_High, dB_High,
+            panel_maker(one-hot...),
+            frame_rate,
+            model_year,
+            gray_norm (= g/255),
+            LUT_index_j (mapping_j[g])
+        ]
 
-    if ctrl.shape[0] != 256 or idx.shape[0] != 256:
-        raise ValueError(f"_interp_256_to_4096_with_map: ctrl_len={ctrl.shape[0]}, idx_len={idx.shape[0]} (expected 256)")
+        여기서 dR_Low 등은 VACInputBuilder.prepare_X_delta_lut_with_mapping()
+        에서 bypass LUT 기준 ΔLUT로 계산된 값이라고 가정한다.
+        """
+        delta_lut = X_dict["lut_delta_raw"]   # dict: ch -> (256,) float32 (bypass 기준 ΔLUT)
+        meta      = X_dict["meta"]            # dict: panel_maker(one-hot), frame_rate, model_year
+        j_map     = X_dict["mapping_j"]       # (256,) int32
 
-    n_lut = 4096
-    lut = np.empty(n_lut, dtype=np.float32)
+        row = []
 
-    # 1) 앞/뒤 구간은 양 끝값으로 채움
-    first_i = int(idx[0])
-    last_i  = int(idx[-1])
+        # 1) dLUT 6채널 (Low + High)
+        for ch in ("R_Low", "G_Low", "B_Low", "R_High", "G_High", "B_High"):
+            row.append(float(delta_lut[ch][gray]))
 
-    # 앞쪽
-    if first_i > 0:
-        lut[:first_i] = float(ctrl[0])
+        # 2) panel_maker one-hot
+        row.extend(np.asarray(meta["panel_maker"], dtype=np.float32).tolist())
 
-    # 뒤쪽
-    if last_i < n_lut:
-        lut[last_i:] = float(ctrl[-1])
+        # 3) frame_rate, model_year
+        row.append(float(meta["frame_rate"]))
+        row.append(float(meta["model_year"]))
 
-    # 2) 각 구간 [idx[k], idx[k+1]] 선형 보간
-    for k in range(255):
-        i0 = int(idx[k])
-        i1 = int(idx[k + 1])
-        v0 = float(ctrl[k])
-        v1 = float(ctrl[k + 1])
+        # 4) gray_norm
+        row.append(gray / 255.0)
 
-        if i1 < i0:   # 방어 코드 (정렬 안 되어 있을 경우)
-            i0, i1 = i1, i0
-            v0, v1 = v1, v0
+        # 5) LUT index (mapping)
+        j_idx = int(j_map[gray])  # 0..4095
+        row.append(float(j_idx))
 
-        if i0 == i1:
-            # 같은 인덱스면 그냥 값만 넣고 계속
-            lut[i0] = v0
-            continue
+        return np.asarray(row, dtype=np.float32)
+        
+        
+        
+    def build_XYdataset_for_prediction_Y0(self, pattern: str = "W"):
+        """
+        예측모델(Y0: dCx, dCy, dGamma) 학습용 X, Y0, groups를 생성한다.
 
-        length = i1 - i0
-        # i0 ~ i1 (inclusive) 구간 선형 보간
-        t = np.linspace(0.0, 1.0, length + 1, dtype=np.float32)
-        lut[i0:i1 + 1] = v0 + (v1 - v0) * t
+        - X: bypass 기준 dR/G/B_Low/High + panel meta + gray_norm + LUT index
+        - Y0: pattern(기본 'W') 기준 (target 측정 - bypass 측정) 값
+              "dCx", "dCy", "dGamma" 3개 타깃을 한 번에 반환
 
-    return lut
-
-
-def _generate_predicted_vac_lut(
-    self,
-    vac_dict,
-    *,
-    n_iters: int = 2,
-    wG: float = 0.4,
-    wC: float = 1.0,
-    lambda_ridge: float = 1e-3
-):
-    """
-    Base VAC LUT(vac_dict)을 입력으로 받아,
-    예측 모델(OFF 대비 dCx/dCy/dGamma 예측) + gray별 자코비안 J_g 를 이용해
-    매핑된 256개 컨트롤 포인트에서 High LUT(R/G/B)를 n_iters 회 반복 보정하고,
-    그 사이 12bit index들은 선형 인터폴레이션으로 채워 최종 4096포인트 LUT/JSON을 반환한다.
-    """
-    try:
-        # ------------------------------------------------------------------
-        # 0) LUT index 매핑 & 자코비안 번들 준비
-        # ------------------------------------------------------------------
-        self._load_mapping_index_gray_to_lut()  # _lut_map_high 로드
-        if not hasattr(self, "_lut_map_high") or self._lut_map_high is None:
-            logging.error("[PredictOpt] LUT index mapping (_lut_map_high) not prepared.")
-            return None, None
-
-        if not hasattr(self, "_J_dense") or self._J_dense is None:
-            logging.error("[PredictOpt] J_g bundle (_J_dense) not prepared.")
-            return None, None
-
-        idx_map_R = np.asarray(self._lut_map_high["R"], dtype=np.int32)
-        idx_map_G = np.asarray(self._lut_map_high["G"], dtype=np.int32)
-        idx_map_B = np.asarray(self._lut_map_high["B"], dtype=np.int32)
-
-        # 안전하게 동일 매핑이라고 가정 (다르면 assert)
-        if not (np.array_equal(idx_map_R, idx_map_G) and np.array_equal(idx_map_R, idx_map_B)):
-            logging.warning("[PredictOpt] R/G/B LUT index mappings differ. Using R mapping for all.")
-        idx_map = idx_map_R
-
-        # ------------------------------------------------------------------
-        # 1) 4096 ⇒ 256 컨트롤 포인트 추출 (매핑 index 기준)
-        # ------------------------------------------------------------------
-        R_low_4096 = np.asarray(vac_dict["RchannelLow"],  dtype=np.float32)
-        G_low_4096 = np.asarray(vac_dict["GchannelLow"],  dtype=np.float32)
-        B_low_4096 = np.asarray(vac_dict["BchannelLow"],  dtype=np.float32)
-        R_high_4096 = np.asarray(vac_dict["RchannelHigh"], dtype=np.float32)
-        G_high_4096 = np.asarray(vac_dict["GchannelHigh"], dtype=np.float32)
-        B_high_4096 = np.asarray(vac_dict["BchannelHigh"], dtype=np.float32)
-
-        # 매핑된 256포인트 값들 (예측/보정용 컨트롤 포인트)
-        lut256 = {
-            "R_Low":  R_low_4096[idx_map],
-            "R_High": R_high_4096[idx_map],
-            "G_Low":  G_low_4096[idx_map],
-            "G_High": G_high_4096[idx_map],
-            "B_Low":  B_low_4096[idx_map],
-            "B_High": B_high_4096[idx_map],
-        }
-
-        panel, fr, model_year = self._get_ui_meta()
-
-        # 보정 대상 High LUT (컨트롤 포인트 256개, 12bit 스케일)
-        high_R_ctrl = lut256["R_High"].copy()
-        high_G_ctrl = lut256["G_High"].copy()
-        high_B_ctrl = lut256["B_High"].copy()
-
-        # ------------------------------------------------------------------
-        # 2) 반복 보정 루프 (컨트롤 포인트 기준)
-        # ------------------------------------------------------------------
-        for it in range(1, n_iters + 1):
-            # 2-1) 예측에 사용할 256포인트 LUT를 0~1 스케일로 준비
-            lut256_for_pred = {
-                k: (np.asarray(v, np.float32) / 4095.0)
-                for k, v in {
-                    "R_Low":  lut256["R_Low"],
-                    "G_Low":  lut256["G_Low"],
-                    "B_Low":  lut256["B_Low"],
-                    "R_High": high_R_ctrl,
-                    "G_High": high_G_ctrl,
-                    "B_High": high_B_ctrl,
-                }.items()
+        Returns
+        -------
+        X : np.ndarray (N, D)
+        Y0: dict[str, np.ndarray]
+            {
+              "dCx":    (N,),
+              "dCy":    (N,),
+              "dGamma": (N,),
             }
+        groups : np.ndarray (N,)
+            각 행이 어느 PK에서 왔는지 나타내는 그룹 벡터
+            (GroupKFold / GroupShuffleSplit 등에 사용)
+        """
+        X_rows = []
+        y_dCx  = []
+        y_dCy  = []
+        y_dG   = []
+        groups = []
 
-            # 2-2) VAC OFF 대비 dCx/dCy/dGamma 예측 (컨트롤 포인트 256개 기준)
-            y_pred = self._predict_Y0W_from_models(
-                lut256_for_pred,
-                panel_text=panel,
-                frame_rate=fr,
-                model_year=model_year,
-            )
-            self._debug_dump_predicted_Y0W(
-                y_pred,
-                tag=f"iter{it}_{panel}_fr{int(fr)}_my{int(model_year) % 100:02d}",
-                save_csv=True,
-            )
+        for s in self.samples:
+            pk = s["pk"]
+            Xd = s["X"]  # {"lut_delta_raw":..., "meta":..., "mapping_j":...}
+            Yd = s["Y"]  # {"Y0": {...}, ...}
 
-            # 2-3) Δtarget 벡터 (예측 결과 자체가 dCx/dCy/dGamma)
-            d_targets = {
-                "Cx":    np.asarray(y_pred["Cx"],    dtype=np.float32),
-                "Cy":    np.asarray(y_pred["Cy"],    dtype=np.float32),
-                "Gamma": np.asarray(y_pred["Gamma"], dtype=np.float32),
-            }
+            if "Y0" not in Yd:
+                logging.warning(f"[VACDataset] PK={pk}: Y dict에 'Y0'가 없습니다. 건너뜀.")
+                continue
+            if pattern not in Yd["Y0"]:
+                logging.warning(f"[VACDataset] PK={pk}: Y0에 pattern='{pattern}'가 없습니다. 건너뜀.")
+                continue
 
-            # 2-4) gray별 ΔR/ΔG/ΔB 계산 (컨트롤 포인트에서만)
-            dR_ctrl = np.zeros(256, dtype=np.float32)
-            dG_ctrl = np.zeros(256, dtype=np.float32)
-            dB_ctrl = np.zeros(256, dtype=np.float32)
+            y0 = Yd["Y0"][pattern]   # {"dCx":(256,), "dCy":(256,), "dGamma":(256,)}
 
-            thr_c = 0.003
-            thr_gamma = 0.05
+            vec_cx = np.asarray(y0["dCx"],    dtype=np.float32)
+            vec_cy = np.asarray(y0["dCy"],    dtype=np.float32)
+            vec_g  = np.asarray(y0["dGamma"], dtype=np.float32)
 
             for g in range(256):
-                # 0,1,254,255 등 양 끝단은 Gamma 정의/자코비안 신뢰도 등의 이유로 스킵(필요시 조정)
-                if g < 2 or g > 253:
+                # target이 NaN/inf면 해당 gray는 학습에서 제외
+                if not (np.isfinite(vec_cx[g]) and np.isfinite(vec_cy[g]) and np.isfinite(vec_g[g])):
                     continue
 
-                res = self._solve_delta_rgb_for_gray(
-                    g,
-                    d_targets,
-                    lam=lambda_ridge,
-                    thr_c=thr_c,
-                    thr_gamma=thr_gamma,
-                    base_wCx=wC,
-                    base_wCy=wC,
-                    base_wG=wG,
-                    boost=3.0,
-                    keep=0.2,
-                )
-                if res is None:
-                    continue
+                feat_row = self._build_features_for_gray_pred(X_dict=Xd, gray=g)
+                X_rows.append(feat_row)
+                y_dCx.append(float(vec_cx[g]))
+                y_dCy.append(float(vec_cy[g]))
+                y_dG.append(float(vec_g[g]))
+                groups.append(pk)
 
-                dR, dG, dB, wCx_eff, wCy_eff, wG_eff, step_gain = res
-                dR_ctrl[g] = dR
-                dG_ctrl[g] = dG
-                dB_ctrl[g] = dB
+        if not X_rows:
+            logging.warning("[VACDataset] build_XYdataset_for_prediction_Y0: 유효한 샘플이 없습니다.")
+            X_mat      = np.empty((0, 0), dtype=np.float32)
+            y_cx_vec   = np.empty((0,), dtype=np.float32)
+            y_cy_vec   = np.empty((0,), dtype=np.float32)
+            y_g_vec    = np.empty((0,), dtype=np.float32)
+            groups_arr = np.empty((0,), dtype=np.int64)
+        else:
+            X_mat      = np.vstack(X_rows).astype(np.float32)
+            y_cx_vec   = np.asarray(y_dCx, dtype=np.float32)
+            y_cy_vec   = np.asarray(y_dCy, dtype=np.float32)
+            y_g_vec    = np.asarray(y_dG,  dtype=np.float32)
+            groups_arr = np.asarray(groups, dtype=np.int64)
 
-            # 2-5) 컨트롤 포인트 LUT 갱신 (12bit + 단조성 강제)
-            high_R_ctrl = np.clip(self._enforce_monotone(high_R_ctrl + dR_ctrl), 0, 4095)
-            high_G_ctrl = np.clip(self._enforce_monotone(high_G_ctrl + dG_ctrl), 0, 4095)
-            high_B_ctrl = np.clip(self._enforce_monotone(high_B_ctrl + dB_ctrl), 0, 4095)
-
-            logging.info(
-                f"[PredictOpt(Jg+map)] iter {it} done. "
-                f"(wG={wG}, wC={wC}, λ={lambda_ridge})"
-            )
-
-        # ------------------------------------------------------------------
-        # 3) 컨트롤 포인트(256개) → 4096포인트 LUT 선형 interpolation
-        # ------------------------------------------------------------------
-        R_high_new_4096 = self._interp_256_to_4096_with_map(high_R_ctrl, idx_map)
-        G_high_new_4096 = self._interp_256_to_4096_with_map(high_G_ctrl, idx_map)
-        B_high_new_4096 = self._interp_256_to_4096_with_map(high_B_ctrl, idx_map)
-
-        new_lut_4096 = {
-            "RchannelLow":  R_low_4096,
-            "GchannelLow":  G_low_4096,
-            "BchannelLow":  B_low_4096,
-            "RchannelHigh": R_high_new_4096,
-            "GchannelHigh": G_high_new_4096,
-            "BchannelHigh": B_high_new_4096,
+        Y0 = {
+            "dCx":    y_cx_vec,
+            "dCy":    y_cy_vec,
+            "dGamma": y_g_vec,
         }
-
-        # 정수 0~4095 범위로 정리
-        for k in new_lut_4096:
-            new_lut_4096[k] = np.clip(
-                np.round(new_lut_4096[k]),
-                0, 4095
-            ).astype(np.uint16)
-
-        # ------------------------------------------------------------------
-        # 4) GUI 업데이트 + TV write용 JSON 생성
-        # ------------------------------------------------------------------
-        lut_plot = {
-            "R_Low":  new_lut_4096["RchannelLow"],
-            "R_High": new_lut_4096["RchannelHigh"],
-            "G_Low":  new_lut_4096["GchannelLow"],
-            "G_High": new_lut_4096["GchannelHigh"],
-            "B_Low":  new_lut_4096["BchannelLow"],
-            "B_High": new_lut_4096["BchannelHigh"],
-        }
-        time.sleep(5)
-        self._update_lut_chart_and_table(lut_plot)
-
-        vac_json_optimized = self.build_vacparam_std_format(
-            base_vac_dict=vac_dict,
-            new_lut_tvkeys=new_lut_4096,
-        )
-
-        try:
-            self._step_done(2)
-        except Exception:
-            pass
-
-        return vac_json_optimized, new_lut_4096
-
-    except Exception:
-        logging.exception("[PredictOpt] failed")
-        try:
-            self._step_done(2)
-        except Exception:
-            pass
-        return None, None
-def _generate_predicted_vac_lut(
-    self,
-    vac_dict,
-    *,
-    n_iters: int = 2,
-    wG: float = 0.4,
-    wC: float = 1.0,
-    lambda_ridge: float = 1e-3
-):
-    """
-    Base VAC LUT(vac_dict)을 입력으로 받아,
-    예측 모델(OFF 대비 dCx/dCy/dGamma 예측) + 자코비안 J_g 를 이용해
-    High LUT(R/G/B)를 n_iters 회 반복 보정한 후,
-    4096포인트 LUT와 TV write용 VAC JSON을 생성해서 반환한다.
-
-    Returns
-    -------
-    vac_json_optimized : str or None
-        TV에 write할 VAC JSON (표준 포맷). 실패 시 None.
-    new_lut_4096 : dict or None
-        최종 4096포인트 LUT 딕셔너리. 실패 시 None.
-    """
-    try:
-        # ------------------------------------------------------------------
-        # 1) 4096 → 256 다운샘플 (12bit 스케일 그대로)
-        # ------------------------------------------------------------------
-        lut256 = {
-            "R_Low":  self._down4096_to_256_float(vac_dict["RchannelLow"]),
-            "R_High": self._down4096_to_256_float(vac_dict["RchannelHigh"]),
-            "G_Low":  self._down4096_to_256_float(vac_dict["GchannelLow"]),
-            "G_High": self._down4096_to_256_float(vac_dict["GchannelHigh"]),
-            "B_Low":  self._down4096_to_256_float(vac_dict["BchannelLow"]),
-            "B_High": self._down4096_to_256_float(vac_dict["BchannelHigh"]),
-        }
-
-        # 자코비안 번들이 준비되어 있는지 확인
-        if not hasattr(self, "_J_dense") or self._J_dense is None:
-            logging.error("[PredictOpt] J_g bundle (_J_dense) not prepared.")
-            return None, None
-
-        # 패널 메타데이터 (예측 모델 입력용)
-        panel, fr, model_year = self._get_ui_meta()
-
-        # 보정 대상 High LUT (12bit 스케일, 256포인트)
-        high_R = lut256["R_High"].copy()
-        high_G = lut256["G_High"].copy()
-        high_B = lut256["B_High"].copy()
-
-        # ------------------------------------------------------------------
-        # 2) 반복 보정 루프
-        # ------------------------------------------------------------------
-        for it in range(1, n_iters + 1):
-            # 2-1) 예측에 사용할 LUT를 0~1 스케일로 정규화
-            lut256_for_pred = {
-                k: np.asarray(v, np.float32) / 4095.0
-                for k, v in {
-                    "R_Low":  lut256["R_Low"],
-                    "G_Low":  lut256["G_Low"],
-                    "B_Low":  lut256["B_Low"],
-                    "R_High": high_R,
-                    "G_High": high_G,
-                    "B_High": high_B,
-                }.items()
-            }
-
-            # 2-2) VAC OFF 대비 dCx/dCy/dGamma 예측
-            #      (모델이 이미 ON-OFF 값을 학습했다고 가정)
-            y_pred = self._predict_Y0W_from_models(
-                lut256_for_pred,
-                panel_text=panel,
-                frame_rate=fr,
-                model_year=model_year,
-            )
-            # 디버그용 CSV 덤프 (선택)
-            self._debug_dump_predicted_Y0W(
-                y_pred,
-                tag=f"iter{it}_{panel}_fr{int(fr)}_my{int(model_year) % 100:02d}",
-                save_csv=True,
-            )
-
-            # 2-3) Δtarget 벡터 구성
-            #      예측 결과 자체가 OFF 대비 (dCx, dCy, dGamma)이므로 그대로 사용
-            d_targets = {
-                "Cx":    np.asarray(y_pred["Cx"],    dtype=np.float32),
-                "Cy":    np.asarray(y_pred["Cy"],    dtype=np.float32),
-                "Gamma": np.asarray(y_pred["Gamma"], dtype=np.float32),
-            }
-
-            # 2-4) gray별 ΔR/ΔG/ΔB 계산
-            dR_vec = np.zeros(256, dtype=np.float32)
-            dG_vec = np.zeros(256, dtype=np.float32)
-            dB_vec = np.zeros(256, dtype=np.float32)
-
-            # 스펙 기준값 (가중치 자동 계산용)
-            thr_c = 0.003
-            thr_gamma = 0.05
-
-            for g in range(256):
-                # 양 끝단(0,1,254,255)은 자코비안 신뢰도/감마 정의 문제로 스킵
-                if g < 2 or g > 253:
-                    continue
-
-                res = self._solve_delta_rgb_for_gray(
-                    g,
-                    d_targets,
-                    lam=lambda_ridge,
-                    # NG 정도에 따라 자동 가중치 사용
-                    thr_c=thr_c,
-                    thr_gamma=thr_gamma,
-                    base_wCx=wC,
-                    base_wCy=wC,
-                    base_wG=wG,
-                    boost=3.0,
-                    keep=0.2,
-                )
-                if res is None:
-                    continue
-
-                dR, dG, dB, wCx_eff, wCy_eff, wG_eff, step_gain = res
-                dR_vec[g] = dR
-                dG_vec[g] = dG
-                dB_vec[g] = dB
-
-            # 2-5) LUT 갱신 (12bit 스케일에서 적용 + 단조성 강제 + 클리핑)
-            high_R = np.clip(self._enforce_monotone(high_R + dR_vec), 0, 4095)
-            high_G = np.clip(self._enforce_monotone(high_G + dG_vec), 0, 4095)
-            high_B = np.clip(self._enforce_monotone(high_B + dB_vec), 0, 4095)
-
-            logging.info(
-                f"[PredictOpt(Jg)] iter {it} done. "
-                f"(wG={wG}, wC={wC}, λ={lambda_ridge})"
-            )
-
-        # ------------------------------------------------------------------
-        # 3) 256 → 4096 업샘플 + 최종 LUT/JSON 생성
-        # ------------------------------------------------------------------
-        new_lut_4096 = {
-            "RchannelLow":  np.asarray(vac_dict["RchannelLow"], dtype=np.float32),
-            "GchannelLow":  np.asarray(vac_dict["GchannelLow"], dtype=np.float32),
-            "BchannelLow":  np.asarray(vac_dict["BchannelLow"], dtype=np.float32),
-            "RchannelHigh": self._up256_to_4096(high_R),
-            "GchannelHigh": self._up256_to_4096(high_G),
-            "BchannelHigh": self._up256_to_4096(high_B),
-        }
-
-        # 정수 0~4095 범위로 정리
-        for k in new_lut_4096:
-            new_lut_4096[k] = np.clip(
-                np.round(new_lut_4096[k]), 0, 4095
-            ).astype(np.uint16)
-
-        # GUI 그래프/테이블 업데이트용
-        lut_plot = {
-            "R_Low":  new_lut_4096["RchannelLow"],
-            "R_High": new_lut_4096["RchannelHigh"],
-            "G_Low":  new_lut_4096["GchannelLow"],
-            "G_High": new_lut_4096["GchannelHigh"],
-            "B_Low":  new_lut_4096["BchannelLow"],
-            "B_High": new_lut_4096["BchannelHigh"],
-        }
-        time.sleep(5)
-        self._update_lut_chart_and_table(lut_plot)
-
-        # TV write용 표준 VAC JSON 조립
-        vac_json_optimized = self.build_vacparam_std_format(
-            base_vac_dict=vac_dict,
-            new_lut_tvkeys=new_lut_4096,
-        )
-
-        # Step2 완료 아이콘 업데이트
-        try:
-            self._step_done(2)
-        except Exception:
-            pass
-
-        return vac_json_optimized, new_lut_4096
-
-    except Exception:
-        logging.exception("[PredictOpt] failed")
-        # 실패해도 Step2 로딩 애니는 정리
-        try:
-            self._step_done(2)
-        except Exception:
-            pass
-        return None, None
+        return X_mat, Y0, groups_arr
