@@ -18,7 +18,7 @@ from joblib import parallel_backend
 # src 경로 추가
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from scripts.VAC_dataset import VACDataset
+from src.modeling.VAC_dataset import VACDataset
 
 RANDOM_STATE = 42
 
@@ -137,20 +137,20 @@ def train_Y0_models(dataset, save_dir, patterns=('W','R','G','B')):
     for comp in components:
         print(f"\n=== Train Y0: {comp} ===")
         # 1) 데이터 구축
-        X_all, y_all = dataset.build_per_gray_y0(component=comp, patterns=patterns)  # (PK*|patterns|*256, Dx), (..,)
+        X_all, y_all, groups = dataset.build_per_gray_y0(component=comp, patterns=patterns)  # (PK*|patterns|*256, Dx), (..,)
 
-        # 2) 그룹 벡터 (드롭 前 길이와 동일하게)
-        rows_per_pk = len(patterns) * 256
-        groups_full = []
-        for s in dataset.samples:
-            groups_full.extend([s['pk']] * rows_per_pk)
-        groups_full = np.asarray(groups_full, dtype=np.int64)
+        # # 2) 그룹 벡터 (드롭 前 길이와 동일하게)
+        # rows_per_pk = len(patterns) * 256
+        # groups_full = []
+        # for s in dataset.samples:
+        #     groups_full.extend([s['pk']] * rows_per_pk)
+        # groups_full = np.asarray(groups_full, dtype=np.int64)
 
-        # 3) 라벨 NaN 방어 (드롭 방식 권장)
-        mask = np.isfinite(y_all)  # True=유효
-        X_all = X_all[mask].astype(np.float32)
-        y_all = y_all[mask].astype(np.float32)
-        groups = groups_full[mask]  # ←★ 여기 꼭 같이 마스킹
+        # # 3) 라벨 NaN 방어 (드롭 방식 권장)
+        # mask = np.isfinite(y_all)  # True=유효
+        # X_all = X_all[mask].astype(np.float32)
+        # y_all = y_all[mask].astype(np.float32)
+        # groups = groups_full[mask]  # ←★ 여기 꼭 같이 마스킹
 
         # 4) 학습
         artifacts = train_hybrid_regressor(X_all, y_all, groups, tag=f"Y0-{comp}")
@@ -260,10 +260,10 @@ def main():
     # -------------------------------------------
     # 1) 학습에 사용할 PK 리스트와 bypass PK 설정    
     # -------------------------------------------
-    full_pk_range = list(range(81, 909))
-    exclude_pks = [203, 604, 605, 853, 855, 856] # 학습 제외 PKs
+    full_pk_range = list(range(1411, 2455))
+    exclude_pks = [1934, 2154] # 학습 제외 PKs
     pk_list = [pk for pk in full_pk_range if pk not in exclude_pks]
-    print(f"▶ TEST with {len(pk_list)} PKs: {pk_list}")
+    print(f"▶ TEST with {len(pk_list)} PKs")
 
     # -------------------------------------------
     # 2) 데이터셋 생성
@@ -278,9 +278,9 @@ def main():
     # -------------------------------------------
     # 4) 학습 실행 (Y0 → Y1 → Y2)
     # -------------------------------------------
-    train_Y0_models(dataset, save_dir, patterns=('W','R','G','B'))
+    train_Y0_models(dataset, save_dir, patterns=('W',))
     # train_Y1_model(dataset, save_dir, patterns=('W',), use_full_range=True)
-    train_Y2_model(dataset, save_dir)
+    # train_Y2_model(dataset, save_dir)
 
     print("\n✅ ALL DONE.")
     
