@@ -1,103 +1,93 @@
-    def debug_dump_delta_with_mapping(
-        self,
-        pk: int | None = None,
-        ref_pk: int = 1,
-        verbose_lut: bool = False,
-        preview_grays: list[int] | None = None,
-    ):
+    def compute_Y1_struct(self, patterns=('W',)):
         """
-        ΔLUT(raw, target−ref @ LUT_index_mapping) 를
-        '데이터셋 느낌'으로 요약해서 출력하는 디버그용 메서드.
+        Y[1] detailed: 측면 중계조 표현력 요약
 
-        Parameters
-        ----------
-        pk : int | None
-            target VAC_SET_Info PK (None이면 self.pk 그대로 사용)
-        ref_pk : int
-            reference VAC_SET_Info PK (보통 bypass LUT 세트 PK)
-        verbose_lut : bool
-            True이면 target/ref 원본 LUT 값도 함께 출력 (상세 검증용)
-        preview_grays : list[int] | None
-            테이블로 미리보기할 gray 인덱스 리스트.
-            None이면 [0, 1, 32, 128, 255]를 기본 사용.
-        """
-        import pandas as pd
-        import numpy as np
+        정의:
+        - 측면(예: 60도) Nor.Lv 곡선에서
+          gray=88 ~ 232 구간을 8-gray 간격으로 나눔
+          (88–96, 96–104, ..., 224–232 → 총 18개 구간)
+        - 각 구간에 대해 Nor.Lv vs gray/255 의 기울기
+          slope = ΔNor.Lv / Δ(gray/255) 를 계산
 
-        # pk 지정되면 세트 PK 교체
-        if pk is not None:
-            self.pk = int(pk)
-
-        # 1) ΔLUT + 메타 + 매핑 먼저 생성
-        pack = self.prepare_X_delta_lut_with_mapping(ref_pk=ref_pk)
-        delta = pack["lut_delta_raw"]   # dict[ch] = (256,) float32
-        meta  = pack["meta"]            # panel_maker, frame_rate, model_year
-        j_map = pack["mapping_j"]       # (256,) int32
-
-        print(f"\n[DEBUG] ΔLUT(raw, target−ref @ VAC_SET_Info.PK={ref_pk}) "
-              f"@ mapped indices for VAC_SET_Info.PK={self.pk}")
-
-        # 2) META 요약
-        print("\n[META]")
-        print(f"  panel_maker one-hot: {meta['panel_maker']}")
-        print(f"  frame_rate         : {meta['frame_rate']}")
-        print(f"  model_year         : {meta['model_year']}")
-
-        # 3) MAPPING 요약
-        print("\n[MAPPING] j[0..10] =", j_map[:11].tolist(), "...")
-        print(f"  mapping_j shape = {j_map.shape}, dtype={j_map.dtype}")
-
-        # 4) 각 채널별 shape 정보
-        channels = ['R_Low','R_High','G_Low','G_High','B_Low','B_High']
-        print("\n[ΔLUT SHAPES]")
-        for ch in channels:
-            arr = delta[ch]
-            print(f"  {ch:7s}: shape={arr.shape}, dtype={arr.dtype}, "
-                  f"min={np.nanmin(arr): .1f}, max={np.nanmax(arr): .1f}")
-
-        # 5) Dataset 스타일 미리보기 (몇 개 gray에 대해 행 구성)
-        if preview_grays is None:
-            preview_grays = [0, 1, 32, 128, 255]
-
-        rows = []
-        for g in preview_grays:
-            if not (0 <= g < len(j_map)):
-                continue
-            j = int(j_map[g])
-            row = {
-                "gray": g,
-                "LUT_j": j,
+        return:
+            {
+              'W': (18,),
+              'R': (18,),
+              'G': (18,),
+              'B': (18,)
             }
-            for ch in channels:
-                row[f"d{ch}"] = float(delta[ch][g])
-            rows.append(row)
+        """
 
-        if rows:
-            df_preview = pd.DataFrame(rows)
-            print("\n[PREVIEW] ΔLUT per gray (깊이 있는 Dataset 느낌) :")
-            print(df_preview.to_string(index=False, float_format=lambda x: f"{x: .3f}"))
-        else:
-            print("\n[PREVIEW] no valid rows for preview_grays =", preview_grays)
+        # 60도 GammaLinearity 측정 파라미터 정의 (패턴별)
+        all_params = {
+            "W": "VAC_GammaLinearity_60_W_Gray____",
+            "R": "VAC_GammaLinearity_60_R_Gray____",
+            "G": "VAC_GammaLinearity_60_G_Gray____",
+            "B": "VAC_GammaLinearity_60_B_Gray____",
+        }
+        # 요청된 패턴만 필터
+        patterns = tuple(p for p in patterns if p in all_params)
+        if not patterns:
+            logging.warning("[Y1] No valid patterns requested, returning empty dict.")
+            return {}
 
-        # 6) 원본 4096 LUT와의 일치 여부를 점검하고 싶을 때 (옵션)
-        if verbose_lut:
-            print("\n[VERBOSE] 타깃/레퍼런스 원본 LUT 값까지 검증:")
+        parameters = [all_params[p] for p in patterns]
 
-            lut4096_target = self._load_vacdata_lut4096(self.pk)
-            lut4096_ref    = self._load_vacdata_lut4096(ref_pk)
+        # Nor.Lv 정규화까지 포함해서 불러온다 (normalize_lv_flag=True 기본값 유지)
+        df = self._load_measure_data(
+            self.pk,
+            components=('Lv',),
+            parameters=parameters,
+        )
 
-            for ch in channels:
-                print(f"\n--- {ch} ---")
-                arr = delta[ch]
-                for g in preview_grays:
-                    if 0 <= g < len(arr):
-                        j = int(j_map[g])
-                        tgt_val = float(lut4096_target[ch][j])
-                        ref_val = float(lut4096_ref[ch][j])
-                        diff    = tgt_val - ref_val
-                        print(
-                            f"  gray {g:3d} @ j={j:4d} : "
-                            f"Δ(from pack)={float(arr[g]): .3f}, "
-                            f"target={tgt_val: .3f}, ref={ref_val: .3f}, "
-                            f"target-ref={diff: .3f}"
-                        )
+        L = 256
+        y1 = {}
+
+        # 구간 설정: 88~232, step=8 → 88,96,...,224 (마지막은 224→232)
+        g_start = 88
+        g_end   = 232
+        step    = 8
+        seg_starts = list(range(g_start, g_end, step))  # [88,96,...,224]
+
+        for ptn in patterns:
+            sub = df[(df['Pattern_Window'] == ptn) & (df['Component'] == 'Lv')].copy()
+            sub = sub.sort_values('Gray_Level')
+
+            # Gray_Level → Nor.Lv 매핑
+            lv_dict = dict(
+                zip(
+                    sub['Gray_Level'].astype(int).to_numpy(),
+                    sub['Data'].astype(float).to_numpy()
+                )
+            )
+
+            slopes = []
+            for gs in seg_starts:
+                ge = gs + step
+                if ge > 255:
+                    continue  # 안전장치
+
+                lv_s = lv_dict.get(gs, np.nan)
+                lv_e = lv_dict.get(ge, np.nan)
+
+                if not np.isfinite(lv_s) or not np.isfinite(lv_e):
+                    slope = np.nan
+                else:
+                    gray_s = gs / 255.0
+                    gray_e = ge / 255.0
+                    denom = gray_e - gray_s
+                    if denom <= 0:
+                        slope = np.nan
+                    else:
+                        # ΔNor.Lv / Δ(gray/255)
+                        slope = (lv_e - lv_s) / denom
+
+                slopes.append(slope)
+
+            if not slopes:
+                # 데이터가 너무 부족한 경우 fallback
+                y1[ptn] = np.full(len(seg_starts), np.nan, dtype=np.float32)
+            else:
+                y1[ptn] = np.asarray(slopes, dtype=np.float32)
+
+        return y1
