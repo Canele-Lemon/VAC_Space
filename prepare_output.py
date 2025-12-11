@@ -381,34 +381,90 @@ class VACOutputBuilder:
 
     def compute_Y1_struct(self, patterns=('W',)):
         """
-        Y[1] detailed: 측면 중계조 표현력 (Nor.Lv(gray+1) - Nor.Lv(gray)) / (1/255)
+        Y[1] detailed: 측면 중계조 표현력 (Nor.Lv(gray_end) - Nor.Lv(gray_start)) / ((gray_end-gray_start)/255)
+        
         return:
         *patterns=('W','R','G','B') 선택 시,
-        { 'W': (255,), 'R': (255,), 'G': (255,), 'B': (255,) }
+            {
+              'W': (18,),
+              'R': (18,),
+              'G': (18,),
+              'B': (18,)
+            }
         """
-        parameters = [
+        all_params = [
             "VAC_GammaLinearity_60_W_Gray____",
             "VAC_GammaLinearity_60_R_Gray____",
             "VAC_GammaLinearity_60_G_Gray____",
             "VAC_GammaLinearity_60_B_Gray____"
         ]
+        patterns = tuple(p for p in patterns if p in all_params)
+        if not patterns:
+            logging.warning("[Y1] No valid patterns requested, returning empty dict.")
+            return {}
+        
+        parameters = [all_params[p] for p in patterns]
+        
         df = self._load_measure_data(self.pk, components=('Lv',), parameters=parameters)
         
         L = 256
         y1 = {}
+        
+        # 구간 설정 (18구간)
+        # 88-96, 96-104, 104-112, 112-120, 120-128, 128-136, 136-144, 144-152, 152-160, 160-168,
+        # 168-176, 176-184, 184-192, 192-200, 200-208, 208-216, 216-224, 224-232 
+        g_start = 88
+        g_end = 232
+        step = 8
+        seg_starts = list(range(g_start, g_end, step))  # [88,96,...,224]
+        
         for ptn in patterns:
-            lv = df[(df['Pattern_Window'] == ptn) & (df['Component'] == 'Lv')].sort_values('Gray_Level')['Data'].to_numpy()
-            if lv.size == L:
-                slope = 255.0 * (lv[1:] - lv[:-1])  # (255,)
+            sub = df[(df['Pattern_Window'] == ptn) & (df['Component'] == 'Lv')].copy()
+            sub = sub.sort_values('Gray_Level')
+
+            # Gray_Level → Nor.Lv 매핑
+            lv_dict = dict(
+                zip(
+                    sub['Gray_Level'].astype(int).to_numpy(),
+                    sub['Data'].astype(float).to_numpy()
+                )
+            )
+
+            slopes = []
+            for gs in seg_starts:
+                ge = gs + step
+                if ge > 255:
+                    continue  # 안전장치
+
+                lv_s = lv_dict.get(gs, np.nan)
+                lv_e = lv_dict.get(ge, np.nan)
+
+                if not np.isfinite(lv_s) or not np.isfinite(lv_e):
+                    slope = np.nan
+                else:
+                    gray_s = gs / 255.0
+                    gray_e = ge / 255.0
+                    denom = gray_e - gray_s
+                    if denom <= 0:
+                        slope = np.nan
+                    else:
+                        # ΔNor.Lv / Δ(gray/255)
+                        slope = (lv_e - lv_s) / denom
+
+                slopes.append(slope)
+
+            if not slopes:
+                # 데이터가 너무 부족한 경우 fallback
+                y1[ptn] = np.full(len(seg_starts), np.nan, dtype=np.float32)
             else:
-                slope = np.zeros(L-1, np.float32)
-            y1[ptn] = slope.astype(np.float32)
-            
+                y1[ptn] = np.asarray(slopes, dtype=np.float32)
+
         return y1
 
     def compute_Y2_struct(self):
         """
-        Y[2] detailed: Macbeth 패턴에 대한 정면<->측면 Color Shift Δu`v` = sqrt((u`_60 - u`_0)^2 + (v`_60 - v`_0)^2)
+        Y[2] detailed: Macbeth 패턴에 대한 정면↔측면 Color Shift Δu`v` = sqrt((u`_60 - u`_0)^2 + (v`_60 - v`_0)^2)
+        
         return:
         { 'Red': val, 'Green': val, ..., 'Western': val }  # 12개
         """
@@ -451,17 +507,17 @@ class VACOutputBuilder:
     def prepare_Y(self, add_y0: bool = True, add_y1: bool = True, add_y2: bool = True,
                         y0_patterns=('W', 'R', 'G', 'B'), y1_patterns=('W',)):
         """
-        최종 Y 딕셔너리 병합 반환:
+        병합된 최종 Y 딕셔너리 반환:
         {
           "Y0": { 'W': {'dGamma':(256,), 'dCx':(256,), 'dCy':(256,)}, 
                   'R': {'dGamma':(256,), 'dCx':(256,), 'dCy':(256,)},
                   'G': {'dGamma':(256,), 'dCx':(256,), 'dCy':(256,)},
                   'B': {'dGamma':(256,), 'dCx':(256,), 'dCy':(256,)},
                 }
-          "Y1": { 'W': (255,),
-                  'R': (255,),
-                  'G': (255,),
-                  'B': (255,) 
+          "Y1": { 'W': (18,),
+                  'R': (18,),
+                  'G': (18,),
+                  'B': (18,) 
                 },
           "Y2": { 'Red': val, 
                   ..., 
@@ -480,8 +536,157 @@ class VACOutputBuilder:
             out["Y2"] = self.compute_Y2_struct()
         
         return out
+    
+    def debug_Y0_dataset(
+        self,
+        patterns=('W', 'R', 'G', 'B'),
+        gray_samples=None,
+    ):
+        """
+        Y0 = (target - ref) 의 dGamma/dCx/dCy 를
+        'per-gray dataset' 느낌으로 프리뷰하는 디버그용 메서드.
 
+        parameters
+        ----------
+        patterns : tuple
+            확인할 패턴 목록
+        gray_samples : list[int] | None
+            미리보기할 gray 인덱스 리스트 (None이면 [0,1,32,128,255])
+        """
+        if gray_samples is None:
+            gray_samples = [0, 1, 32, 128, 254, 255]
+
+        print(f"\n[DEBUG Y0] pk={self.pk}, ref_pk={self.ref_pk}, patterns={patterns}")
+
+        y0 = self.compute_Y0_struct(patterns=patterns)
+        if not y0:
+            print("[DEBUG Y0] empty Y0 struct (데이터 없음)")
+            return
+
+        for ptn in patterns:
+            if ptn not in y0:
+                continue
+
+            dG = y0[ptn]['dGamma']  # (256,)
+            dCx = y0[ptn]['dCx']
+            dCy = y0[ptn]['dCy']
+
+            print(f"\n[Pattern {ptn}] shapes: dGamma={dG.shape}, dCx={dCx.shape}, dCy={dCy.shape}")
+
+            rows = []
+            for g in gray_samples:
+                if 0 <= g < len(dG):
+                    rows.append({
+                        "gray": g,
+                        "dGamma": float(dG[g]),
+                        "dCx": float(dCx[g]),
+                        "dCy": float(dCy[g]),
+                    })
+            if rows:
+                df_prev = pd.DataFrame(rows)
+                print(df_prev.to_string(index=False, float_format=lambda x: f"{x: .5f}"))
+            else:
+                print("  (no valid gray samples)")
+                
+    def debug_Y1_dataset(self, patterns=('W',), g_start=88, g_end=232, step=8):
+        """
+        Y1 = 측면 Nor.Lv slope 요약(88~232, interval 8) 을
+        segment index / gray 구간과 함께 DataFrame으로 프리뷰.
+
+        각 패턴에 대해:
+        seg_idx, g_start, g_end, slope
+        """
+        print(f"\n[DEBUG Y1] pk={self.pk}, patterns={patterns}")
+        y1 = self.compute_Y1_struct(patterns=patterns)
+        if not y1:
+            print("[DEBUG Y1] empty Y1 struct (데이터 없음)")
+            return
+
+        seg_starts = list(range(g_start, g_end, step))  # [88, 96, ..., 224]
+
+        for ptn in patterns:
+            if ptn not in y1:
+                continue
+
+            slopes = np.asarray(y1[ptn], dtype=np.float32)
+            print(f"\n[Pattern {ptn}] slopes shape = {slopes.shape}")
+
+            rows = []
+            for idx, gs in enumerate(seg_starts):
+                ge = gs + step
+                if idx >= len(slopes):
+                    break
+                rows.append({
+                    "seg_idx": idx,
+                    "g_start": gs,
+                    "g_end": ge,
+                    "slope": float(slopes[idx]),
+                })
+
+            if rows:
+                df_prev = pd.DataFrame(rows)
+                print(df_prev.to_string(index=False, float_format=lambda x: f"{x: .5f}"))
+            else:
+                print("  (no slope rows)")
+                
+    def debug_Y2_dataset(self):
+        """
+        Y2 (Macbeth 12패턴 Δu'v')를
+        작은 테이블 형태로 프리뷰.
+        """
+        print(f"\n[DEBUG Y2] pk={self.pk}")
+        y2 = self.compute_Y2_struct()
+        if not y2:
+            print("[DEBUG Y2] empty Y2 struct (데이터 없음)")
+            return
+
+        rows = []
+        for name, val in y2.items():
+            rows.append({"Macbeth": name, "delta_uv": float(val)})
+
+        df_prev = pd.DataFrame(rows)
+        print(df_prev.to_string(index=False, float_format=lambda x: f"{x: .5f}"))
+        
+    def debug_full_Y_dataset(
+        self,
+        y0_patterns=('W', 'R', 'G', 'B'),
+        y1_patterns=('W',),
+        gray_samples_Y0=None,
+    ):
+        """
+        Y0/Y1/Y2 전체를 'Dataset 느낌'으로 한 번에 프리뷰하는 헬퍼.
+
+        - Y0: 패턴별 dGamma/dCx/dCy @ selected grays
+        - Y1: 패턴별 88~232 slope segments
+        - Y2: Macbeth delta_uv 테이블
+        """
+        print(f"\n============================")
+        print(f"[DEBUG FULL Y] pk={self.pk}, ref_pk={self.ref_pk}")
+        print(f"============================")
+
+        # Y0
+        self.debug_Y0_dataset(patterns=y0_patterns, gray_samples=gray_samples_Y0)
+
+        # Y1
+        self.debug_Y1_dataset(patterns=y1_patterns)
+
+        # Y2
+        self.debug_Y2_dataset()
+            
 if __name__ == "__main__":
-    pk_list = list(range(2775, 2777))
-    builder = VACOutputBuilder(pk=pk_list[0], ref_pk=pk_list[1])
-    builder.load_multiple_pk_data_with_chart(pk_list)
+    TARGET_PK = 3008
+    BYPASS_PK = 3007
+        
+    builder = VACOutputBuilder(pk=TARGET_PK, ref_pk=BYPASS_PK)
+    builder.debug_full_Y_dataset(
+        y0_patterns=('W',),
+        y1_patterns=('W',),
+    )
+
+
+이렇게 하고 실행했는데 
+[DEBUG Y1] pk=3008, patterns=('W',)
+WARNING:root:[Y1] No valid patterns requested, returning empty dict.
+[DEBUG Y1] empty Y1 struct (데이터 없음)
+
+데이터가 있는데 데이터가 없다고 나오네요
