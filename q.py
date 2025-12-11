@@ -1,37 +1,212 @@
-INFO:root:[VACDataset] Use_Flag='N' 으로 제외된 PK가 없습니다.
-X_dG shape: (253, 15)
-y_dG shape: (253,)
-groups shape: (253,)
+    def _build_XY0(
+        self,
+        component: str = "dGamma",
+        channels=('R_Low','R_High','G_Low','G_High','B_Low','B_High'),
+        patterns=('W',),
+        exclude_gray_for_cxcy=(0, 5),   # ✅ 추가: dCx/dCy일 때 제외할 gray 범위
+    ):
+        """
+        Y0 예측용(X→ΔGamma/ΔCx/ΔCy) per-gray 데이터셋.
+        - X: ΔLUT(지정 채널) + meta + gray_norm + LUT index
+        - y: 선택한 component (ΔGamma/ΔCx/ΔCy), 지정된 패턴들(W/R/G/B)
+        """
+        assert component in ('dGamma', 'dCx', 'dCy')
 
-[PREVIEW] Y0-dGamma XY dataset (first rows)
-     dR_Low     dR_High      dG_Low     dG_High      dB_Low     dB_High   panel_0   panel_1   panel_2   panel_3   panel_4  frame_rate  model_year  gray_norm       LUT_j         y  pk_group
- -14.000000    7.000000  -14.000000    7.000000  -14.000000    7.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.007843   16.000000  0.000133      3008
- -31.000000   15.000000  -31.000000   15.000000  -31.000000   15.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.011765   36.000000  0.156166      3008
- -45.000000   22.000000  -45.000000   22.000000  -45.000000   22.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.015686   52.000000 -0.097431      3008
- -63.000000   30.000000  -63.000000   30.000000  -63.000000   30.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.019608   72.000000  0.000164      3008
- -80.000000   39.000000  -80.000000   39.000000  -80.000000   39.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.023529   92.000000  0.000171      3008
- -98.000000   47.000000  -98.000000   47.000000  -98.000000   47.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.027451  112.000000 -0.019011      3008
- -98.000000   47.000000  -98.000000   47.000000  -98.000000   47.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.031373  112.000000 -0.019744      3008
--112.000000   54.000000 -112.000000   54.000000 -112.000000   54.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.035294  128.000000 -0.028309      3008
--130.000000   62.000000 -130.000000   62.000000 -130.000000   62.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.039216  148.000000 -0.021104      3008
--148.000000   70.000000 -148.000000   70.000000 -148.000000   70.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.043137  168.000000 -0.016113      3008
--162.000000   77.000000 -162.000000   77.000000 -162.000000   77.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.047059  184.000000  0.000210      3008
--181.000000   85.000000 -181.000000   85.000000 -181.000000   85.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.050980  204.000000  0.011233      3008
--199.000000   93.000000 -199.000000   93.000000 -199.000000   93.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.054902  224.000000  0.004847      3008
--211.000000  100.000000 -211.000000  100.000000 -211.000000  100.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.058824  240.000000  0.008532      3008
--211.000000  100.000000 -211.000000  100.000000 -211.000000  100.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.062745  240.000000  0.008731      3008
--230.000000  108.000000 -230.000000  108.000000 -230.000000  108.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.066667  260.000000  0.003875      3008
--247.000000  116.000000 -247.000000  116.000000 -247.000000  116.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.070588  279.000000  0.016162      3008
--261.000000  123.000000 -261.000000  123.000000 -261.000000  123.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.074510  295.000000  0.014781      3008
--278.000000  131.000000 -278.000000  131.000000 -278.000000  131.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.078431  314.000000  0.015762      3008
--297.000000  140.000000 -297.000000  140.000000 -297.000000  140.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.082353  334.000000  0.014150      3008
--308.000000  146.000000 -308.000000  146.000000 -308.000000  146.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.086275  349.000000  0.013289      3008
--308.000000  146.000000 -308.000000  146.000000 -308.000000  146.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.090196  349.000000  0.013534      3008
--325.000000  154.000000 -325.000000  154.000000 -325.000000  154.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.094118  368.000000  0.016242      3008
--344.000000  163.000000 -344.000000  163.000000 -344.000000  163.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.098039  388.000000  0.013077      3008
--357.000000  169.000000 -357.000000  169.000000 -357.000000  169.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.101961  403.000000  0.014023      3008
--375.000000  177.000000 -375.000000  177.000000 -375.000000  177.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.105882  423.000000  0.019444      3008
--393.000000  186.000000 -393.000000  186.000000 -393.000000  186.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.109804  443.000000  0.019494      3008
--407.000000  193.000000 -407.000000  193.000000 -407.000000  193.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.113725  459.000000  0.017025      3008
--424.000000  201.000000 -424.000000  201.000000 -424.000000  201.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.117647  479.000000  0.015965      3008
--424.000000  201.000000 -424.000000  201.000000 -424.000000  201.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.121569  479.000000  0.017563      3008
+        g_ex0, g_ex1 = exclude_gray_for_cxcy
+
+        X_rows, y_vals, groups = [], [], []
+
+        for s in self.samples:
+            pk  = s["pk"]
+            Xd  = s["X"]
+            Yd  = s["Y"]
+
+            for p in patterns:
+                if "Y0" not in Yd or p not in Yd["Y0"]:
+                    continue
+
+                y_vec = Yd["Y0"][p][component]  # (256,)
+                for g in range(256):
+
+                    # ✅ Cx/Cy는 0~5 gray 제외
+                    if component in ("dCx", "dCy") and (g_ex0 <= g <= g_ex1):
+                        continue
+
+                    y_val = y_vec[g]
+                    if not np.isfinite(y_val):
+                        continue
+
+                    feat_row = self._build_features_for_gray(
+                        X_dict=Xd,
+                        gray=g,
+                        channels=channels,
+                    )
+                    X_rows.append(feat_row)
+                    y_vals.append(float(y_val))
+                    groups.append(pk)
+
+        X_mat = np.vstack(X_rows).astype(np.float32) if X_rows else np.empty((0,0), np.float32)
+        y_vec = np.asarray(y_vals, dtype=np.float32)
+        groups = np.asarray(groups, dtype=np.int64)
+        return X_mat, y_vec, groups
+     
+    def _build_XY1(
+        self,
+        channels=('R_Low','R_High','G_Low','G_High','B_Low','B_High'),
+        patterns=('W',),
+        g_start=88, g_end=232, step=8,
+    ):
+        """
+        Y1 예측용(X→slope segment) per-segment 데이터셋.
+        - y: Y1 slope (segment별)
+        - X: 해당 segment의 중앙 gray에서의 ΔRGB Low/High(지정 채널) + meta + gray_norm + LUT_j
+        """
+        seg_starts = list(range(g_start, g_end, step))  # [88,96,...,224] => 18개
+        centers = [(gs + (gs + step)) // 2 for gs in seg_starts]  # [92,100,...,228]
+
+        X_rows, y_vals, groups = [], [], []
+
+        for s in self.samples:
+            pk  = s["pk"]
+            Xd  = s["X"]
+            Yd  = s["Y"]
+
+            if "Y1" not in Yd:
+                continue
+
+            for p in patterns:
+                if p not in Yd["Y1"]:
+                    continue
+
+                slopes = np.asarray(Yd["Y1"][p], dtype=np.float32)  # (18,)
+                n_seg = min(len(slopes), len(centers))
+
+                for i in range(n_seg):
+                    y_val = slopes[i]
+                    if not np.isfinite(y_val):
+                        continue
+
+                    cgray = int(centers[i])
+                    if not (0 <= cgray <= 255):
+                        continue
+
+                    feat_row = self._build_features_for_gray(
+                        X_dict=Xd,
+                        gray=cgray,
+                        channels=channels
+                    )
+                    X_rows.append(feat_row)
+                    y_vals.append(float(y_val))
+                    groups.append(pk)
+
+        X_mat = np.vstack(X_rows).astype(np.float32) if X_rows else np.empty((0,0), np.float32)
+        y_vec = np.asarray(y_vals, dtype=np.float32)
+        groups = np.asarray(groups, dtype=np.int64)
+        return X_mat, y_vec, groups
+     
+def _build_XY2(
+    self,
+    channels=('R_Low','R_High','G_Low','G_High','B_Low','B_High'),
+    include_meta: bool = True,
+    gray_map=None,
+    y_patterns=('Darkskin','Lightskin','Asian','Western'),
+):
+    """
+    Y2 예측용 (pk당 1행) 데이터셋.
+    X: (지정 패턴별) (지정 gray 3개)에서의 ΔLUT[ch]를 펼친 벡터 + (선택)meta
+    y: [Darkskin, Lightskin, Asian, Western] Δu'v' (Y2 값)
+
+    Returns
+    -------
+    X_mat : (N, F)
+    y_mat : (N, 4)
+    groups: (N,)  # pk
+    feature_names : list[str]  # 디버그/CSV용
+    """
+    if gray_map is None:
+        gray_map = {
+            "Darkskin":  [116, 80, 66],
+            "Lightskin": [196, 150, 129],
+            "Asian":     [196, 147, 118],
+            "Western":   [183, 130, 93],
+        }
+
+    # feature name 만들기
+    feature_names = []
+    for ptn in y_patterns:
+        gs = gray_map[ptn]
+        for g in gs:
+            for ch in channels:
+                feature_names.append(f"{ptn}_g{g}_d{ch}")
+
+    # meta feature name
+    panel_dim = None
+    if include_meta and self.samples:
+        panel_dim = len(self.samples[0]["X"]["meta"]["panel_maker"])
+        feature_names += [f"panel_{i}" for i in range(panel_dim)] + ["frame_rate", "model_year"]
+
+    X_rows, y_rows, groups = [], [], []
+
+    for s in self.samples:
+        pk = s["pk"]
+        Xd = s["X"]  # {"lut_delta_raw":..., "meta":..., "mapping_j":...}
+        Yd = s["Y"]  # {"Y0":..., "Y1":..., "Y2":...}
+
+        # ---- y 구성 (4개) ----
+        if "Y2" not in Yd:
+            continue
+        y2 = Yd["Y2"]
+
+        y_vec = []
+        valid_y = True
+        for ptn in y_patterns:
+            v = y2.get(ptn, np.nan)
+            if not np.isfinite(v):
+                valid_y = False
+                break
+            y_vec.append(float(v))
+        if not valid_y:
+            continue
+
+        # ---- X 구성 (72개 + meta) ----
+        delta_lut = Xd["lut_delta_raw"]
+        meta = Xd["meta"]
+
+        row = []
+        valid_x = True
+
+        for ptn in y_patterns:
+            for g in gray_map[ptn]:
+                if not (0 <= g < 256):
+                    valid_x = False
+                    break
+                for ch in channels:
+                    v = delta_lut.get(ch, None)
+                    if v is None:
+                        valid_x = False
+                        break
+                    val = float(v[g])
+                    if not np.isfinite(val):
+                        valid_x = False
+                        break
+                    row.append(val)
+            if not valid_x:
+                break
+
+        if not valid_x:
+            continue
+
+        if include_meta:
+            row.extend(np.asarray(meta["panel_maker"], dtype=np.float32).tolist())
+            row.append(float(meta["frame_rate"]))
+            row.append(float(meta["model_year"]))
+
+        X_rows.append(np.asarray(row, dtype=np.float32))
+        y_rows.append(np.asarray(y_vec, dtype=np.float32))
+        groups.append(pk)
+
+    X_mat = np.vstack(X_rows).astype(np.float32) if X_rows else np.empty((0,0), np.float32)
+    y_mat = np.vstack(y_rows).astype(np.float32) if y_rows else np.empty((0,0), np.float32)
+    groups = np.asarray(groups, dtype=np.int64)
+
+    return X_mat, y_mat, groups, feature_names
