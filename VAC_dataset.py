@@ -1,180 +1,88 @@
-# VAC_dataset.py
-import sys
-import os
-import logging
-import numpy as np
-import pandas as pd
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-
-from torch.utils.data import Dataset
-from src.data_preparation.prepare_input import VACInputBuilder
-from src.data_preparation.prepare_output import VACOutputBuilder
-from config.db_config import engine
-
-logging.basicConfig(level=logging.DEBUG)
-
-MEASUREMENT_INFO_TABLE = "W_VAC_SET_Info"
-
 class VACDataset(Dataset):
     def __init__(self, pk_list, ref_pk=2582, drop_use_flag_N: bool = True):
-
         self.pk_list_all = list(pk_list)
         self.ref_pk = int(ref_pk)
-        
+
         if drop_use_flag_N:
             self.pk_list = self._filter_by_use_flag(self.pk_list_all)
         else:
             self.pk_list = list(pk_list)
-            
+
         if not self.pk_list:
             logging.warning("[VACDataset] 유효한 pk_list가 비어 있습니다.")
-            
+
         self.samples = []
         self._collect()
-        
-    def _filter_by_use_flag(self, pk_list):
-        if not pk_list:
-            return []
-        
-        pk_str = ",".join(str(int(pk)) for pk in pk_list)
-        
-        query = f"""
-        SELECT `PK`, `Use_Flag`
-        FROM `{MEASUREMENT_INFO_TABLE}`
-        WHERE `PK` IN ({pk_str})
-        """
-        df = pd.read_sql(query, engine)
-        
-        if df.empty:
-            logging.warning("[VACDataset] Use_Flag 조회 결과가 비었습니다. 입력 pk_list 전체를 사용합니다.")
-            return pk_list
-        
-        valid = df[df["Use_Flag"] != "N"]["PK"].astype(int).tolist()
-        dropped = sorted(set(pk_list) - set(valid))
-        
-        if dropped:
-            logging.info(f"[VACDataset] Use_Flag='N' 이라 제외된 PK: {dropped}")
-        else:
-            logging.info(f"[VACDataset] Use_Flag='N' 으로 제외된 PK가 없습니다.")
-            
-        return valid
 
-    def _collect(self):
-        for pk in self.pk_list:
-            x_builder = VACInputBuilder(pk)
-            # X = raw ΔLUT @ CSV 매핑 인덱스 (정규화 없음)
-            X = x_builder.prepare_X_delta_lut_with_mapping(ref_pk=self.ref_pk)
-
-            # 참조 PK를 동일하게 써서 ΔY0 계산
-            y_builder = VACOutputBuilder(pk, ref_pk=self.ref_pk)
-            Y = y_builder.prepare_Y(y1_patterns=('W',))  # Y0만 써도 되지만 구조 유지
-
-            self.samples.append({"pk": pk, "X": X, "Y": Y})
-
+    # -----------------------------
+    # 공용 feature builder (meta 항상 포함)
+    # -----------------------------
     def _build_features_for_gray(self, X_dict, gray: int, channels) -> np.ndarray:
-        """
-        한 행(feature) 구성:
-        [ΔR_High, ΔG_High, ΔB_High, panel_maker(one-hot), frame_rate, model_year, gray_norm(=g/255), LUT_index_j(g)]
+        delta_lut = X_dict["lut_delta_raw"]  # dict: ch -> (256,)
+        meta      = X_dict["meta"]
+        j_map     = X_dict["mapping_j"]      # (256,)
 
-        - ΔR_High, ΔG_High, ΔB_High: LUT index 매핑 포인트 기준 (LUT 값)-(ref LUT 값). normalize 안함!
-        - panel_maker(one-hot), frame_rate, model_year: meta에서 그대로 가져옵니다.
-        - LUT_index_j: mapping_j[gray] (0..4095), raw 그대로
-        """
-        # 1) 소스 참조
-        delta_lut = X_dict["lut_delta_raw"]   # dict: ch -> (256,) float32 (raw delta at mapped indices)
-        meta      = X_dict["meta"]            # dict: panel_maker(one-hot), frame_rate, model_year
-        j_map     = X_dict["mapping_j"]       # (256,) int32, gray -> LUT index(0..4095)
-
-        # 2) 채널 부분: 지정된 feature_channels만 사용 (보통 High 3채널)
         row = []
+        # LUT delta
         for ch in channels:
-            row.append(float(delta_lut[ch][gray]))   # raw delta (정규화 없음)
+            row.append(float(delta_lut[ch][gray]))
 
-        # 3) 메타 부착
+        # meta (always)
         row.extend(np.asarray(meta["panel_maker"], dtype=np.float32).tolist())
         row.append(float(meta["frame_rate"]))
         row.append(float(meta["model_year"]))
 
-        # 4) gray 위치 정보
-        row.append(gray / 255.0)                    # gray_norm
-
-        # 5) LUT 물리 인덱스(매핑) 정보
-        j_idx = int(j_map[gray])                    # 0..4095, raw
-        row.append(float(j_idx))
+        # gray info
+        row.append(gray / 255.0)
+        row.append(float(int(j_map[gray])))
 
         return np.asarray(row, dtype=np.float32)
 
-    def _build_XY0_for_jacobian_g(self, component='dGamma'):
-        """
-        - X: raw ΔLUT(High 3채널) + meta + gray_norm + LUT index
-        - y: dGamma / dCx / dCy (White 패턴, target - ref)
-        """
-        assert component in ('dGamma','dCx','dCy')
+    def _build_pattern_onehot(self, pattern: str, pattern_order) -> np.ndarray:
+        v = np.zeros(len(pattern_order), dtype=np.float32)
+        if pattern in pattern_order:
+            v[pattern_order.index(pattern)] = 1.0
+        return v
 
-        jac_channels = ('R_High', 'G_High', 'B_High')
-        
-        X_rows, y_vals, groups = [], [], []
-
-        for s in self.samples:
-            pk  = s["pk"]
-            Xd  = s["X"]  # {"lut_delta_raw":..., "meta":..., "mapping_j":...}
-            Yd  = s["Y"]  # {"Y0": {...}, ...}
-
-            p = 'W'
-            y_vec = Yd['Y0'][p][component]  # (256,)
-            for g in range(256):
-                y_val = y_vec[g]
-                if not np.isfinite(y_val):
-                    continue
-                feat_row = self._build_features_for_gray(
-                    X_dict=Xd, 
-                    gray=g,
-                    channels=jac_channels
-                )
-                X_rows.append(feat_row)
-                y_vals.append(float(y_val))
-                groups.append(pk)
-
-        X_mat = np.vstack(X_rows).astype(np.float32) if X_rows else np.empty((0,0), np.float32)
-        y_vec = np.asarray(y_vals, dtype=np.float32)
-        groups = np.asarray(groups, dtype=np.int64)
-        return X_mat, y_vec, groups
-    
+    # -----------------------------
+    # Y0 per-gray (dCx/dCy는 0~5 gray 제외)
+    # -----------------------------
     def _build_XY0(
         self,
         component: str = "dGamma",
         channels=('R_Low','R_High','G_Low','G_High','B_Low','B_High'),
         patterns=('W',),
+        drop_gray_for_cxcy: int = 6,   # 0~5 제거하려면 6
     ):
-        """
-        Y0 예측용(X→ΔGamma/ΔCx/ΔCy) per-gray 데이터셋.
-        - X: ΔLUT(지정 채널) + meta + gray_norm + LUT index
-        - y: 선택한 component (ΔGamma/ΔCx/ΔCy), 지정된 패턴들(W/R/G/B)
-        """
-        assert component in ('dGamma', 'dCx', 'dCy')
+        assert component in ("dGamma", "dCx", "dCy")
 
         X_rows, y_vals, groups = [], [], []
+        gray_start = drop_gray_for_cxcy if component in ("dCx","dCy") else 0
 
         for s in self.samples:
-            pk  = s["pk"]
-            Xd  = s["X"]  # {"lut_delta_raw":..., "meta":..., "mapping_j":...}
-            Yd  = s["Y"]  # {"Y0": {...}, "Y1": {...}, "Y2": {...}}
+            pk = s["pk"]
+            Xd = s["X"]
+            Yd = s["Y"]
+
+            if "Y0" not in Yd:
+                continue
 
             for p in patterns:
-                if "Y0" not in Yd or p not in Yd["Y0"]:
+                if p not in Yd["Y0"]:
                     continue
+
                 y_vec = Yd["Y0"][p][component]  # (256,)
-                for g in range(256):
+                for g in range(gray_start, 256):
                     y_val = y_vec[g]
                     if not np.isfinite(y_val):
                         continue
-                    feat_row = self._build_features_for_gray(
-                        X_dict=Xd,
-                        gray=g,
-                        channels=channels,
-                    )
-                    X_rows.append(feat_row)
+
+                    feat = self._build_features_for_gray(Xd, g, channels)
+                    # (선택) 패턴 one-hot을 Y0에도 붙이고 싶으면 아래 두 줄 사용
+                    # pat_oh = self._build_pattern_onehot(p, pattern_order=list(patterns))
+                    # feat = np.concatenate([feat, pat_oh], axis=0)
+
+                    X_rows.append(feat)
                     y_vals.append(float(y_val))
                     groups.append(pk)
 
@@ -182,7 +90,145 @@ class VACDataset(Dataset):
         y_vec = np.asarray(y_vals, dtype=np.float32)
         groups = np.asarray(groups, dtype=np.int64)
         return X_mat, y_vec, groups
-    
+
+    # -----------------------------
+    # Y1 per-segment (중앙 gray에서 X 뽑기)
+    # -----------------------------
+    def _build_XY1(
+        self,
+        channels=('R_Low','R_High','G_Low','G_High','B_Low','B_High'),
+        patterns=('W',),
+        g_start=88,
+        g_end=232,
+        step=8,
+    ):
+        """
+        - pk당 pattern당 18행
+        - segment: 88-96, ..., 224-232
+        - X: 중앙 gray = gs + step//2 (92,100,...) 의 ΔLUT + meta + gray_norm + LUT_j
+        - y: 해당 segment slope (compute_Y1_struct에서 이미 abs 처리해둔 상태)
+        """
+        seg_starts = list(range(g_start, g_end, step))  # [88..224]
+        mid_grays = [gs + (step // 2) for gs in seg_starts]  # [92,100,...,228] (18개)
+
+        X_rows, y_vals, groups = [], [], []
+
+        for s in self.samples:
+            pk = s["pk"]
+            Xd = s["X"]
+            Yd = s["Y"]
+
+            if "Y1" not in Yd:
+                continue
+
+            for p in patterns:
+                if p not in Yd["Y1"]:
+                    continue
+                slopes = np.asarray(Yd["Y1"][p], dtype=np.float32)  # (18,)
+
+                for i, gmid in enumerate(mid_grays):
+                    if i >= len(slopes):
+                        break
+                    y_val = slopes[i]
+                    if not np.isfinite(y_val):
+                        continue
+
+                    feat = self._build_features_for_gray(Xd, int(gmid), channels)
+                    # 필요하면 패턴 one-hot도 붙일 수 있음(기본은 W만 쓴다 가정)
+                    X_rows.append(feat)
+                    y_vals.append(float(y_val))
+                    groups.append(pk)
+
+        X_mat = np.vstack(X_rows).astype(np.float32) if X_rows else np.empty((0,0), np.float32)
+        y_vec = np.asarray(y_vals, dtype=np.float32)
+        groups = np.asarray(groups, dtype=np.int64)
+        return X_mat, y_vec, groups
+
+    # -----------------------------
+    # Y2 (B안): pk당 4행, pattern one-hot 포함
+    # -----------------------------
+    def _build_XY2(
+        self,
+        channels=('R_Low','R_High','G_Low','G_High','B_Low','B_High'),
+        patterns=("Darkskin", "Lightskin", "Asian", "Western"),
+        gray_triplets=None,
+        add_gray_loc_features: bool = True,  # 각 선택 gray의 (gray_norm, LUT_j)도 붙일지
+    ):
+        """
+        B안:
+        - 한 pk에서 4행 생성(4패턴)
+        - 각 행 X는 '그 패턴에 해당하는 3개 gray'에서의 ΔLUT을 concat
+        - y는 해당 패턴의 delta_uv (스칼라)
+        - meta 항상 포함
+        - pattern one-hot 항상 포함
+        """
+
+        if gray_triplets is None:
+            gray_triplets = {
+                "Darkskin":  (116, 80, 66),
+                "Lightskin": (196, 150, 129),
+                "Asian":     (196, 147, 118),
+                "Western":   (183, 130, 93),
+            }
+
+        pattern_order = list(patterns)
+
+        X_rows, y_vals, groups = [], [], []
+
+        for s in self.samples:
+            pk = s["pk"]
+            Xd = s["X"]
+            Yd = s["Y"]
+
+            if "Y2" not in Yd:
+                continue
+
+            for p in patterns:
+                if p not in Yd["Y2"]:
+                    continue
+
+                y_val = float(Yd["Y2"][p])
+                if not np.isfinite(y_val):
+                    continue
+
+                gs = gray_triplets.get(p, None)
+                if gs is None:
+                    continue
+
+                # --- X 구성: (g1 LUT feats) + (g2 LUT feats) + (g3 LUT feats) + meta + pattern onehot ---
+                feats = []
+
+                for g in gs:
+                    g = int(g)
+                    # LUT delta
+                    for ch in channels:
+                        feats.append(float(Xd["lut_delta_raw"][ch][g]))
+
+                    if add_gray_loc_features:
+                        feats.append(g / 255.0)
+                        feats.append(float(int(Xd["mapping_j"][g])))
+
+                # meta 항상 포함
+                meta = Xd["meta"]
+                feats.extend(np.asarray(meta["panel_maker"], dtype=np.float32).tolist())
+                feats.append(float(meta["frame_rate"]))
+                feats.append(float(meta["model_year"]))
+
+                # pattern one-hot 항상 포함
+                feats.extend(self._build_pattern_onehot(p, pattern_order).tolist())
+
+                X_rows.append(np.asarray(feats, dtype=np.float32))
+                y_vals.append(y_val)
+                groups.append(pk)
+
+        X_mat = np.vstack(X_rows).astype(np.float32) if X_rows else np.empty((0,0), np.float32)
+        y_vec = np.asarray(y_vals, dtype=np.float32)
+        groups = np.asarray(groups, dtype=np.int64)
+        return X_mat, y_vec, groups
+
+    # -----------------------------
+    # 통합 엔트리
+    # -----------------------------
     def build_XY_dataset(
         self,
         target: str,
@@ -190,97 +236,24 @@ class VACDataset(Dataset):
         channels=None,
         patterns=('W',),
     ):
-        """
-        통합 XY 데이터셋 빌더.
+        t = target.lower()
 
-        Parameters
-        ----------
-        target : {'Y0', 'Y1', 'Y2', 'jacobian'}
-            어떤 타겟을 예측할지 선택.
-        component : str | None
-            - target='Y0' 또는 'jacobian' 일 때: {'dGamma','dCx','dCy'}
-            - target='Y1','Y2' 에서는 사용 안 함(또는 향후 확장 용도).
-        channels : tuple[str] | None
-            X에 사용할 LUT 채널 리스트.
-            - target='jacobian' 인 경우: None이면 ('R_High','G_High','B_High')
-            - target='Y0' 인 경우: None이면 ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
-        patterns : tuple[str]
-            사용할 패턴 (지금은 보통 ('W',) 로 쓰는 걸 가정)
-
-        Returns
-        -------
-        X_mat : np.ndarray
-        y_vec : np.ndarray
-        groups : np.ndarray
-        """
-        target = target.lower()
-
-        if target == "jacobian":
-            # 자코비안: High 3채널 고정, 기존 메서드 재사용
-            if component is None:
-                component = "dGamma"
-            return self._build_XY0_for_jacobian_g(component=component)
-
-        if target == "y0":
+        if t == "y0":
             if component is None:
                 raise ValueError("target='Y0'일 때 component('dGamma','dCx','dCy')가 필요합니다.")
             if channels is None:
                 channels = ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
             return self._build_XY0(component=component, channels=channels, patterns=patterns)
 
-        if target == "y1":
+        if t == "y1":
             if channels is None:
                 channels = ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
             return self._build_XY1(channels=channels, patterns=patterns)
 
-        if target == "y2":
+        if t == "y2":
             if channels is None:
                 channels = ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
-            return self._build_XY2(channels=channels)
+            # 여기서 patterns를 ('Darkskin','Lightskin','Asian','Western') 로 넘기면 pk당 4행
+            return self._build_XY2(channels=channels, patterns=patterns)
 
-        raise ValueError(f"Unknown target='{target}'. (지원: 'jacobian','Y0','Y1','Y2')")
-
-if __name__ == "__main__":
-    pk_list = [3008]
-    BYPASS_PK = 3007
-    
-    dataset = VACDataset(pk_list=pk_list, ref_pk=BYPASS_PK)
-    
-    channels = ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
-    
-    X_dG, y_dG, grp_dG = dataset.build_XY_dataset(
-        target="Y0",
-        component="dGamma",
-        channels=channels,
-        patterns=('W',),
-    )
-    
-    print("X_dG shape:", X_dG.shape)
-    print("y_dG shape:", y_dG.shape)
-    print("groups shape:", grp_dG.shape)
-    
-    # -------- 앞 몇 행만 'dataset 느낌'으로 보기 --------
-    n_preview = min(30, X_dG.shape[0])  # 30행까지만
-
-    # panel_maker one-hot 길이 가져오기 (첫 샘플 meta 이용)
-    first_meta = dataset.samples[0]["X"]["meta"]
-    panel_dim = len(first_meta["panel_maker"])
-
-    feature_names = (
-        [f"d{ch}" for ch in channels] +              # ΔLUT (Low/High 6채널)
-        [f"panel_{i}" for i in range(panel_dim)] +   # panel maker one-hot
-        ["frame_rate", "model_year", "gray_norm", "LUT_j"]
-    )
-
-    df = pd.DataFrame(X_dG[:n_preview, :], columns=feature_names)
-    df["y"] = y_dG[:n_preview]
-    df["pk_group"] = grp_dG[:n_preview]
-
-    # 예쁘게 출력
-    print("\n[PREVIEW] Y0-dGamma XY dataset (first rows)")
-    print(df.to_string(index=False, float_format=lambda x: f"{x: .6f}"))
-
-
-네 그러면 dCx, dCy 데이터셋은 0~5 gray는 학습에서 제외할 수 있도록 위 코드를 수정해주시고 _build_XY1과 _build_XY2는 다음과 같은 조건으로 만들게요.
-_build_XY1: per-segment이기 때문에 중앙 gray의 델타 RGB Low LUT와 RGB High LUT 값으로 X를 뽑을게요. (예: 88-96 gray slope면 (88+96)/2 gray의 RGB LUT High와 Low 값. 그러면 행 수가 아마 15행이 되겠군여)
-_build_XY2: _build_XY1와 동일하게 X를 구성할게요
+        raise ValueError(f"Unknown target='{target}'. (지원: 'Y0','Y1','Y2')")
