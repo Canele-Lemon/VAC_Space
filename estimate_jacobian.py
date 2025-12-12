@@ -62,11 +62,11 @@ def parse_pks(spec: str):
     result = sorted(p for p in include if p not in exclude)
     return result
 
-def build_white_X_Y3(pk_list, ref_pk):
+def build_white_X_Y0(pk_list, ref_pk):
     """
-    X, Y3, groups, idx_gray, ds 를 반환
+    X, Y0, groups, idx_gray, ds 를 반환
     - X : (N, 12) feature (ΔR_H, ΔG_H, ΔB_H, panel_onehot, frame_rate, model_year, gray_norm, LUT_j)
-    - Y3 : (N, 3)  = [dCx, dCy, dGamma]
+    - Y0 : (N, 3)  = [dCx, dCy, dGamma]
     - groups : (N,) pk ID
     - idx_gray : X에서 gray_norm 컬럼 인덱스
     - ds : VACDataset 인스턴스
@@ -139,10 +139,10 @@ def build_white_X_Y3(pk_list, ref_pk):
         raise RuntimeError("유효한 (pk,gray) 샘플이 없습니다. NaN 필터/gray 범위를 확인하세요.")
 
     X = np.vstack(X_rows).astype(np.float32)
-    Y3 = np.vstack(Y_rows).astype(np.float32)
+    Y0 = np.vstack(Y_rows).astype(np.float32)
     groups = np.asarray(group_rows, dtype=np.int64)
 
-    return X, Y3, groups, idx_gray, ds
+    return X, Y0, groups, idx_gray, ds
 
 
 def solve_weighted_ridge(X, Y, lam=1e-3, w=None):
@@ -188,7 +188,7 @@ def estimate_jacobians_per_gray(pk_list, ref_pk, lam=1e-3,
       jac: dict[g] = { "J":(3,3), "n":n_samples, "cond":condition_number }
       df : CSV로 저장하기 편한 DataFrame
     """
-    X, Y3, groups, idx_gray, ds = build_white_X_Y3(pk_list, ref_pk)
+    X, Y0, groups, idx_gray, ds = build_white_X_Y0(pk_list, ref_pk)
 
     # 디자인행렬: 첫 3열이 ΔR_H, ΔG_H, ΔB_H
     dRGB = X[:, :3]
@@ -211,7 +211,7 @@ def estimate_jacobians_per_gray(pk_list, ref_pk, lam=1e-3,
             continue
 
         Xg = dRGB[m, :]   # (n,3)
-        Yg = Y3[m, :]     # (n,3)
+        Yg = Y0[m, :]     # (n,3)
 
         # 가우시안 가중치 (Δx 크기 기반)
         if gauss_sigma is not None and gauss_sigma > 0:
@@ -251,6 +251,102 @@ def make_default_paths(ref_pk, lam, delta_window, gauss_sigma):
     out_npy = os.path.join("artifacts", f"jacobian_bundle_{tag}_{ts}.npy")
     return out_csv, out_npy
 
+def debug_deltaG_sample_with_dataset(
+    pk_list,
+    ref_pk,
+    jacobian_npy_path: str,
+    target_gray: int = 128,
+    target_dG: float = 50.0,
+    tol_dG: float = 2.0,
+    tol_RB: float = 5.0,
+    max_show: int = 5,
+):
+    """
+    VACDataset 안에서 ΔG_H ≈ target_dG 인 샘플을 찾아,
+    실제 ΔY와 자코비안 예측을 비교하는 디버그 함수.
+
+    - target_gray : 보고 싶은 gray (예: 128)
+    - target_dG   : 찾고 싶은 ΔG_H 값 (예: +50)
+    - tol_dG      : ΔG_H 허용 오차
+    - tol_RB      : '거의 G만 건드린' 샘플을 찾기 위한 ΔR_H, ΔB_H 허용 오차
+    """
+
+    # 1) 데이터셋 로드 (자코비안 학습 때와 동일한 pk_list, ref_pk 사용)
+    ds = VACDataset(pk_list=pk_list, ref_pk=ref_pk)
+
+    # 2) 자코비안 번들 로드
+    bundle  = np.load(jacobian_npy_path, allow_pickle=True).item()
+    J_dense = bundle["J"]   # (256,3,3)
+
+    if not np.isfinite(J_dense[target_gray]).any():
+        print(f"[DEBUG] gray={target_gray} 에 대한 J가 NaN 입니다.")
+        return
+
+    Jg = J_dense[target_gray]  # (3,3)
+
+    found = 0
+
+    # 3) 각 pk / gray에서 조건에 맞는 샘플 찾기
+    for s in ds.samples:
+        pk = s["pk"]
+        Xd = s["X"]  # {"lut_delta_raw":..., "meta":..., "mapping_j":...}
+        Yd = s["Y"]  # {"Y0": {...}, ...}
+
+        lut_delta = Xd["lut_delta_raw"]
+        dR_arr = np.asarray(lut_delta["R_High"], dtype=np.float32)
+        dG_arr = np.asarray(lut_delta["G_High"], dtype=np.float32)
+        dB_arr = np.asarray(lut_delta["B_High"], dtype=np.float32)
+
+        Y0W = Yd["Y0"]['W']
+        dCx_arr   = np.asarray(Y0W["dCx"],    dtype=np.float32)
+        dCy_arr   = np.asarray(Y0W["dCy"],    dtype=np.float32)
+        dGam_arr  = np.asarray(Y0W["dGamma"], dtype=np.float32)
+
+        g = int(target_gray)
+
+        # 범위 체크
+        if g < 0 or g >= 256:
+            continue
+
+        dR = float(dR_arr[g])
+        dG = float(dG_arr[g])
+        dB = float(dB_arr[g])
+
+        # 조건: ΔG_H ≈ target_dG, ΔR_H/ΔB_H는 거의 0 (G만 건드린 샘플에 가깝게)
+        if (abs(dG - target_dG) <= tol_dG and
+            abs(dR) <= tol_RB and
+            abs(dB) <= tol_RB):
+
+            dY_real = np.array([
+                float(dCx_arr[g]),
+                float(dCy_arr[g]),
+                float(dGam_arr[g]),
+            ], dtype=np.float32)
+
+            # 실제 ΔX 벡터에 대한 예측
+            dX_real = np.array([dR, dG, dB], dtype=np.float32)
+            dY_pred_real = Jg @ dX_real
+
+            # "순수" ΔX_test = [0, target_dG, 0] 에 대한 예측도 같이 확인
+            dX_pure  = np.array([0.0, target_dG, 0.0], dtype=np.float32)
+            dY_pred_pure = Jg @ dX_pure
+
+            print("\n========================================")
+            print(f"[DEBUG] pk={pk}, gray={g}")
+            print(f"ΔX_real  = [ΔR, ΔG, ΔB] = ({dR:+.3f}, {dG:+.3f}, {dB:+.3f})")
+            print(f"ΔY_real  = [dCx, dCy, dGamma] = ({dY_real[0]:+.6f}, {dY_real[1]:+.6f}, {dY_real[2]:+.6f})")
+            print(f"J · ΔX_real  (pred)           = ({dY_pred_real[0]:+.6f}, {dY_pred_real[1]:+.6f}, {dY_pred_real[2]:+.6f})")
+
+            print(f"\n[DEBUG] 순수 ΔX_test = [0, {target_dG}, 0] 일 때 예측")
+            print(f"J · [0,{target_dG},0] (pred)  = ({dY_pred_pure[0]:+.6f}, {dY_pred_pure[1]:+.6f}, {dY_pred_pure[2]:+.6f})")
+
+            found += 1
+            if found >= max_show:
+                break
+
+    if found == 0:
+        print(f"[DEBUG] 조건에 맞는 샘플이 없습니다. "
+              f"(gray={target_gray}, ΔG≈{target_dG}±{tol_dG}, ΔR/ΔB≈0±{tol_RB})")
 
 def main():
     start_time = time.time()
@@ -277,53 +373,68 @@ def main():
     min_samples = 3
     # ========================================================================================= #
 
-    jac, df = estimate_jacobians_per_gray(
-        pk_list=pk_list, 
-        ref_pk=ref_pk, 
-        lam=lam, 
-        delta_window=delta_window, 
-        gauss_sigma=gauss_sigma,
-        min_samples=min_samples
-        )
-    out_csv, out_npy = make_default_paths(ref_pk=ref_pk, lam=lam, delta_window=delta_window, gauss_sigma=gauss_sigma)
-    df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+    # jac, df = estimate_jacobians_per_gray(
+    #     pk_list=pk_list, 
+    #     ref_pk=ref_pk, 
+    #     lam=lam, 
+    #     delta_window=delta_window, 
+    #     gauss_sigma=gauss_sigma,
+    #     min_samples=min_samples
+    #     )
+    # out_csv, out_npy = make_default_paths(ref_pk=ref_pk, lam=lam, delta_window=delta_window, gauss_sigma=gauss_sigma)
+    # df.to_csv(out_csv, index=False, encoding="utf-8-sig")
     
-    # NPY 저장 (J 번들)
-    J_dense = np.full((256, 3, 3), np.nan, dtype=np.float32)
-    n_arr   = np.zeros(256, dtype=np.int32)
-    condArr = np.full(256, np.nan, dtype=np.float32)
-    for g, payload in jac.items():
-        J_dense[g, :, :] = payload["J"]
-        n_arr[g] = int(payload["n"])
-        condArr[g] = float(payload["cond"])
+    # # NPY 저장 (J 번들)
+    # J_dense = np.full((256, 3, 3), np.nan, dtype=np.float32)
+    # n_arr   = np.zeros(256, dtype=np.int32)
+    # condArr = np.full(256, np.nan, dtype=np.float32)
+    # for g, payload in jac.items():
+    #     J_dense[g, :, :] = payload["J"]
+    #     n_arr[g] = int(payload["n"])
+    #     condArr[g] = float(payload["cond"])
 
-    bundle = {
-        "J": J_dense,
-        "n": n_arr,
-        "cond": condArr,
-        "ref_pk": ref_pk,
-        "lam": 1e-3,
-        "delta_window": 50,
-        "gauss_sigma": 30,
-        "pk_list": pk_list,
-        "gray_used": [2, 253],
-        "schema": "J[gray, out(Cx,Cy,Gamma), in(R_High,G_High,B_High)]",
-    }
-    np.save(out_npy, bundle, allow_pickle=True)
+    # bundle = {
+    #     "J": J_dense,
+    #     "n": n_arr,
+    #     "cond": condArr,
+    #     "ref_pk": ref_pk,
+    #     "lam": 1e-3,
+    #     "delta_window": 50,
+    #     "gauss_sigma": 30,
+    #     "pk_list": pk_list,
+    #     "gray_used": [2, 253],
+    #     "schema": "J[gray, out(Cx,Cy,Gamma), in(R_High,G_High,B_High)]",
+    # }
+    # np.save(out_npy, bundle, allow_pickle=True)
 
-    print(f"[OK] CSV saved -> {out_csv}")
-    print(f"[OK] NPY saved -> {out_npy}")
-    end_time = time.time()
-    elapsed = end_time - start_time
-    print(f"[INFO] elapsed = {elapsed:.2f} sec, bundle = {out_npy}")
+    # print(f"[OK] CSV saved -> {out_csv}")
+    # print(f"[OK] NPY saved -> {out_npy}")
+    # end_time = time.time()
+    # elapsed = end_time - start_time
+    # print(f"[INFO] elapsed = {elapsed:.2f} sec, bundle = {out_npy}")
 
-    # 미리보기
-    for g in (0, 32, 128, 255):
-        if 0 <= g < 256 and np.isfinite(J_dense[g]).any():
-            print(f"\n[g={g}] n={n_arr[g]}, cond={condArr[g]:.2e}")
-            print(J_dense[g])
-        else:
-            print(f"\n[g={g}] no estimate (NaN or insufficient samples)")
+    # # 미리보기
+    # for g in (0, 32, 128, 255):
+    #     if 0 <= g < 256 and np.isfinite(J_dense[g]).any():
+    #         print(f"\n[g={g}] n={n_arr[g]}, cond={condArr[g]:.2e}")
+    #         print(J_dense[g])
+    #     else:
+    #         print(f"\n[g={g}] no estimate (NaN or insufficient samples)")
+    
+    jac_path = r"artifacts\jacobian_bundle_ref2744_lam0.001_dw900.0_gs30.0_20251110_105631.npy"
+
+    debug_deltaG_sample_with_dataset(
+        pk_list=pk_list,
+        ref_pk=ref_pk,
+        jacobian_npy_path=jac_path,
+        target_gray=128,   # sanity test 하고 싶은 gray
+        target_dG=50.0,    # ΔG_H = +50 근처
+        tol_dG=2.0,        # ΔG_H 허용 오차
+        tol_RB=5.0,        # R/B는 거의 안 건드린 샘플만 보도록
+        max_show=3,
+    )
+            
+
     
     
 if __name__ == "__main__":
