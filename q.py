@@ -1,81 +1,26 @@
-def _build_XY0_for_jacobian_g(self, component='dGamma', exclude_gray_for_cxcy=(0, 5)):
-    """
-    자코비안 추정용 per-gray 데이터셋.
-    - X: ΔLUT(High 3채널) + meta + gray_norm + LUT_j
-    - y: dGamma / dCx / dCy (White 패턴, target - ref)
-
-    규칙:
-    - NaN인 y는 항상 제외
-    - component가 dCx/dCy일 때만 gray 0~5 제외
-    """
-    assert component in ('dGamma', 'dCx', 'dCy')
-
-    g_ex0, g_ex1 = exclude_gray_for_cxcy
-    jac_channels = ('R_High', 'G_High', 'B_High')
-
-    X_rows, y_vals, groups = [], [], []
-
-    for s in self.samples:
-        pk = s["pk"]
-        Xd = s["X"]
-        Yd = s["Y"]
-
-        y_vec = Yd['Y0']['W'][component]  # (256,)
-
-        for g in range(256):
-            # dCx/dCy에서만 0~5 제외
-            if component in ('dCx', 'dCy') and (g_ex0 <= g <= g_ex1):
-                continue
-
-            y_val = y_vec[g]
-            if not np.isfinite(y_val):
-                continue
-
-            feat_row = self._build_features_for_gray(
-                X_dict=Xd,
-                gray=g,
-                channels=jac_channels
-            )
-            X_rows.append(feat_row)
-            y_vals.append(float(y_val))
-            groups.append(pk)
-
-    X_mat = np.vstack(X_rows).astype(np.float32) if X_rows else np.empty((0, 0), np.float32)
-    y_vec = np.asarray(y_vals, dtype=np.float32)
-    groups = np.asarray(groups, dtype=np.int64)
-    return X_mat, y_vec, groups
-    
-if __name__ == "__main__":
-    pk_list = [3008]
-    ref_pk = 3007
-    ds = VACDataset(pk_list=pk_list, ref_pk=ref_pk)
-
-    # 3개 컴포넌트 각각 뽑아서 row 수가 다르게 나오는지 확인
-    for comp in ("dGamma", "dCx", "dCy"):
-        X, y, grp = ds._build_XY0_for_jacobian_g(component=comp, exclude_gray_for_cxcy=(0, 5))
-
-        print(f"\n[DEBUG] Jacobian raw XY - {comp}")
-        print("X shape:", X.shape)
-        print("y shape:", y.shape)
-        print("groups shape:", grp.shape)
-
-        if X.size == 0:
-            print("(empty)")
-            continue
-
-        # feature name 구성
-        meta = ds.samples[0]["X"]["meta"]
-        K = len(meta["panel_maker"])
-        feature_names = (
-            ["dR_High", "dG_High", "dB_High"] +
-            [f"panel_{i}" for i in range(K)] +
-            ["frame_rate", "model_year", "gray_norm", "LUT_j"]
-        )
-
-        n = min(30, X.shape[0])
-        df = pd.DataFrame(X[:n], columns=feature_names)
-        df["gray_idx"] = np.clip(np.round(df["gray_norm"].to_numpy() * 255).astype(int), 0, 255)
-        df["y"] = y[:n]
-        df["pk_group"] = grp[:n]
-
-        print(df.to_string(index=False, float_format=lambda v: f"{v: .6f}"))
+[DEBUG] Jacobian raw XY - dCy
+X shape: (250, 12)
+y shape: (250,)
+groups shape: (250,)
+  dR_High   dG_High    dB_High   panel_0   panel_1   panel_2   panel_3   panel_4  frame_rate  model_year  gray_norm        LUT_j  gray_idx         y  pk_group
+ 0.000000  0.000000  70.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.023529    92.000000         6 -0.063800      3028
+ 0.000000  0.000000  70.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.027451   112.000000         7 -0.063500      3028
+ 0.000000  0.000000  70.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.031373   112.000000         8 -0.063600      3028
+ 0.000000  0.000000  70.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.035294   128.000000         9 -0.062600      3028
+ 0.000000  0.000000  70.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.039216   148.000000        10 -0.055500      3028
+...
+ 0.000000  0.000000  70.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.949020  3888.000000       242 -0.002500      3028
+ 0.000000  0.000000  64.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.952941  3908.000000       243 -0.002100      3028
+ 0.000000  0.000000  60.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.956863  3924.000000       244 -0.001900      3028
+ 0.000000  0.000000  50.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.960784  3944.000000       245 -0.001500      3028
+ 0.000000  0.000000  40.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.964706  3964.000000       246 -0.001200      3028
+ 0.000000  0.000000  38.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.968627  3980.000000       247 -0.001100      3028
+ 0.000000  0.000000  34.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.972549  4000.000000       248 -0.001000      3028
+ 0.000000  0.000000  34.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.976471  4000.000000       249 -0.001000      3028
+ 0.000000  0.000000  31.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.980392  4016.000000       250 -0.000900      3028
+ 0.000000  0.000000  29.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.984314  4036.000000       251 -0.000800      3028
+ 0.000000  0.000000  24.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.988235  4056.000000       252 -0.000700      3028
+ 0.000000  0.000000  17.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.992157  4072.000000       253 -0.000300      3028
+ 0.000000  0.000000   3.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   0.996078  4092.000000       254  0.000000      3028
+ 0.000000  0.000000   0.000000  0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000   1.000000  4095.000000       255  0.000000      3028
+예를들어 위처럼 dB_High가 클리핑으로인해 gray level에 따라 달라지는 경우 아에 학습에서 제외하는게 좋다는 말씀이신가요? 아니면 이것도 고려해서 (dGamma/dCx/dCy)/dLUT가 계산되게 되는 건가요? 그냥 이상태로 J_g 계산해도 될까요?
