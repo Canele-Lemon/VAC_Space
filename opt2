@@ -1,71 +1,23 @@
-def preview_xy_dataset(
-    X, y, groups,
-    channels,
-    target: str,
-    n: int = 30,
-    patterns=('W',),
-    y2_patterns=("Darkskin", "Lightskin", "Asian", "Western"),
-):
-    """
-    X/y/groups를 'dataset 느낌'으로 프리뷰 출력.
+   g1_dR_Low  g1_dR_High    g1_dG_Low  g1_dG_High    g1_dB_Low  g1_dB_High  g1_gray_norm     g1_LUT_j  
+-1295.000000  707.000000 -1295.000000  707.000000 -1295.000000  707.000000      0.454902  1856.000000 
+ -713.000000  550.000000  -713.000000  550.000000  -713.000000  550.000000      0.768627  3154.000000 
+ -713.000000  550.000000  -713.000000  550.000000  -713.000000  550.000000      0.768627  3154.000000 
+ -887.000000  638.000000  -887.000000  638.000000  -887.000000  638.000000      0.717647  2945.000000 
 
-    - target='Y0'/'Y1': per-gray (ΔLUT + meta + gray_norm + LUT_j)
-    - target='Y2': triplet-gray (g1,g2,g3 각각 ΔLUT + gray_norm + LUT_j) + meta + pattern one-hot
-    """
-    target_l = target.lower()
+  g2_dR_Low  g2_dR_High    g2_dG_Low  g2_dG_High    g2_dB_Low  g2_dB_High  g2_gray_norm     g2_LUT_j    
+-1084.000000  522.000000 -1084.000000  522.000000 -1084.000000  522.000000      0.313726  1279.000000
+-1253.000000  750.000000 -1253.000000  750.000000 -1253.000000  750.000000      0.588235  2401.000000 
+-1267.000000  751.000000 -1267.000000  751.000000 -1267.000000  751.000000      0.576471  2345.000000
+-1305.000000  751.000000 -1305.000000  751.000000 -1305.000000  751.000000      0.509804  2079.000000
 
-    print(f"\n[PREVIEW] {target} XY dataset")
-    print("X shape:", X.shape)
-    print("y shape:", y.shape)
-    print("groups shape:", groups.shape)
+  g3_dR_Low  g3_dR_High    g3_dG_Low  g3_dG_High    g3_dB_Low  g3_dB_High  g3_gray_norm     g3_LUT_j   
+-935.000000  420.000000  -935.000000  420.000000  -935.000000  420.000000      0.258824  1056.000000
+-1305.000000  751.000000 -1305.000000  751.000000 -1305.000000  751.000000      0.505882  2063.000000
+-1298.000000  711.000000 -1298.000000  711.000000 -1298.000000  711.000000      0.462745  1875.000000
+-1183.000000  597.000000 -1183.000000  597.000000 -1183.000000  597.000000      0.364706  1482.000000
 
-    if X.size == 0:
-        print("(empty)")
-        return
-
-    n = min(n, X.shape[0])
-
-    # panel_maker one-hot 길이
-    meta_panel = dataset.samples[0]["X"]["meta"]
-    panel_dim = len(meta_panel["panel_maker"])
-
-    # -------------------------
-    # feature_names 생성
-    # -------------------------
-    if target_l in ("y0", "y1"):
-        feature_names = (
-            [f"d{ch}" for ch in channels] +
-            [f"panel_{i}" for i in range(panel_dim)] +
-            ["frame_rate", "model_year", "gray_norm", "LUT_j"]
-        )
-
-        # (선택) 만약 Y0에서 패턴 one-hot을 X에 붙였다면 여기에 추가
-        # if target_l == "y0" and len(patterns) > 1:
-        #     feature_names += [f"pat_{p}" for p in patterns]
-
-    elif target_l == "y2":
-        # Y2는 (g1,g2,g3) 슬롯 기반으로 컬럼명 고정
-        g_slots = ["g1", "g2", "g3"]
-
-        feature_names = []
-        for gi in g_slots:
-            feature_names += [f"{gi}_d{ch}" for ch in channels]
-            feature_names += [f"{gi}_gray_norm", f"{gi}_LUT_j"]
-
-        feature_names += [f"panel_{i}" for i in range(panel_dim)]
-        feature_names += ["frame_rate", "model_year"]
-        feature_names += [f"pat_{p}" for p in y2_patterns]
-
-    else:
-        raise ValueError(f"[preview_xy_dataset] Unknown target='{target}'. use 'Y0','Y1','Y2'.")
-
-    # ✅ 차원 검증: 안 맞으면 자동 fallback (에러 방지)
-    if len(feature_names) != X.shape[1]:
-        print(f"[WARN] feature_names({len(feature_names)}) != X_dim({X.shape[1]}). fallback to f0..")
-        feature_names = [f"f{i}" for i in range(X.shape[1])]
-
-    df = pd.DataFrame(X[:n], columns=feature_names)
-    df["y"] = y[:n]
-    df["pk_group"] = groups[:n]
-
-    print(df.to_string(index=False, float_format=lambda v: f"{v: .6f}"))
+  panel_0   panel_1   panel_2   panel_3   panel_4  frame_rate  model_year  pat_Darkskin  pat_Lightskin  pat_Asian  pat_Western         y  pk_group
+0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000      1.000000       0.000000   0.000000     0.000000  0.032675      3008
+0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000      0.000000       1.000000   0.000000     0.000000  0.014479      3008
+0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000      0.000000       0.000000   1.000000     0.000000  0.020355      3008
+0.000000  0.000000  0.000000  0.000000  1.000000   60.000000   26.000000      0.000000       0.000000   0.000000     1.000000  0.030583      3008
