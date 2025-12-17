@@ -1,4 +1,7 @@
     def _consume_gamma_pair(self, pattern, gray, results):
+        COLOR_EVAL_EXCLUDED_GRAYS = set(range(0, 6))
+        GAMMA_EVAL_EXCLUDED_GRAYS = {0, 1, *range(248, 256)}
+        
         s = self._sess
         store = s['store']
         profile: SessionProfile = s['profile']
@@ -66,18 +69,12 @@
                     cx_ok = round(abs(d_cx), 4) <= 0.003
                     cy_ok = round(abs(d_cy), 4) <= 0.003
 
-                    if gray in (0, 1, 254, 255):
+                    if gray in COLOR_EVAL_EXCLUDED_GRAYS:
                         self._set_item(table_inst1, gray, cols['d_cx'], f"{d_cx:.6f}")
                         self._set_item(table_inst1, gray, cols['d_cy'], f"{d_cy:.6f}")
                     else:
-                        self._set_item_with_spec(
-                            table_inst1, gray, cols['d_cx'],
-                            f"{d_cx:.6f}", is_spec_ok=cx_ok
-                        )
-                        self._set_item_with_spec(
-                            table_inst1, gray, cols['d_cy'],
-                            f"{d_cy:.6f}", is_spec_ok=cy_ok
-                        )
+                        self._set_item_with_spec(table_inst1, gray, cols['d_cx'], f"{d_cx:.6f}", is_spec_ok=cx_ok)
+                        self._set_item_with_spec(table_inst1, gray, cols['d_cy'], f"{d_cy:.6f}", is_spec_ok=cy_ok)
 
                     # ★ 여기서 ΔGamma도 간단히 추가 (VAC OFF max / 현재 ON 0gray 기준)
                     if 'd_gamma' in cols:
@@ -127,19 +124,10 @@
                             if np.isfinite(g_off) and np.isfinite(g_on):
                                 d_gamma = g_on - g_off
 
-                                if gray in (0, 1, 254, 255):
-                                    # edge gray → 색깔 안 바꾸고 값만
-                                    self._set_item(
-                                        table_inst1, gray, cols['d_gamma'],
-                                        f"{d_gamma:.6f}"
-                                    )
+                                if gray in GAMMA_EVAL_EXCLUDED_GRAYS:
+                                    self._set_item(table_inst1, gray, cols['d_gamma'], f"{d_gamma:.6f}")
                                 else:
                                     g_ok = round(abs(d_gamma), 3) <= 0.05
-                                    self._set_item_with_spec(
-                                        table_inst1, gray, cols['d_gamma'],
-                                        f"{d_gamma:.6f}", is_spec_ok=g_ok
-                                    )
+                                    self._set_item_with_spec(table_inst1, gray, cols['d_gamma'], f"{d_gamma:.6f}", is_spec_ok=g_ok)
 
-1. 위 메서드에서 off일때의 gamma 계산은 off 255 gray에서의 lv 기준으로 계산하고, on일때의 gamma 계산도 off 255 gray에서의 lv 기준으로 하고 있는게 맞나요?
-2. dcx,dcy,dgamma 값이 입력될때 ng/ok를 빨간색/파란색배경으로 하게 하잖아요. dcx,dcy는 0~5gray까지 평가를 안하고 dgamma는 0,1, 248~255까지는 평가를 하지 않으므로 색이 변하지 않게 해 주세요.
-
+이렇게 수정했습니다. 이 메서드를 설명해주세요. 각 조건이 어떻게 분기되는지를 중심으로요
