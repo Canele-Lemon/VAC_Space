@@ -1,25 +1,39 @@
+    def _compute_gamma_series(self, lv_vec_256):
+        lv = np.asarray(lv_vec_256, dtype=np.float64)
+        gamma = np.full(256, np.nan, dtype=np.float64)
+        lv0 = lv[0]
+        denom = np.max(lv[1:] - lv0)
+        if not np.isfinite(denom) or denom <= 0:
+            return gamma
+        nor = (lv - lv0) / denom
+        gray = np.arange(256, dtype=np.float64)
+        gray_norm = gray / 255.0
+        valid = (gray >= 1) & (gray <= 254) & (nor > 0) & np.isfinite(nor)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            gamma[valid] = np.log(nor[valid]) / np.log(gray_norm[valid])
+        return gamma
+
+_compute_gamma_series 메서드에서도 normalized를 하고 gamma를 계산하잖아요. 그리고 아래 _finalize_session에서도 normalize를 하고 slope를 계산하고. normlize가 반복되는데 normalize 메서드를 따로 만들어서 적용할 수 있도록 해 주세요.
     def _finalize_session(self):
         policy = self._spec_policy
         s = self._sess
         profile: SessionProfile = s['profile']
         table_main = self.ui.vac_table_opt_mes_results_main
+        table_sub = self.ui.vac_table_opt_mes_results_sub
         cols = profile.table_cols
-        thr_gamma = 0.05
 
-        # table_main의 cols['gamma'] 열에 gamma 값 업데이트
+        # 1. 정면 ΔGamma 업데이트
+        # 1-1) Gamma 계산 후 table_main의 cols['gamma'] 열에 업데이트
         lv_series_main = np.zeros(256, dtype=np.float64)
         for g in range(256):
             tup = s['store']['gamma']['main']['white'].get(g, None)
             lv_series_main[g] = float(tup[0]) if tup else np.nan
-
         gamma_vec = self._compute_gamma_series(lv_series_main)
         for g in range(256):
             if np.isfinite(gamma_vec[g]):
                 self._set_item(table_main, g, cols['gamma'], f"{gamma_vec[g]:.6f}")
 
-        # =========================
-        # 2) ΔGamma (ON세션일 때만)
-        # =========================
+        # 1-2) (ON 세션인 경우) ΔGamma 계산 후 cols['d_gamma'] 열에 업데이트
         if profile.ref_store is not None and 'd_gamma' in cols:
             ref_lv_main = np.zeros(256, dtype=np.float64)
             for g in range(256):
@@ -28,22 +42,15 @@
             ref_gamma = self._compute_gamma_series(ref_lv_main)
             dG = gamma_vec - ref_gamma
             for g in range(256):
-                
                 if not np.isfinite(dG[g]):
                     continue
-                
                 if policy.should_eval_gamma(g):
-                    self._set_item_with_spec(
-                        table_main, g, cols['d_gamma'], f"{dG[g]:.6f}",
-                        is_spec_ok=policy.gamma_ok(dG[g])
-                    )
+                    self._set_item_with_spec(table_main, g, cols['d_gamma'], f"{dG[g]:.6f}", is_spec_ok=policy.gamma_ok(dG[g]))
                 else:
                     self._set_item(table_main, g, cols['d_gamma'], f"{dG[g]:.6f}")
 
-        # 3) slope 계산 후 sub 테이블 업데이트 - 측정 종료 후 한 번에
-        table_sub = self.ui.vac_table_opt_mes_results_sub
-
-        # 3-1) sub white lv 배열 뽑기
+        # 2. 측면 slope 업데이트
+        # 2-1) sub white lv 배열 뽑기
         lv_series_sub = np.full(256, np.nan, dtype=np.float64)
         for g in range(256):
             tup_sub = s['store']['gamma']['sub']['white'].get(g, None)
@@ -89,4 +96,4 @@
             try:
                 s['on_done'](s['store'])
             except Exception as e:
-                logging.exception(e) 이렇게 수정하면 되는거죠? 이 메서드 코드 하나하나 자세하게 설명해주세요
+                logging.exception(e)
