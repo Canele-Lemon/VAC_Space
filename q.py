@@ -1,41 +1,54 @@
-def debug_dataset_summary(pk_list, ref_pk):
+def debug_print_XY_at_grays(pk_list, ref_pk, grays=(0, 1, 64, 128, 192, 254, 255), max_rows_per_gray=5):
+    """
+    지정한 gray들에 대해 X/Y 행을 그대로 출력한다.
+    - max_rows_per_gray: 각 gray에서 최대 몇 개 행 출력할지 (너무 많이 찍히는 것 방지)
+    """
     X, Y0, groups, idx_gray, ds = build_white_X_Y0(pk_list, ref_pk)
 
-    dRGB = X[:, :3]
     gray_norm = X[:, idx_gray]
-    gray_idx = np.clip(np.round(gray_norm * 255).astype(int), 0, 255)
+    gray_idx  = np.clip(np.round(gray_norm * 255).astype(int), 0, 255)
 
-    print("\n================ DATASET SUMMARY ================")
-    print(f"ref_pk = {ref_pk}")
-    print(f"pk_list size = {len(pk_list)} (unique in rows={len(set(groups.tolist()))})")
-    print(f"X shape  = {X.shape}   (expected: N x >=3)")
-    print(f"Y0 shape = {Y0.shape}  (expected: N x 3)")
-    print(f"idx_gray = {idx_gray}")
+    print("\n================ DEBUG: X/Y rows at selected grays ================")
+    print(f"ref_pk={ref_pk}, pk_list_size={len(pk_list)}, total_rows={len(X)}")
+    print(f"idx_gray={idx_gray}")
+    print(f"target grays={list(grays)}")
+    print("-------------------------------------------------------------------")
 
-    # NaN 체크
-    nanX = np.isnan(X).any(axis=1).sum()
-    nanY = np.isnan(Y0).any(axis=1).sum()
-    print(f"rows with any NaN: X={nanX}, Y={nanY}")
+    for g in grays:
+        m = (gray_idx == int(g))
+        n = int(m.sum())
+        print(f"\n[gray={g}] rows={n}")
 
-    # gray 분포
-    cnt = np.bincount(gray_idx, minlength=256)
-    print(f"gray count: min={cnt.min()}, max={cnt.max()}, nonzero_grays={(cnt>0).sum()}/256")
-    print("sample counts at some grays:", {g:int(cnt[g]) for g in [0,1,2,6,32,128,247,248,253,254,255]})
+        if n == 0:
+            continue
 
-    # ΔRGB magnitude 분포
-    mag = np.linalg.norm(dRGB, axis=1)
-    print(f"|dRGB|: min={np.nanmin(mag):.3f}, mean={np.nanmean(mag):.3f}, max={np.nanmax(mag):.3f}")
-    for p in [50, 90, 95, 99]:
-        print(f"  percentile {p}% = {np.nanpercentile(mag, p):.3f}")
+        # 너무 많이 출력되는 것 방지
+        idxs = np.where(m)[0][:max_rows_per_gray]
 
-    # target(Y) 분포
-    absY = np.abs(Y0)
-    print(f"|dY| mean: dCx={np.nanmean(absY[:,0]):.6f}, dCy={np.nanmean(absY[:,1]):.6f}, dG={np.nanmean(absY[:,2]):.6f}")
+        for i in idxs:
+            pk = int(groups[i])
 
-    # pk별로 gray당 샘플 수가 1인지 확인
-    # (대부분 (pk,gray)=1개면 jacobian per-gray 학습이 어려움)
-    from collections import Counter
-    key_counts = Counter(zip(groups.tolist(), gray_idx.tolist()))
-    cvals = np.array(list(key_counts.values()), dtype=int)
-    print(f"(pk,gray) multiplicity: min={cvals.min()}, median={np.median(cvals)}, max={cvals.max()}")
-    print("=================================================\n")
+            x_row = X[i]
+            y_row = Y0[i]
+
+            # 보기 편하게: ΔRGB(앞 3개) / 나머지 feature는 길이가 길 수 있으니 일부만
+            dR, dG, dB = float(x_row[0]), float(x_row[1]), float(x_row[2])
+            dCx, dCy, dGam = float(y_row[0]), float(y_row[1]), float(y_row[2])
+
+            print(f"  - row={i}, pk={pk}")
+            print(f"    X[0:3] (dR,dG,dB) = ({dR:+.3f}, {dG:+.3f}, {dB:+.3f})")
+            print(f"    X(full) = {np.array2string(x_row, precision=4, floatmode='fixed')}")
+            print(f"    Y (dCx,dCy,dGamma) = ({dCx:+.6f}, {dCy:+.6f}, {dGam:+.6f})")
+
+    print("\n===================================================================\n")
+    
+def main():
+    ref_pk = 3008
+    pk_list = [3157]
+
+    debug_print_XY_at_grays(
+        pk_list=pk_list,
+        ref_pk=ref_pk,
+        grays=(0, 1, 64, 128, 192, 254, 255),
+        max_rows_per_gray=5
+    )
