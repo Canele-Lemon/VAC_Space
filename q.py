@@ -82,3 +82,12 @@ def train_Y2_model(dataset, save_dir):
     path = os.path.join(save_dir, "hybrid_Y2_delta_uv_model.pkl")
     joblib.dump(payload, path, compress=("gzip", 3))
     print(f"📁 saved: {path}")
+    
+def preview(name, X, y, groups, n=3):
+    print(f"\n[PREVIEW] {name}")
+    print("X:", X.shape, "y:", y.shape, "groups:", groups.shape)
+    print("finite y ratio:", np.isfinite(y).mean())
+    print("y min/max:", np.nanmin(y), np.nanmax(y))
+    print("unique groups:", len(np.unique(groups)))
+    print("first rows X[0:3]:\n", X[:n, :3])
+    print("first y:", y[:n], "first groups:", groups[:n])
