@@ -443,11 +443,12 @@ def main():
         "n": n_arr,
         "cond": condArr,
         "ref_pk": ref_pk,
+        "pk_list": pk_list,
         "lam": lam,
         "delta_window": delta_window,
         "gauss_sigma": gauss_sigma,
-        "pk_list": pk_list,
         "gray_used": [2, 253],
+        "exclude_gray_for_cxcy": [0, 5],
         "schema": "J[gray, out(Cx,Cy,Gamma), in(R_High,G_High,B_High)]",
     }
     np.save(out_npy, bundle, allow_pickle=True)
