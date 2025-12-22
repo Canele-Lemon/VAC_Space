@@ -38,7 +38,8 @@ class VACOutputBuilder:
         AND `Component` IN {components_str}
         """
         df = pd.read_sql(query, engine)
-        logging.debug(f"[STEP 1] Raw data loaded:\n{df.head()}")
+        
+        # logging.debug(f"[STEP 1] 측정 SET 정보 PK={pk}의 RAW DATA:\n{df.head()}")
         
         df['Data'] = df['Data'].astype(float)
         df['Pattern_Window'] = df['Parameter'].str.extract(
@@ -465,7 +466,7 @@ class VACOutputBuilder:
             미리보기할 gray 인덱스 리스트 (None이면 [0,1,32,128,255])
         """
         if gray_samples is None:
-            gray_samples = [0, 1, 32, 128, 254, 255]
+            gray_samples = [0, 1, 32, 64, 128, 192, 254, 255]
 
         print(f"\n[DEBUG Y0] pk={self.pk}, ref_pk={self.ref_pk}, patterns={patterns}")
 
@@ -766,19 +767,14 @@ class VACOutputBuilder:
             webbrowser.open(f"file://{os.path.abspath(xlsx_path)}")
             
 if __name__ == "__main__":
-    TARGET_PK = 3008
+    TARGET_PK = 3157
+    BASE_PK = 3008
     BYPASS_PK = 3007
         
-    builder = VACOutputBuilder(pk=TARGET_PK, ref_pk=BYPASS_PK)
-    
-    # # builder.debug_full_Y_dataset(
-    # #     y0_patterns=('W',),
-    # #     y1_patterns=('W',),
-    # # )
-    
+    builder = VACOutputBuilder(pk=TARGET_PK, ref_pk=BASE_PK)
 
     # builder.export_measure_data_to_csv(
-    #     pk_list = [3007, 3008],
+    #     pk_list = range(3008,3142),
     #     parameters = [
     #         "VAC_Gamma_W_Gray____",
     #         "VAC_GammaLinearity_60_W_Gray____",
@@ -786,18 +782,11 @@ if __name__ == "__main__":
     #     components=('Lv', 'Cx', 'Cy'),
     #     normalize_lv_flag=True,
     #     with_chart=True,
-    # )
+    # )    
     
-    builder._load_measure_data(pk=TARGET_PK, parameters="VAC_Gamma_W_Gray____")
+    builder.debug_full_Y_dataset(
+        y0_patterns=('W',),
+        y1_patterns=('W',),
+    )
+    
 
-왜 여기서 아래 에러가 발생할까요?
-Traceback (most recent call last):
-  File "d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project\src\data_preparation\prepare_output.py", line 791, in <module>
-    builder._load_measure_data(pk=TARGET_PK, parameters="VAC_Gamma_W_Gray____")
-  File "d:\00 업무\00 가상화기술\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project\src\data_preparation\prepare_output.py", line 60, in _load_measure_data
-    lv_0 = lv_df[lv_df['Gray_Level'] == 0].set_index('Pattern_Window')['Data'].to_dict()
-  File "C:\python310\lib\site-packages\pandas\core\frame.py", line 4102, in __getitem__
-    indexer = self.columns.get_loc(key)
-  File "C:\python310\lib\site-packages\pandas\core\indexes\base.py", line 3812, in get_loc
-    raise KeyError(key) from err
-KeyError: 'Gray_Level'
