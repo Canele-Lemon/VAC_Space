@@ -74,9 +74,9 @@ def build_white_X_Y0(pk_list, ref_pk):
     ds = VACDataset(pk_list=pk_list, ref_pk=ref_pk)
 
     # component별로 한 번씩 빌드
-    X_cx, y_cx, g_cx = ds.build_XYdataset_for_jacobian_g(component='dCx')
-    X_cy, y_cy, g_cy = ds.build_XYdataset_for_jacobian_g(component='dCy')
-    X_ga, y_ga, g_ga = ds.build_XYdataset_for_jacobian_g(component='dGamma')
+    X_cx, y_cx, g_cx = ds._build_XY0_for_jacobian_g(component='dCx')
+    X_cy, y_cy, g_cy = ds._build_XY0_for_jacobian_g(component='dCy')
+    X_ga, y_ga, g_ga = ds._build_XY0_for_jacobian_g(component='dGamma')
 
     # gray_norm 컬럼 위치 (VACDataset 피처 정의 기준)
     K = len(ds.samples[0]["X"]["meta"]["panel_maker"])  # panel one-hot 길이
@@ -347,6 +347,50 @@ def debug_deltaG_sample_with_dataset(
     if found == 0:
         print(f"[DEBUG] 조건에 맞는 샘플이 없습니다. "
               f"(gray={target_gray}, ΔG≈{target_dG}±{tol_dG}, ΔR/ΔB≈0±{tol_RB})")
+        
+def debug_print_XY_at_grays(pk_list, ref_pk, grays=(0, 1, 64, 128, 192, 254, 255), max_rows_per_gray=5):
+    """
+    지정한 gray들에 대해 X/Y 행을 그대로 출력한다.
+    - max_rows_per_gray: 각 gray에서 최대 몇 개 행 출력할지 (너무 많이 찍히는 것 방지)
+    """
+    X, Y0, groups, idx_gray, ds = build_white_X_Y0(pk_list, ref_pk)
+
+    gray_norm = X[:, idx_gray]
+    gray_idx  = np.clip(np.round(gray_norm * 255).astype(int), 0, 255)
+
+    print("\n================ DEBUG: X/Y rows at selected grays ================")
+    print(f"ref_pk={ref_pk}, pk_list_size={len(pk_list)}, total_rows={len(X)}")
+    print(f"idx_gray={idx_gray}")
+    print(f"target grays={list(grays)}")
+    print("-------------------------------------------------------------------")
+
+    for g in grays:
+        m = (gray_idx == int(g))
+        n = int(m.sum())
+        print(f"\n[gray={g}] rows={n}")
+
+        if n == 0:
+            continue
+
+        # 너무 많이 출력되는 것 방지
+        idxs = np.where(m)[0][:max_rows_per_gray]
+
+        for i in idxs:
+            pk = int(groups[i])
+
+            x_row = X[i]
+            y_row = Y0[i]
+
+            # 보기 편하게: ΔRGB(앞 3개) / 나머지 feature는 길이가 길 수 있으니 일부만
+            dR, dG, dB = float(x_row[0]), float(x_row[1]), float(x_row[2])
+            dCx, dCy, dGam = float(y_row[0]), float(y_row[1]), float(y_row[2])
+
+            print(f"  - row={i}, pk={pk}")
+            print(f"    X[0:3] (dR,dG,dB) = ({dR:+.3f}, {dG:+.3f}, {dB:+.3f})")
+            print(f"    X(full) = {np.array2string(x_row, precision=4, floatmode='fixed')}")
+            print(f"    Y (dCx,dCy,dGamma) = ({dCx:+.6f}, {dCy:+.6f}, {dGam:+.6f})")
+
+    print("\n===================================================================\n")
 
 def main():
     start_time = time.time()
@@ -354,72 +398,73 @@ def main():
     #                                         변수 지정                                        
     # ========================================================================================= #
     # 1. Sweep 데이터로 사용할 PK(s) 리스트
-    pks = "2743-3002,!2743,!2744,!2984"
-    pk_list = parse_pks(pks)
+    # pks = "2743-3002,!2743,!2744,!2984"
+    # pk_list = parse_pks(pks)
+    pk_list = list(range(3009, 3141))
     
     # 2. 기준(reference) LUT PK
-    ref_pk = 2744
+    ref_pk = 3008
     
     # 3. 리지 정규화 계수
     lam = 1e-3
     
     # 4. delta-window
-    delta_window = 900
+    delta_window = 80
     
     # 5. gauss-sigma
-    gauss_sigma = 30
+    gauss_sigma = None
     
     # 6. min_samples
     min_samples = 3
     # ========================================================================================= #
 
-    # jac, df = estimate_jacobians_per_gray(
-    #     pk_list=pk_list, 
-    #     ref_pk=ref_pk, 
-    #     lam=lam, 
-    #     delta_window=delta_window, 
-    #     gauss_sigma=gauss_sigma,
-    #     min_samples=min_samples
-    #     )
-    # out_csv, out_npy = make_default_paths(ref_pk=ref_pk, lam=lam, delta_window=delta_window, gauss_sigma=gauss_sigma)
-    # df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+    jac, df = estimate_jacobians_per_gray(
+        pk_list=pk_list, 
+        ref_pk=ref_pk, 
+        lam=lam,
+        delta_window=delta_window,
+        gauss_sigma=gauss_sigma,
+        min_samples=min_samples
+        )
+    out_csv, out_npy = make_default_paths(ref_pk=ref_pk, lam=lam, delta_window=delta_window, gauss_sigma=gauss_sigma)
+    df.to_csv(out_csv, index=False, encoding="utf-8-sig")
     
-    # # NPY 저장 (J 번들)
-    # J_dense = np.full((256, 3, 3), np.nan, dtype=np.float32)
-    # n_arr   = np.zeros(256, dtype=np.int32)
-    # condArr = np.full(256, np.nan, dtype=np.float32)
-    # for g, payload in jac.items():
-    #     J_dense[g, :, :] = payload["J"]
-    #     n_arr[g] = int(payload["n"])
-    #     condArr[g] = float(payload["cond"])
+    # NPY 저장 (J 번들)
+    J_dense = np.full((256, 3, 3), np.nan, dtype=np.float32)
+    n_arr   = np.zeros(256, dtype=np.int32)
+    condArr = np.full(256, np.nan, dtype=np.float32)
+    for g, payload in jac.items():
+        J_dense[g, :, :] = payload["J"]
+        n_arr[g] = int(payload["n"])
+        condArr[g] = float(payload["cond"])
 
-    # bundle = {
-    #     "J": J_dense,
-    #     "n": n_arr,
-    #     "cond": condArr,
-    #     "ref_pk": ref_pk,
-    #     "lam": 1e-3,
-    #     "delta_window": 50,
-    #     "gauss_sigma": 30,
-    #     "pk_list": pk_list,
-    #     "gray_used": [2, 253],
-    #     "schema": "J[gray, out(Cx,Cy,Gamma), in(R_High,G_High,B_High)]",
-    # }
-    # np.save(out_npy, bundle, allow_pickle=True)
+    bundle = {
+        "J": J_dense,
+        "n": n_arr,
+        "cond": condArr,
+        "ref_pk": ref_pk,
+        "lam": lam,
+        "delta_window": delta_window,
+        "gauss_sigma": gauss_sigma,
+        "pk_list": pk_list,
+        "gray_used": [2, 253],
+        "schema": "J[gray, out(Cx,Cy,Gamma), in(R_High,G_High,B_High)]",
+    }
+    np.save(out_npy, bundle, allow_pickle=True)
 
-    # print(f"[OK] CSV saved -> {out_csv}")
-    # print(f"[OK] NPY saved -> {out_npy}")
-    # end_time = time.time()
-    # elapsed = end_time - start_time
-    # print(f"[INFO] elapsed = {elapsed:.2f} sec, bundle = {out_npy}")
+    print(f"[OK] CSV saved -> {out_csv}")
+    print(f"[OK] NPY saved -> {out_npy}")
+    end_time = time.time()
+    elapsed = end_time - start_time
+    print(f"[INFO] elapsed = {elapsed:.2f} sec, bundle = {out_npy}")
 
-    # # 미리보기
-    # for g in (0, 32, 128, 255):
-    #     if 0 <= g < 256 and np.isfinite(J_dense[g]).any():
-    #         print(f"\n[g={g}] n={n_arr[g]}, cond={condArr[g]:.2e}")
-    #         print(J_dense[g])
-    #     else:
-    #         print(f"\n[g={g}] no estimate (NaN or insufficient samples)")
+    # 미리보기
+    for g in (0, 32, 128, 255):
+        if 0 <= g < 256 and np.isfinite(J_dense[g]).any():
+            print(f"\n[g={g}] n={n_arr[g]}, cond={condArr[g]:.2e}")
+            print(J_dense[g])
+        else:
+            print(f"\n[g={g}] no estimate (NaN or insufficient samples)")
     
     jac_path = r"artifacts\jacobian_bundle_ref2744_lam0.001_dw900.0_gs30.0_20251110_105631.npy"
 
@@ -433,7 +478,18 @@ def main():
         tol_RB=5.0,        # R/B는 거의 안 건드린 샘플만 보도록
         max_show=3,
     )
-            
+    
+    #################################################
+    # 데이터 확인용 디버깅
+    #################################################
+    # ref_pk=3008
+    # pk_list=[3157]
+    # debug_print_XY_at_grays(
+    #     pk_list=pk_list,
+    #     ref_pk=ref_pk,
+    #     grays=(0, 1, 2, 32, 64, 128, 192, 253, 254, 255),
+    #     max_rows_per_gray=5
+    # )
 
     
     
