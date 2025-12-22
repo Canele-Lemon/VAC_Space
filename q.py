@@ -1,46 +1,84 @@
-g=128에서 G sweep에 따라 dGamma가 Base LUT (ref) 대비 아래와 같이 바꾸면 아래처럼 나오는데 결과가 이상해서 자코비안 추정이 잘 안되는 걸까요?
-vac_version	g128
-LUT_3_G-70	0.041575193
-LUT_3_G-65	0.038323402
-LUT_3_G-60	0.035557985
-LUT_3_G-55	0.033536911
-LUT_3_G-50	0.030788422
-LUT_3_G-45	0.027782679
-LUT_3_G-40	0.02745533
-LUT_3_G-35	0.02113986
-LUT_3_G-30	0.018369436
-LUT_3_G-25	0.016203403
-LUT_3_G-20	0.012662888
-LUT_3_G-15	0.010856867
-LUT_3_G-10	0.008890629
-LUT_3_G-9	0.008324146
-LUT_3_G-8	0.008324146
-LUT_3_G-7	0.006681919
-LUT_3_G-6	0.006632805
-LUT_3_G-5	0.006510496
-LUT_3_G-4	0.006118774
-LUT_3_G-3	0.004479408
-LUT_3_G-2	0.002133608
-LUT_3_G-1	0.00174284
-LUT_3_G+1	0.001863241
-LUT_3_G+2	0.001127481
-LUT_3_G+3	0.001277447
-LUT_3_G+4	0.000496387
-LUT_3_G+5	-0.001962662
-LUT_3_G+6	-0.002428055
-LUT_3_G+7	-0.003206968
-LUT_3_G+8	-0.003325462
-LUT_3_G+9	-0.00429821
-LUT_3_G+10	-0.005229235
-LUT_3_G+15	-0.008965731
-LUT_3_G+20	-0.012840033
-LUT_3_G+25	-0.015159607
-LUT_3_G+30	-0.019706964
-LUT_3_G+35	-0.025086403
-LUT_3_G+40	-0.028068542
-LUT_3_G+45	-0.033393145
-LUT_3_G+50	-0.035045147
-LUT_3_G+55	-0.037897348
-LUT_3_G+60	-0.044137001
-LUT_3_G+65	-0.044475079
-LUT_3_G+70	-0.050792694
+def train_Y0_models(dataset, save_dir, patterns=('W',), exclude_gray_for_cxcy=(0,5)):
+    # 구버전 VACDataset은 component가 dGamma/dCx/dCy
+    components = ["dGamma", "dCx", "dCy"]
+    channels = ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
+
+    for comp in components:
+        print(f"\n=== Train Y0: {comp} ===")
+
+        X_all, y_all, groups = dataset.build_XY_dataset(
+            target="y0",
+            component=comp,
+            channels=channels,
+            patterns=patterns,
+        )
+
+        # (선택) dCx/dCy는 회색 일부 제외를 dataset에서 이미 하고 있음
+        artifacts = train_hybrid_regressor(X_all, y_all, groups, tag=f"Y0-{comp}")
+
+        payload = {
+            "target": {"type": "Y0-per-gray", "component": comp, "patterns": patterns},
+            **artifacts,
+            "feature_schema": {
+                "desc": "ΔLUT(6ch) + meta + gray_norm + LUT_j",
+                "channels": list(channels),
+                "add_gray_norm": True,
+                "add_LUT_j": True,
+                "note": f"exclude_gray_for_cxcy={exclude_gray_for_cxcy} is applied inside VACDataset._build_XY0"
+            }
+        }
+        path = os.path.join(save_dir, f"hybrid_{comp}_model.pkl")
+        joblib.dump(payload, path, compress=("gzip", 3))
+        print(f"📁 saved: {path}")
+        
+def train_Y1_model(dataset, save_dir, patterns=('W',)):
+    print("\n=== Train Y1 ===")
+    channels = ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
+
+    X_all, y_all, groups = dataset.build_XY_dataset(
+        target="y1",
+        channels=channels,
+        patterns=patterns,
+    )
+
+    # y_all에 NaN이 있을 수 있으니 방어 (권장)
+    mask = np.isfinite(y_all)
+    X_all = X_all[mask].astype(np.float32)
+    y_all = y_all[mask].astype(np.float32)
+    groups = groups[mask].astype(np.int64)
+
+    artifacts = train_hybrid_regressor(X_all, y_all, groups, tag="Y1-slope")
+
+    payload = {
+        "target": {"type": "Y1-slope", "patterns": patterns},
+        **artifacts,
+        "feature_schema": {"desc": "segment-center gray ΔLUT(6ch)+meta+gray_norm+LUT_j"}
+    }
+    path = os.path.join(save_dir, "hybrid_Y1_slope_model.pkl")
+    joblib.dump(payload, path, compress=("gzip", 3))
+    print(f"📁 saved: {path}")
+    
+def train_Y2_model(dataset, save_dir):
+    print("\n=== Train Y2 (delta_uv) ===")
+    channels = ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
+
+    X_all, y_all, groups = dataset.build_XY_dataset(
+        target="y2",
+        channels=channels,
+    )
+
+    mask = np.isfinite(y_all)
+    X_all = X_all[mask].astype(np.float32)
+    y_all = y_all[mask].astype(np.float32)
+    groups = groups[mask].astype(np.int64)
+
+    artifacts = train_hybrid_regressor(X_all, y_all, groups, tag="Y2-delta_uv")
+
+    payload = {
+        "target": {"type": "Y2-delta_uv"},
+        **artifacts,
+        "feature_schema": {"desc": "3 gray-triplets ΔLUT + meta + pattern one-hot (already inside dataset)"}
+    }
+    path = os.path.join(save_dir, "hybrid_Y2_delta_uv_model.pkl")
+    joblib.dump(payload, path, compress=("gzip", 3))
+    print(f"📁 saved: {path}")
