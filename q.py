@@ -1,90 +1,415 @@
-그럼 알려주신 _generate_predicted_vac_lut 메서드를 가지고 아래 메서드에 활용한다고 할때 아래 메서드에서 수정해야 할 게 있을까요?
+    def build_vacparam_std_format(self, base_vac_dict: dict, new_lut_tvkeys: dict = None) -> str:
+        """
+        base_vac_dict : TV에서 읽은 원본 JSON(dict; 키 순서 유지 권장)
+        new_lut_tvkeys: 교체할 LUT만 전달 시 병합 (TV 원 키명 그대로)
+                        {"RchannelLow":[...4096], "RchannelHigh":[...], ...}
+        return: TV에 바로 쓸 수 있는 탭 포맷 문자열
+        """
+        from collections import OrderedDict
 
-    def _apply_predicted_vac_and_measure_on(self):
-        self._step_start(2)
-        BASE_VAC_PK = 3025
-        vac_version, base_vac_data = self._fetch_vac_by_vac_info_pk(BASE_VAC_PK)
-        if base_vac_data is None:
-            logging.error("[DB] VAC 데이터 로딩 실패 - 최적화 루프 종료")
-            return
+        if not isinstance(base_vac_dict, (dict, OrderedDict)):
+            raise ValueError("base_vac_dict must be dict/OrderedDict")
 
-        base_vac_dict = json.loads(base_vac_data)
-        self._vac_dict_cache = base_vac_dict
-        
-        # 예측 모델을 통한 시야각 특성 예측 -> 자코비안 보정 들어가야 함
-        ##########################################################################################
-        # try:
-        #     predicted_vac_data, debug_info = self._generate_predicted_vac_lut(
-        #         base_vac_dict,
-        #         n_iters=2,
-        #         wG=0.4,
-        #         wC=1.0,
-        #         lambda_ridge=1e-3
-        #     )
-        # except Exception:
-        #     logging.exception("[PredictOpt] 예측 기반 1st 보정 중 예외 발생 - Base VAC로 진행")
-        #     predicted_vac_json, debug_info = None, None
-        ##########################################################################################    
-            
-        lut_dict_plot = {key.replace("channel", "_"): v for key, v in base_vac_dict.items() if "channel" in key}
-        self._update_lut_chart_and_table(lut_dict_plot)
-        self._step_done(2)
+        od = OrderedDict(base_vac_dict)
 
-        def _after_write(ok, msg):
-            if not ok:
-                logging.error(f"[VAC Writing] 예측 기반 최적화 VAC 데이터 Writing 실패: {msg} - 최적화 루프 종료")
-                return
-            
-            logging.info(f"[VAC Writing] 예측 기반 최적화 VAC 데이터 Writing 완료: {msg}")
-            logging.info("[VAC Reading] VAC Reading 시작")
-            self._read_vac_from_tv(_after_read)
+        # 새 LUT 반영(형태/범위 보정)
+        if new_lut_tvkeys:
+            for k, v in new_lut_tvkeys.items():
+                if k in od:
+                    arr = np.asarray(v)
+                    if arr.shape != (4096,):
+                        raise ValueError(f"{k}: 4096 길이 필요 (현재 {arr.shape})")
+                    od[k] = np.clip(arr.astype(int), 0, 4095).tolist()
 
-        def _after_read(read_vac_dict):
-            self.send_command(self.ser_tv, 'exit')
-            if not read_vac_dict:
-                logging.error("[VAC Reading] VAC Reading 실패 - 최적화 루프 종료")
-                return
-            logging.info("[VAC Reading] VAC Reading 완료. Written VAC 데이터와의 일치 여부를 판단합니다.")
-            mismatch_keys = self._verify_vac_data_match(written_data=base_vac_dict, read_data=read_vac_dict)
+        def _fmt_inline_list(lst):
+            # [\t1,\t2,\t...\t]
+            return "[\t" + ",\t".join(str(int(x)) for x in lst) + "\t]"
 
-            if mismatch_keys:
-                logging.warning("[VAC Reading] VAC 데이터 불일치 - 최적화 루프 종료")
-                return
+        def _fmt_list_of_lists(lst2d):
+            """
+            2D 리스트(예: DRV_valc_pattern_ctrl_1) 전용.
+            마지막 닫힘은 ‘]\t\t]’ (쉼표 없음). 쉼표는 바깥 루프에서 1번만 붙임.
+            """
+            if not lst2d:
+                return "[\t]"
+            if not isinstance(lst2d[0], (list, tuple)):
+                return _fmt_inline_list(lst2d)
+
+            lines = []
+            # 첫 행
+            lines.append("[\t[\t" + ",\t".join(str(int(x)) for x in lst2d[0]) + "\t],")
+            # 중간 행들
+            for row in lst2d[1:-1]:
+                lines.append("\t\t\t[\t" + ",\t".join(str(int(x)) for x in row) + "\t],")
+            # 마지막 행(쉼표 없음) + 닫힘 괄호 정렬: “]\t\t]”
+            last = "\t\t\t[\t" + ",\t".join(str(int(x)) for x in lst2d[-1]) + "\t]\t\t]"
+            lines.append(last)
+            return "\n".join(lines)
+
+        def _fmt_flat_4096(lst4096):
+            """
+            4096 길이 LUT을 256x16으로 줄바꿈.
+            마지막 줄은 ‘\t\t]’로 끝(쉼표 없음). 쉼표는 바깥에서 1번만.
+            """
+            a = np.asarray(lst4096, dtype=int)
+            if a.size != 4096:
+                raise ValueError(f"LUT 길이는 4096이어야 합니다. (현재 {a.size})")
+            rows = a.reshape(256, 16)
+
+            out = []
+            # 첫 줄
+            out.append("[\t" + ",\t".join(str(x) for x in rows[0]) + ",")
+            # 중간 줄
+            for r in rows[1:-1]:
+                out.append("\t\t\t" + ",\t".join(str(x) for x in r) + ",")
+            # 마지막 줄 (쉼표 X) + 닫힘
+            out.append("\t\t\t" + ",\t".join(str(x) for x in rows[-1]) + "\t]")
+            return "\n".join(out)
+
+        lut_keys_4096 = {
+            "RchannelLow","RchannelHigh",
+            "GchannelLow","GchannelHigh",
+            "BchannelLow","BchannelHigh",
+        }
+
+        keys = list(od.keys())
+        lines = ["{"]
+
+        for i, k in enumerate(keys):
+            v = od[k]
+            is_last_key = (i == len(keys) - 1)
+            trailing = "" if is_last_key else ","
+
+            if isinstance(v, list):
+                # 4096 LUT
+                if k in lut_keys_4096 and len(v) == 4096 and not (v and isinstance(v[0], (list, tuple))):
+                    body = _fmt_flat_4096(v)                       # 끝에 쉼표 없음
+                    lines.append(f"\"{k}\"\t:\t{body}{trailing}")  # 쉼표는 여기서 1번만
+                else:
+                    # 일반 1D / 2D 리스트
+                    if v and isinstance(v[0], (list, tuple)):
+                        body = _fmt_list_of_lists(v)               # 끝에 쉼표 없음
+                        lines.append(f"\"{k}\"\t:\t{body}{trailing}")
+                    else:
+                        body = _fmt_inline_list(v)                 # 끝에 쉼표 없음
+                        lines.append(f"\"{k}\"\t:\t{body}{trailing}")
+
+            elif isinstance(v, (int, float)):
+                if k == "DRV_valc_hpf_ctrl_1":
+                    lines.append(f"\"{k}\"\t:\t\t{int(v)}{trailing}")
+                else:
+                    lines.append(f"\"{k}\"\t:\t{int(v)}{trailing}")
+
             else:
-                logging.info("[VAC Reading] Written VAC 데이터와 Read VAC 데이터 일치")
+                # 혹시 모를 기타 타입
+                body = json.dumps(v, ensure_ascii=False)
+                lines.append(f"\"{k}\"\t:\t{body}{trailing}")
 
-            self._step_done(3)
+        lines.append("}")
+        return "\n".join(lines)
 
-            self._fine_mode = False
-            
-            self.vac_optimization_gamma_chart.reset_on()
-            self.vac_optimization_cie1976_chart.reset_on()
 
-            profile_on = SessionProfile(
-                session_mode="VAC ON",
-                cie_label="data_2",
-                table_cols={"lv":4, "cx":5, "cy":6, "gamma":7, "d_cx":8, "d_cy":9, "d_gamma":10},
-                ref_store=self._off_store
+
+def _generate_predicted_vac_lut(
+        self,
+        base_vac_dict: dict,
+        *,
+        n_iters: int = 1,
+        wG: float = 0.4,          # dGamma weight
+        wC: float = 1.0,          # dCx/dCy weight
+        lambda_ridge: float = 1e-3,
+        use_pattern_onehot: bool = False,   # 지금은 W만 쓸거면 False 권장
+        patterns: tuple = ("W",),
+        bypass_vac_info_pk: int = 1,
+    ):
+        """
+        Base VAC(JSON dict)를 입력으로 받아
+        1) bypass VAC(pk=1) 대비 ΔLUT(학습 feature와 동일하게) 생성
+        2) ML로 dCx/dCy/dGamma per-gray 예측
+        3) Jacobian(J_g: 256x3x3)으로 High LUT를 보정 (n_iters 반복)
+        4) 256->4096로 업샘플 후 TV write용 JSON 생성
+
+        Returns
+        -------
+        vac_json_optimized : str | None
+        new_lut_4096 : dict | None
+        debug_info : dict
+        """
+
+        debug_info = {
+            "iters": [],
+            "bypass_vac_info_pk": bypass_vac_info_pk,
+        }
+
+        try:
+            # -----------------------------
+            # 0) prerequisite check
+            # -----------------------------
+            if not hasattr(self, "_J_dense") or self._J_dense is None:
+                raise RuntimeError("[PredictOpt] Jacobian bundle (_J_dense) not loaded.")
+
+            if not hasattr(self, "models_Y0_bundle") or self.models_Y0_bundle is None:
+                raise RuntimeError("[PredictOpt] Prediction models (models_Y0_bundle) not loaded.")
+
+            # -----------------------------
+            # 1) mapping index (gray->lut j)
+            # -----------------------------
+            self._load_mapping_index_gray_to_lut()
+            idx_map = np.asarray(self._mapping_index_gray_to_lut, dtype=np.int32)  # (256,)
+            if idx_map.shape[0] != 256:
+                raise ValueError(f"[PredictOpt] idx_map must be (256,), got {idx_map.shape}")
+
+            # -----------------------------
+            # 2) load bypass VAC LUT (4096) from DB (pk=1)
+            # -----------------------------
+            vac_version_b, bypass_vac_data = self._fetch_vac_by_vac_info_pk(bypass_vac_info_pk)
+            if bypass_vac_data is None:
+                raise RuntimeError(f"[PredictOpt] bypass VAC fetch failed. pk={bypass_vac_info_pk}")
+
+            bypass_vac_dict = json.loads(bypass_vac_data)
+
+            # -----------------------------
+            # 3) extract 4096 LUT arrays (base & bypass)
+            # -----------------------------
+            def _get_lut4096(d: dict, key: str) -> np.ndarray:
+                arr = np.asarray(d[key], dtype=np.float32)
+                if arr.shape[0] != 4096:
+                    raise ValueError(f"[PredictOpt] {key} must be len 4096, got {arr.shape}")
+                return arr
+
+            base_RL = _get_lut4096(base_vac_dict, "RchannelLow")
+            base_GL = _get_lut4096(base_vac_dict, "GchannelLow")
+            base_BL = _get_lut4096(base_vac_dict, "BchannelLow")
+            base_RH = _get_lut4096(base_vac_dict, "RchannelHigh")
+            base_GH = _get_lut4096(base_vac_dict, "GchannelHigh")
+            base_BH = _get_lut4096(base_vac_dict, "BchannelHigh")
+
+            bp_RL = _get_lut4096(bypass_vac_dict, "RchannelLow")
+            bp_GL = _get_lut4096(bypass_vac_dict, "GchannelLow")
+            bp_BL = _get_lut4096(bypass_vac_dict, "BchannelLow")
+            bp_RH = _get_lut4096(bypass_vac_dict, "RchannelHigh")
+            bp_GH = _get_lut4096(bypass_vac_dict, "GchannelHigh")
+            bp_BH = _get_lut4096(bypass_vac_dict, "BchannelHigh")
+
+            # -----------------------------
+            # 4) 256 LUT @ mapped indices
+            # -----------------------------
+            base_256 = {
+                "R_Low":  base_RL[idx_map],
+                "G_Low":  base_GL[idx_map],
+                "B_Low":  base_BL[idx_map],
+                "R_High": base_RH[idx_map],
+                "G_High": base_GH[idx_map],
+                "B_High": base_BH[idx_map],
+            }
+            bp_256 = {
+                "R_Low":  bp_RL[idx_map],
+                "G_Low":  bp_GL[idx_map],
+                "B_Low":  bp_BL[idx_map],
+                "R_High": bp_RH[idx_map],
+                "G_High": bp_GH[idx_map],
+                "B_High": bp_BH[idx_map],
+            }
+
+            # 초기 제어변수(보정 대상): High만
+            high_R = base_256["R_High"].copy()
+            high_G = base_256["G_High"].copy()
+            high_B = base_256["B_High"].copy()
+
+            # low는 base 그대로 (현재 설계)
+            low_R = base_256["R_Low"].copy()
+            low_G = base_256["G_Low"].copy()
+            low_B = base_256["B_Low"].copy()
+
+            # -----------------------------
+            # 5) meta (panel onehot + fr + model_year)
+            #    ※ 학습 때 VACInputBuilder meta와 동일한 방식/차원이어야 함
+            # -----------------------------
+            panel_text, frame_rate, model_year = self._get_ui_meta()
+
+            # 아래 함수는 "학습 때 one-hot 차원/순서"를 그대로 맞춰줘야 합니다.
+            # (PANEL_MAKER_CATEGORIES를 쓰든, 앱 내부에 동일한 매핑을 쓰든)
+            panel_onehot = self._panel_text_to_onehot(panel_text).astype(np.float32)
+
+            # pattern onehot (옵션)
+            pattern_order = list(patterns)
+            def _pattern_onehot(p: str) -> np.ndarray:
+                v = np.zeros(len(pattern_order), dtype=np.float32)
+                if p in pattern_order:
+                    v[pattern_order.index(p)] = 1.0
+                return v
+
+            # -----------------------------
+            # 6) helper: build X for model (per-gray)
+            #    X schema == VACDataset._build_features_for_gray() 기반
+            # -----------------------------
+            def _build_X_y0_per_gray(d_lut_256: dict, pat: str = "W") -> np.ndarray:
+                """
+                d_lut_256:
+                keys: R_Low,R_High,G_Low,G_High,B_Low,B_High each (256,)
+                값은 "base - bypass" (raw 12bit delta @ mapped indices)
+                """
+                X_rows = []
+                for g in range(256):
+                    row = [
+                        float(d_lut_256["R_Low"][g]),
+                        float(d_lut_256["R_High"][g]),
+                        float(d_lut_256["G_Low"][g]),
+                        float(d_lut_256["G_High"][g]),
+                        float(d_lut_256["B_Low"][g]),
+                        float(d_lut_256["B_High"][g]),
+                    ]
+                    # panel maker onehot
+                    row.extend(panel_onehot.tolist())
+                    # fr, model_year
+                    row.append(float(frame_rate))
+                    row.append(float(model_year))
+                    # gray_norm, LUT_j
+                    row.append(float(g / 255.0))
+                    row.append(float(idx_map[g]))
+
+                    # pattern onehot (선택)
+                    if use_pattern_onehot:
+                        row.extend(_pattern_onehot(pat).tolist())
+
+                    X_rows.append(row)
+
+                return np.asarray(X_rows, dtype=np.float32)  # (256, D)
+
+            # -----------------------------
+            # 7) helper: ML predict dCx/dCy/dGamma (per-gray)
+            # -----------------------------
+            def _predict_y0(d_lut_256: dict, pat: str = "W"):
+                X = _build_X_y0_per_gray(d_lut_256, pat=pat)
+
+                # payload 구조: {"linear_model":..., "rf_residual":..., "target_scaler":...}
+                def _hybrid_predict(model_payload: dict, X: np.ndarray) -> np.ndarray:
+                    lm = model_payload["linear_model"]
+                    rf = model_payload["rf_residual"]
+                    ts = model_payload.get("target_scaler", {"mean": 0.0, "std": 1.0, "standardized": True})
+                    y_mean = float(ts["mean"])
+                    y_std  = float(ts["std"])
+                    standardized = bool(ts.get("standardized", True))
+
+                    base_s = lm.predict(X).astype(np.float32)
+                    resid_s = rf.predict(X).astype(np.float32)
+                    pred_s = base_s + resid_s
+
+                    if standardized:
+                        pred = pred_s * y_std + y_mean
+                    else:
+                        pred = pred_s
+                    return pred.astype(np.float32)
+
+                dCx_pred    = _hybrid_predict(self.models_Y0_bundle["dCx"], X)
+                dCy_pred    = _hybrid_predict(self.models_Y0_bundle["dCy"], X)
+                dGamma_pred = _hybrid_predict(self.models_Y0_bundle["dGamma"], X)
+                return dCx_pred, dCy_pred, dGamma_pred
+
+            # -----------------------------
+            # 8) main loop (n_iters)
+            # -----------------------------
+            for it in range(1, n_iters + 1):
+
+                # 현재 상태에서 feature용 ΔLUT(base - bypass) 구성
+                # Low는 base(고정), High는 제어변수(high_R/G/B) 사용
+                d_lut_256 = {
+                    "R_Low":  low_R  - bp_256["R_Low"],
+                    "G_Low":  low_G  - bp_256["G_Low"],
+                    "B_Low":  low_B  - bp_256["B_Low"],
+                    "R_High": high_R - bp_256["R_High"],
+                    "G_High": high_G - bp_256["G_High"],
+                    "B_High": high_B - bp_256["B_High"],
+                }
+
+                # ML 예측 (per-gray)
+                # 지금은 W만 쓰는게 목적이면 patterns=("W",), pat="W"로 고정 추천
+                pat = pattern_order[0] if pattern_order else "W"
+                dCx_pred, dCy_pred, dGamma_pred = _predict_y0(d_lut_256, pat=pat)
+
+                # Jacobian 보정 (gray별 3x3 solve)
+                dh_R = np.zeros(256, dtype=np.float32)
+                dh_G = np.zeros(256, dtype=np.float32)
+                dh_B = np.zeros(256, dtype=np.float32)
+
+                for g in range(256):
+                    Jg = self._J_dense[g]  # (3,3)
+
+                    if not np.isfinite(Jg).all():
+                        continue
+
+                    y = np.array([
+                        wC * float(dCx_pred[g]),
+                        wC * float(dCy_pred[g]),
+                        wG * float(dGamma_pred[g]),
+                    ], dtype=np.float32)
+
+                    if not np.isfinite(y).all():
+                        continue
+
+                    # ridge solve: (J^T J + lam I) dh = - J^T y
+                    A = (Jg.T @ Jg).astype(np.float32)
+                    A[np.diag_indices_from(A)] += float(lambda_ridge)
+                    b = -(Jg.T @ y).astype(np.float32)
+
+                    try:
+                        dRGB = np.linalg.solve(A, b).astype(np.float32)
+                    except np.linalg.LinAlgError:
+                        continue
+
+                    dh_R[g], dh_G[g], dh_B[g] = dRGB[0], dRGB[1], dRGB[2]
+
+                # High LUT 업데이트 (12bit raw)
+                high_R = high_R + dh_R
+                high_G = high_G + dh_G
+                high_B = high_B + dh_B
+
+                # monotone + clip (권장: monotone 먼저)
+                high_R = np.clip(self._enforce_monotone(high_R), 0, 4095)
+                high_G = np.clip(self._enforce_monotone(high_G), 0, 4095)
+                high_B = np.clip(self._enforce_monotone(high_B), 0, 4095)
+
+                debug_info["iters"].append({
+                    "iter": it,
+                    "pred_summary": {
+                        "dCx_mean": float(np.nanmean(dCx_pred)),
+                        "dCy_mean": float(np.nanmean(dCy_pred)),
+                        "dGamma_mean": float(np.nanmean(dGamma_pred)),
+                        "dCx_abs_mean": float(np.nanmean(np.abs(dCx_pred))),
+                        "dCy_abs_mean": float(np.nanmean(np.abs(dCy_pred))),
+                        "dGamma_abs_mean": float(np.nanmean(np.abs(dGamma_pred))),
+                    },
+                    "dh_summary": {
+                        "dR_abs_mean": float(np.nanmean(np.abs(dh_R))),
+                        "dG_abs_mean": float(np.nanmean(np.abs(dh_G))),
+                        "dB_abs_mean": float(np.nanmean(np.abs(dh_B))),
+                    }
+                })
+
+                logging.info(f"[PredictOpt] iter {it}/{n_iters} done. wG={wG}, wC={wC}, lam={lambda_ridge}")
+
+            # -----------------------------
+            # 9) 256 -> 4096 upsample (High only)
+            # -----------------------------
+            new_lut_4096 = {
+                "RchannelLow":  np.clip(np.round(base_RL), 0, 4095).astype(np.uint16),
+                "GchannelLow":  np.clip(np.round(base_GL), 0, 4095).astype(np.uint16),
+                "BchannelLow":  np.clip(np.round(base_BL), 0, 4095).astype(np.uint16),
+                "RchannelHigh": np.clip(np.round(self._up256_to_4096(high_R)), 0, 4095).astype(np.uint16),
+                "GchannelHigh": np.clip(np.round(self._up256_to_4096(high_G)), 0, 4095).astype(np.uint16),
+                "BchannelHigh": np.clip(np.round(self._up256_to_4096(high_B)), 0, 4095).astype(np.uint16),
+            }
+
+            # -----------------------------
+            # 10) build json (TV write format)
+            # -----------------------------
+            vac_json_optimized = self.build_vacparam_std_format(
+                base_vac_dict=base_vac_dict,
+                new_lut_tvkeys=new_lut_4096
             )
 
-            def _after_on(store_on):
-                logging.info("[Measurement] 예측 기반 최적화 VAC 데이터 기준 측정 완료")
-                self._step_done(4)
-                self._on_store = store_on
-                self._update_last_on_lv_norm(store_on)
-                
-                logging.info("[Evaluation] ΔCx / ΔCy / ΔGamma의 Spec 만족 여부를 평가합니다.")
-                self._step_start(5)
-                self._spec_thread = SpecEvalThread(self._off_store, self._on_store, thr_gamma=0.05, thr_c=0.003, parent=self)
-                self._spec_thread.finished.connect(lambda ok, metrics: self._on_spec_eval_done(ok, metrics, iter_idx=0, max_iters=1))
-                self._spec_thread.start()
+            return vac_json_optimized, new_lut_4096, debug_info
 
-            logging.info("[Measurement] 예측 기반 최적화 VAC 데이터 기준 측정 시작")
-            self._step_start(4)
-            self.start_viewing_angle_session(
-                profile=profile_on,
-                on_done=_after_on
-            )
-
-        logging.info("[VAC Writing] 예측기반 최적화 VAC 데이터 TV Writing 시작")
-        self._write_vac_to_tv(base_vac_data, on_finished=_after_write)
+        except Exception:
+            logging.exception("[PredictOpt] failed")
+            return None, None, debug_info
