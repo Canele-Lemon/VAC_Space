@@ -1,70 +1,95 @@
-def _generate_predicted_vac_lut(
-    self,
-    base_vac_dict: dict,
-    *,
-    n_iters: int = 1,
-    wG: float = 0.4,
-    wC: float = 1.0,
-    lambda_ridge: float = 1e-3,
-    use_pattern_onehot: bool = False,
-    patterns: tuple = ("W",),
-    bypass_vac_info_pk: int = 1,
-):
-    """
-    Returns
-    -------
-    vacparam_str : str | None
-        ✅ TV에 바로 write 가능한 탭 포맷 문자열 (build_vacparam_std_format 결과)
-    new_lut_tvkeys : dict | None
-        ✅ TV 원 키명 그대로의 4096 LUT dict (plot/verify/로그용)
-        {"RchannelLow":[...], "RchannelHigh":[...], ...}  # list[int] 권장
-    debug_info : dict
-    """
-    debug_info = {"iters": [], "bypass_vac_info_pk": bypass_vac_info_pk}
+    def _apply_predicted_vac_and_measure_on(self):
+        self._step_start(2)
+        
+        BASE_VAC_PK = 3025
+        vac_version, base_vac_data = self._fetch_vac_by_vac_info_pk(BASE_VAC_PK)
+        if base_vac_data is None:
+            logging.error("[DB] VAC 데이터 로딩 실패 - 최적화 루프 종료")
+            return
 
-    try:
-        # --- (중간 로직은 사용자가 올린 그대로 유지) ---
-        # 0~8단: jacobian/model check, idx_map, bypass fetch,
-        # base/bypass 4096->256, meta, predict, jacobian update loop
-        # ... your code ...
+        base_vac_dict = json.loads(base_vac_data)
+        self._vac_dict_cache = base_vac_dict
+        
+        try:
+            predicted_vac_data, debug_info = self._generate_predicted_vac_lut(
+                base_vac_dict,
+                n_iters=2,
+                wG=0.4,
+                wC=1.0,
+                lambda_ridge=1e-3
+            )
+        except Exception:
+            logging.exception("[PredictOpt] 예측 기반 1st 보정 중 예외 발생 - Base VAC로 진행")
+            predicted_vac_json, debug_info = None, None
+            predicted_vac_json = base_vac_dict
+            
+            
+        lut_dict_plot = {key.replace("channel", "_"): v for key, v in predicted_vac_data.items() if "channel" in key}
+        self._update_lut_chart_and_table(lut_dict_plot)
+        self._step_done(2)
 
-        # -----------------------------
-        # 9) 256 -> 4096 upsample (High only)
-        # -----------------------------
-        # ✅ build_vacparam_std_format은 list/np-array 둘 다 받지만
-        #    내부에서 arr.astype(int) 후 .tolist() 하므로 최종 list가 됨.
-        #    여기서는 "int list" 형태로 넘기는게 가장 안전함.
+        def _after_write(ok, msg):
+            if not ok:
+                logging.error(f"[VAC Writing] 예측 기반 최적화 VAC 데이터 Writing 실패: {msg} - 최적화 루프 종료")
+                return
+            
+            logging.info(f"[VAC Writing] 예측 기반 최적화 VAC 데이터 Writing 완료: {msg}")
+            logging.info("[VAC Reading] VAC Reading 시작")
+            self._read_vac_from_tv(_after_read)
 
-        def _to_int_list4096(x) -> list:
-            a = np.asarray(x).astype(np.int32)
-            if a.size != 4096:
-                raise ValueError(f"4096 LUT size mismatch: {a.size}")
-            a = np.clip(a, 0, 4095)
-            return a.tolist()
+        def _after_read(read_vac_dict):
+            self.send_command(self.ser_tv, 'exit')
+            if not read_vac_dict:
+                logging.error("[VAC Reading] VAC Reading 실패 - 최적화 루프 종료")
+                return
+            logging.info("[VAC Reading] VAC Reading 완료. Written VAC 데이터와의 일치 여부를 판단합니다.")
+            mismatch_keys = self._verify_vac_data_match(written_data=predicted_vac_data, read_data=read_vac_dict)
 
-        # base Low는 그대로, High만 업데이트
-        new_lut_tvkeys = {
-            "RchannelLow":  _to_int_list4096(base_RL),  # base_RL: (4096,)
-            "GchannelLow":  _to_int_list4096(base_GL),
-            "BchannelLow":  _to_int_list4096(base_BL),
-            "RchannelHigh": _to_int_list4096(np.round(self._up256_to_4096(high_R))),
-            "GchannelHigh": _to_int_list4096(np.round(self._up256_to_4096(high_G))),
-            "BchannelHigh": _to_int_list4096(np.round(self._up256_to_4096(high_B))),
-        }
+            if mismatch_keys:
+                logging.warning("[VAC Reading] VAC 데이터 불일치 - 최적화 루프 종료")
+                return
+            else:
+                logging.info("[VAC Reading] Written VAC 데이터와 Read VAC 데이터 일치")
 
-        # -----------------------------
-        # 10) ✅ TV write용 "조립 문자열" 생성
-        # -----------------------------
-        vacparam_str = self.build_vacparam_std_format(
-            base_vac_dict=base_vac_dict,
-            new_lut_tvkeys=new_lut_tvkeys
-        )
+            self._step_done(3)
 
-        # -----------------------------
-        # 11) return
-        # -----------------------------
-        return vacparam_str, new_lut_tvkeys, debug_info
+            self._fine_mode = False
+            
+            self.vac_optimization_gamma_chart.reset_on()
+            self.vac_optimization_cie1976_chart.reset_on()
 
-    except Exception:
-        logging.exception("[PredictOpt] failed")
-        return None, None, debug_info
+            profile_on = SessionProfile(
+                session_mode="VAC ON",
+                cie_label="data_2",
+                table_cols={"lv":4, "cx":5, "cy":6, "gamma":7, "d_cx":8, "d_cy":9, "d_gamma":10},
+                ref_store=self._off_store
+            )
+
+            def _after_on(store_on):
+                logging.info("[Measurement] 예측 기반 최적화 VAC 데이터 기준 측정 완료")
+                self._step_done(4)
+                self._on_store = store_on
+                self._update_last_on_lv_norm(store_on)
+                
+                logging.info("[Evaluation] ΔCx / ΔCy / ΔGamma의 Spec 만족 여부를 평가합니다.")
+                self._step_start(5)
+                self._spec_thread = SpecEvalThread(self._off_store, self._on_store, thr_gamma=0.05, thr_c=0.003, parent=self)
+                self._spec_thread.finished.connect(lambda ok, metrics: self._on_spec_eval_done(ok, metrics, iter_idx=0, max_iters=1))
+                self._spec_thread.start()
+
+            logging.info("[Measurement] 예측 기반 최적화 VAC 데이터 기준 측정 시작")
+            self._step_start(4)
+            self.start_viewing_angle_session(
+                profile=profile_on,
+                on_done=_after_on
+            )
+
+        logging.info("[VAC Writing] 예측기반 최적화 VAC 데이터 TV Writing 시작")
+        self._write_vac_to_tv(predicted_vac_data, on_finished=_after_write)
+
+여기서 
+        except Exception:
+            logging.exception("[PredictOpt] 예측 기반 1st 보정 중 예외 발생 - Base VAC로 진행")
+            predicted_vac_json, debug_info = None, None
+            predicted_vac_json = base_vac_dict
+이렇게 해도 되나요?
