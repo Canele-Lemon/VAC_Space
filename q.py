@@ -1,5 +1,5 @@
 그럼 이제 다음 단계로 예측vacdata -> 적용 -> 측정 -> 평가를 한 다음에
-ng gray에 대한 fine 보정 메서드를 작성해야 해요.
+ng gray에 대한 보정 메서드를 작성해야 해요.
 아래는 현재까지 작성된 코드인데 수정해야 할 부분을 알려주세요
     def _on_spec_eval_done(self, spec_ok, metrics, iter_idx, max_iters):
         """
