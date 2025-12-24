@@ -1,3 +1,26 @@
+from dataclasses import dataclass
+from typing import FrozenSet
+
+@dataclass(frozen=True)
+class VACSpecPolicy:
+    thr_gamma: float = 0.05
+    thr_c: float = 0.003
+
+    gamma_eval_grays: FrozenSet[int] = frozenset(range(2, 248))
+    color_eval_grays: FrozenSet[int] = frozenset(range(6, 256))
+    
+    def should_eval_gamma(self, gray: int) -> bool:
+        return gray in self.gamma_eval_grays
+
+    def should_eval_color(self, gray: int) -> bool:
+        return gray in self.color_eval_grays
+
+    def gamma_ok(self, d_g: float) -> bool:
+        return abs(d_g) <= self.thr_gamma
+
+    def color_ok(self, d_cx: float, d_cy: float) -> bool:
+        return (abs(d_cx) <= self.thr_c) and (abs(d_cy) <= self.thr_c)
+
 class SpecEvalThread(QThread):
     finished = Signal(bool, dict)  # (spec_ok, metrics)
 
