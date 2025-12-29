@@ -1,35 +1,13 @@
-from dataclasses import dataclass
-from typing import FrozenSet
-
-@dataclass(frozen=True)
-class VACSpecPolicy:
-    thr_gamma: float = 0.05
-    thr_c: float = 0.003
-
-    gamma_eval_grays: FrozenSet[int] = frozenset(range(2, 248))
-    color_eval_grays: FrozenSet[int] = frozenset(range(6, 256))
-    
-    def should_eval_gamma(self, gray: int) -> bool:
-        return gray in self.gamma_eval_grays
-
-    def should_eval_color(self, gray: int) -> bool:
-        return gray in self.color_eval_grays
-
-    def gamma_ok(self, d_g: float) -> bool:
-        return abs(d_g) <= self.thr_gamma
-
-    def color_ok(self, d_cx: float, d_cy: float) -> bool:
-        return (abs(d_cx) <= self.thr_c) and (abs(d_cy) <= self.thr_c)
-
 class SpecEvalThread(QThread):
     finished = Signal(bool, dict)  # (spec_ok, metrics)
 
-    def __init__(self, off_store, on_store, thr_gamma=0.05, thr_c=0.003, parent=None):
+    def __init__(self, off_store, on_store, policy: VACSpecPolicy, parent=None):
         super().__init__(parent)
+        if policy is None:
+            raise ValueError("policy must be provided (VACSpecPolicy)")
         self.off_store = off_store
         self.on_store  = on_store
-        self.thr_gamma = float(thr_gamma)
-        self.thr_c     = float(thr_c)
+        self.policy    = policy
 
     @staticmethod
     def _compute_gamma_series(lv_vec_256):
@@ -59,7 +37,7 @@ class SpecEvalThread(QThread):
         return lv, cx, cy
 
     @staticmethod
-    def compute_gray_errors_and_ng_list(off_store, on_store, thr_gamma, thr_c):
+    def compute_gray_errors_and_ng_list(off_store, on_store, policy: VACSpecPolicy):
         # 1) OFF/ON 시리즈
         lv_off, cx_off, cy_off = SpecEvalThread._extract_white(off_store)
         lv_on , cx_on , cy_on  = SpecEvalThread._extract_white(on_store)
@@ -69,68 +47,55 @@ class SpecEvalThread(QThread):
         G_on  = SpecEvalThread._compute_gamma_series(lv_on)
 
         # 3) Δ = ON - OFF
-        dG  = G_on  - G_off
-        dCx = cx_on - cx_off
-        dCy = cy_on - cy_off
+        dG  = (G_on  - G_off).astype(np.float64)
+        dCx = (cx_on - cx_off).astype(np.float64)
+        dCy = (cy_on - cy_off).astype(np.float64)
 
-        # 4) 절대값
         abs_dG  = np.abs(dG)
         abs_dCx = np.abs(dCx)
         abs_dCy = np.abs(dCy)
 
-        # 5) 평가 정책 마스크
-        # - 0,1: 전부 제외
-        # - 2~5: Gamma-only
-        # - 248~255: Color-only
-        # - 6~247: 둘 다 평가
-        exclude_all     = {0, 1}
-        gamma_only_set  = set(range(2, 6))          # 2..5
-        color_only_set  = set(range(248, 256))      # 248..255
+        # 4) policy 기반 eval grays / NG 산출 (여기서만!)
+        gamma_eval_grays = sorted(policy.gamma_eval_grays)
+        color_eval_grays = sorted(policy.color_eval_grays)
 
-        gamma_eval_grays = set(range(2, 248))       # 2..247 (248..255는 Gamma 제외)
-        color_eval_grays = set(range(6, 256))       # 6..255 (2..5는 색좌표 제외)
+        ng_grays_gamma = []
+        for g in gamma_eval_grays:
+            if np.isfinite(abs_dG[g]) and (abs_dG[g] > policy.thr_gamma):
+                ng_grays_gamma.append(g)
 
-        # exclude_all은 두 마스크에서 모두 제거
-        gamma_eval_grays -= exclude_all
-        color_eval_grays -= exclude_all
+        ng_grays_color = []
+        for g in color_eval_grays:
+            bad_cx = (np.isfinite(abs_dCx[g]) and abs_dCx[g] > policy.thr_c)
+            bad_cy = (np.isfinite(abs_dCy[g]) and abs_dCy[g] > policy.thr_c)
+            if bad_cx or bad_cy:
+                ng_grays_color.append(g)
 
-        # 6) NG 리스트 계산 (마스크 적용)
-        ng_grays_gamma = [g for g in sorted(gamma_eval_grays)
-                          if np.isfinite(abs_dG[g]) and (abs_dG[g] > thr_gamma)]
-
-        ng_grays_color = [g for g in sorted(color_eval_grays)
-                          if (np.isfinite(abs_dCx[g]) and abs_dCx[g] > thr_c) or
-                             (np.isfinite(abs_dCy[g]) and abs_dCy[g] > thr_c)]
-
-        # 전체 NG (중복 제거)
         ng_grays = sorted(set(ng_grays_gamma) | set(ng_grays_color))
-
 
         return dG, dCx, dCy, ng_grays, ng_grays_gamma, ng_grays_color, gamma_eval_grays, color_eval_grays
 
     def run(self):
         try:
+            pol = self.policy
             dG, dCx, dCy, ng_grays, ng_gamma, ng_color, gamma_eval_grays, color_eval_grays = \
-                            self.compute_gray_errors_and_ng_list(
-                                self.off_store, self.on_store,
-                                self.thr_gamma, self.thr_c
-                            )
-                            
+                self.compute_gray_errors_and_ng_list(self.off_store, self.on_store, pol)
+
             abs_dG  = np.abs(dG)
             abs_dCx = np.abs(dCx)
             abs_dCy = np.abs(dCy)
-            
+
             if gamma_eval_grays:
-                max_dG = float(np.nanmax(np.array([abs_dG[g]  for g in gamma_eval_grays], dtype=np.float64)))
+                max_dG = float(np.nanmax(abs_dG[gamma_eval_grays]))
             else:
-                max_dG = float('nan')
+                max_dG = float("nan")
 
             if color_eval_grays:
-                max_dCx = float(np.nanmax(np.array([abs_dCx[g] for g in color_eval_grays], dtype=np.float64)))
-                max_dCy = float(np.nanmax(np.array([abs_dCy[g] for g in color_eval_grays], dtype=np.float64)))
+                max_dCx = float(np.nanmax(abs_dCx[color_eval_grays]))
+                max_dCy = float(np.nanmax(abs_dCy[color_eval_grays]))
             else:
-                max_dCx = float('nan')
-                max_dCy = float('nan')
+                max_dCx = float("nan")
+                max_dCy = float("nan")
 
             spec_ok = (len(ng_grays) == 0)
 
@@ -138,19 +103,22 @@ class SpecEvalThread(QThread):
                 "max_dG":  max_dG,
                 "max_dCx": max_dCx,
                 "max_dCy": max_dCy,
-                "thr_gamma": self.thr_gamma,
-                "thr_c": self.thr_c,
 
-                "dG":  dG,
-                "dCx": dCx,
-                "dCy": dCy,
+                # ✅ 이제 thr는 policy에서만 온다
+                "thr_gamma": pol.thr_gamma,
+                "thr_c": pol.thr_c,
 
-                # NG/마스크를 분리해 전달 (로깅/후속 로직에 유용)
+                # raw vectors
+                "dG":  dG.astype(np.float32),
+                "dCx": dCx.astype(np.float32),
+                "dCy": dCy.astype(np.float32),
+
+                # NG / eval grays
                 "ng_grays": ng_grays,
                 "ng_grays_gamma": ng_gamma,
                 "ng_grays_color": ng_color,
-                "gamma_eval_grays": sorted(gamma_eval_grays),
-                "color_eval_grays": sorted(color_eval_grays),
+                "gamma_eval_grays": gamma_eval_grays,
+                "color_eval_grays": color_eval_grays,
             }
             self.finished.emit(spec_ok, metrics)
 
