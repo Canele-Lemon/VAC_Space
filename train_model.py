@@ -15,8 +15,7 @@ from sklearn.ensemble import RandomForestRegressor
 from scipy.stats import randint, uniform
 from joblib import parallel_backend
 
-# src 경로 추가
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from src.modeling.VAC_dataset import VACDataset
 
@@ -132,38 +131,32 @@ def train_hybrid_regressor(X_all, y_all, groups, tag="", normalize_y=True):
 # ─────────────────────────────────────────────────────────
 # A) Y0: Gamma / Cx / Cy (per-gray)
 # ─────────────────────────────────────────────────────────        
-def train_Y0_models(dataset, save_dir, patterns=('W','R','G','B')):
-    components = ["Gamma", "Cx", "Cy"]
+def train_Y0_models(dataset, save_dir, patterns=('W',), exclude_gray_for_cxcy=(0,5)):
+    components = ["dGamma", "dCx", "dCy"]
+    channels = ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
+    
     for comp in components:
         print(f"\n=== Train Y0: {comp} ===")
+        
         # 1) 데이터 구축
-        X_all, y_all, groups = dataset.build_per_gray_y0(component=comp, patterns=patterns)  # (PK*|patterns|*256, Dx), (..,)
+        X_all, y_all, groups = dataset.build_XY_dataset(
+            target="y0",
+            component=comp,
+            channels=channels,
+            patterns=patterns,
+        )
 
-        # # 2) 그룹 벡터 (드롭 前 길이와 동일하게)
-        # rows_per_pk = len(patterns) * 256
-        # groups_full = []
-        # for s in dataset.samples:
-        #     groups_full.extend([s['pk']] * rows_per_pk)
-        # groups_full = np.asarray(groups_full, dtype=np.int64)
-
-        # # 3) 라벨 NaN 방어 (드롭 방식 권장)
-        # mask = np.isfinite(y_all)  # True=유효
-        # X_all = X_all[mask].astype(np.float32)
-        # y_all = y_all[mask].astype(np.float32)
-        # groups = groups_full[mask]  # ←★ 여기 꼭 같이 마스킹
-
-        # 4) 학습
         artifacts = train_hybrid_regressor(X_all, y_all, groups, tag=f"Y0-{comp}")
 
-        # 5) 저장
         payload = {
             "target": {"type": "Y0-per-gray", "component": comp, "patterns": patterns},
             **artifacts,
             "feature_schema": {
-                "desc": "R/G/B Low/High at gray + panel_onehot + frame_rate + model_year + gray_norm + pattern_onehot",
-                "channels": ['R_Low','R_High','G_Low','G_High','B_Low','B_High'],
+                "desc": "ΔLUT(6ch) + meta + gray_norm + LUT_j",
+                "channels": list(channels),
                 "add_gray_norm": True,
-                "add_pattern_onehot": True
+                "add_LUT_j": True,
+                "note": f"exclude_gray_for_cxcy={exclude_gray_for_cxcy} is applied inside VACDataset._build_XY0"
             }
         }
         path = os.path.join(save_dir, f"hybrid_{comp}_model.pkl")
@@ -173,102 +166,86 @@ def train_Y0_models(dataset, save_dir, patterns=('W','R','G','B')):
 # ─────────────────────────────────────────────────────────
 # B) Y1: nor.Lv slope
 # ─────────────────────────────────────────────────────────
-def train_Y1_model(dataset, save_dir, patterns=('W',), use_full_range=True):
+def train_Y1_model(dataset, save_dir, patterns=('W',)):
     print("\n=== Train Y1 ===")
-    # 1) 전체 slope 데이터셋 생성
-    X_all, y_all = dataset.build_per_gray_y1(patterns=patterns, use_segment_features=True, low_only=True)  # (#PK*|patterns|*255, Dx)
-
-    num_pk = len(dataset.samples)
-    segments_per_pat = 255 # 0~254
-    # 세그먼트 인덱스 벡터 (PK*패턴 수 만큼 반복)
-    g_indices = np.tile(np.arange(segments_per_pat), num_pk * len(patterns))
+    channels = ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
     
-    # 2) 전체 구간 OR 특정 구간 선택
-    if use_full_range:
-        g0, g1 = 0, 254
-        mask = np.ones_like(g_indices, dtype=bool)
-    else:
-        g0, g1 = 88, 231
-        mask = (g_indices >= g0) & (g_indices <= g1)
+    X_all, y_all, groups = dataset.build_XY_dataset(
+    target="y1",
+    channels=channels,
+    patterns=patterns,
+    )
 
+    # y_all에 NaN 있는 경우 대비
+    mask = np.isfinite(y_all)
     X_all = X_all[mask].astype(np.float32)
-    y_all = np.nan_to_num(y_all[mask], nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
-
-    # 3) 그룹 벡터(PK 단위) 생성
-    rows_per_pk = (g1 - g0 + 1) * len(patterns)
-    groups = np.repeat([s['pk'] for s in dataset.samples], rows_per_pk).astype(np.int64)
-
-    # 4) 학습
+    y_all = y_all[mask].astype(np.float32)
+    groups = groups[mask].astype(np.int64)
+    
     artifacts = train_hybrid_regressor(X_all, y_all, groups, tag="Y1-slope")
-
-    #5) 저장
+    
     payload = {
-        "target": {"type": "Y1-slope", "segments": [g0, g1], "patterns": patterns},
-        **artifacts
+            "target": {"type": "Y1-slope", "patterns": patterns},
+            **artifacts,
+            "feature_schema": {"desc": "segment-center gray ΔLUT(6ch)+meta+gray_norm+LUT_j"}
     }
-    path = os.path.join(save_dir, "hybrid_Y1_slope_model_low_only.pkl")
+    path = os.path.join(save_dir, "hybrid_Y1_slope_model.pkl")
     joblib.dump(payload, path, compress=("gzip", 3))
     print(f"📁 saved: {path}")
-
 
 # ─────────────────────────────────────────────────────────
 # C) Y2: Δu′v′ (12 Macbeth 패치, 패치 one-hot 추가해 한 모델)
 # ─────────────────────────────────────────────────────────
 def train_Y2_model(dataset, save_dir):
-    print("\n=== Train Y2 (Δu′v′ for 12 Macbeth patches, single model with patch one-hot) ===")
-    MACBETH_LIST = [
-        "Red","Green","Blue","Cyan","Magenta","Yellow",
-        "White","Gray","Darkskin","Lightskin","Asian","Western"
-    ]
-    num_patches = len(MACBETH_LIST)
+    print("\n=== Train Y2 (delta_uv) ===")
+    channels = ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
 
-    # 원 데이터: meta(+lut summary) 기반 X, Δu′v′ y
-    X_base, y_base = dataset.build_y2_macbeth(use_lut_summary=True)  # (#PK*12, Dx)
-    X_base = X_base.astype(np.float32)
-    y_base = np.nan_to_num(y_base, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+    X_all, y_all, groups = dataset.build_XY_dataset(
+        target="y2",
+        channels=channels,
+    )
 
-    # 패치 one-hot 추가 (build_y2_macbeth의 순서를 가정: PK 순회, 각 PK당 12행)
-    patch_onehots = []
-    for _ in dataset.samples:
-        for i in range(num_patches):
-            v = np.zeros(num_patches, np.float32)
-            v[i] = 1.0
-            patch_onehots.append(v)
-    patch_onehots = np.vstack(patch_onehots).astype(np.float32)
-
-    X_all = np.hstack([X_base, patch_onehots]).astype(np.float32)
-    y_all = y_base
-
-    # 그룹 벡터(PK 단위)
-    groups = []
-    for s in dataset.samples:
-        groups.extend([s['pk']] * num_patches)
-    groups = np.array(groups, dtype=np.int64)
+    mask = np.isfinite(y_all)
+    X_all = X_all[mask].astype(np.float32)
+    y_all = y_all[mask].astype(np.float32)
+    groups = groups[mask].astype(np.int64)
 
     artifacts = train_hybrid_regressor(X_all, y_all, groups, tag="Y2-delta_uv")
 
     payload = {
-        "target": {"type": "Y2-delta_uv", "macbeth": MACBETH_LIST},
+        "target": {"type": "Y2-delta_uv"},
         **artifacts,
-        "feature_note": "use_lut_summary + 12-dim patch one-hot appended"
+        "feature_schema": {"desc": "3 gray-triplets ΔLUT + meta + pattern one-hot (already inside dataset)"}
     }
     path = os.path.join(save_dir, "hybrid_Y2_delta_uv_model.pkl")
     joblib.dump(payload, path, compress=("gzip", 3))
     print(f"📁 saved: {path}")
     
+    
+def preview(name, X, y, groups, n=3):
+    print(f"\n[PREVIEW] {name}")
+    print("X:", X.shape, "y:", y.shape, "groups:", groups.shape)
+    print("finite y ratio:", np.isfinite(y).mean())
+    print("y min/max:", np.nanmin(y), np.nanmax(y))
+    print("unique groups:", len(np.unique(groups)))
+    print("first rows X[0:3]:\n", X[:n, :3])
+    print("first y:", y[:n], "first groups:", groups[:n])
+    
 def main():
+    BYPASS_PK = 3007
     # -------------------------------------------
     # 1) 학습에 사용할 PK 리스트와 bypass PK 설정    
     # -------------------------------------------
-    full_pk_range = list(range(1411, 2455))
-    exclude_pks = [1934, 2154] # 학습 제외 PKs
-    pk_list = [pk for pk in full_pk_range if pk not in exclude_pks]
-    print(f"▶ TEST with {len(pk_list)} PKs")
+    # full_pk_range = list(range(1411, 2455))
+    # exclude_pks = [1934, 2154] # 학습 제외 PKs
+    # TARGET_PK = [pk for pk in full_pk_range if pk not in exclude_pks]
+    TARGET_PK_LIST = list(range(3008, 3317))
+    print(f"▶ TEST with {len(TARGET_PK_LIST)} PKs")
 
     # -------------------------------------------
     # 2) 데이터셋 생성
     # -------------------------------------------
-    dataset = VACDataset(pk_list)
+    dataset = VACDataset(TARGET_PK_LIST, ref_pk=BYPASS_PK)
     
     # -------------------------------------------
     # 3) 저장 경로
@@ -279,26 +256,35 @@ def main():
     # 4) 학습 실행 (Y0 → Y1 → Y2)
     # -------------------------------------------
     train_Y0_models(dataset, save_dir, patterns=('W',))
-    # train_Y1_model(dataset, save_dir, patterns=('W',), use_full_range=True)
-    # train_Y2_model(dataset, save_dir)
+    train_Y1_model(dataset, save_dir, patterns=('W',))
+    train_Y2_model(dataset, save_dir)
 
     print("\n✅ ALL DONE.")
+    
+    
+    
     
     # # ================== Dataset 검증용 출력 ==================
     # print("TEST")
     # pd.set_option('display.max_columns', None)
-    # test_pk = [500]
-    # dataset = VACDataset(test_pk)
+    # test_pk = [3008]
+    # dataset = VACDataset(test_pk, ref_pk=BYPASS_PK)
 
-    # X_mat, y_vec = dataset.build_per_gray_y1(patterns=('W',), use_segment_features=True)
+    # X, y, groups = dataset.build_XY_dataset(
+    #     target="y0",
+    #     component="dGamma",
+    #     channels=('R_Low','R_High','G_Low','G_High','B_Low','B_High'),
+    #     patterns=('W','R','G','B'),
+    # )
 
-    # print(f"\n[PK=500 Y1 Dataset Preview]")
-    # print(f"X_mat shape: {X_mat.shape}")   # (255, Dx)
-    # print(f"y_vec shape: {y_vec.shape}")   # (255,)
+    # print(f"\n[PK=3007 Y0 Dataset Preview]")
+    # print(f"X_mat shape: {X.shape}")   # (255, Dx)
+    # print(f"y_vec shape: {y.shape}")   # (255,)
     # print("\n--- X_mat (first 3 rows) ---")
-    # print(pd.DataFrame(X_mat[:3]))         # 앞부분 일부 확인
+    # print(pd.DataFrame(X[:3]))         # 앞부분 일부 확인
     # print("\n--- y_vec (first 10 values) ---")
-    # print(y_vec[:10])
+    # print(y[:10])
+    # # ========================================================
 
 if __name__ == "__main__":
     main()
