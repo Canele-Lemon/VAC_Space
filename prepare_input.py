@@ -101,12 +101,12 @@ class VACInputBuilder:
         row = df_set.iloc[0]
         vac_info_pk = row['VAC_Info_PK']
         frame_rate = float(row['Frame_Rate'])
-        model_year = float(row['Model_Year'])
+        # model_year = float(row['Model_Year'])
 
         meta_dict = {
             "panel_maker": panel_maker_oh,
             "frame_rate": frame_rate,
-            "model_year": model_year
+            # "model_year": model_year
         }
 
         return {
@@ -211,7 +211,7 @@ class VACInputBuilder:
                 "meta": {
                     "panel_maker": np.zeros(n_panel, np.float32),
                     "frame_rate": 0.0,
-                    "model_year": 0.0
+                    # "model_year": 0.0
                 }
             }
         info = self._load_vac_set_info_row(self.pk)
@@ -255,7 +255,7 @@ class VACInputBuilder:
                 "meta": {
                     "panel_maker": np.zeros(n_panel, np.float32),
                     "frame_rate": 0.0,
-                    "model_year": 0.0
+                    # "model_year": 0.0
                 }
             }
 
@@ -372,7 +372,7 @@ class VACInputBuilder:
         print("\n[META]")
         print(f"  panel_maker one-hot: {meta['panel_maker']}")
         print(f"  frame_rate         : {meta['frame_rate']}")
-        print(f"  model_year         : {meta['model_year']}")
+        # print(f"  model_year         : {meta['model_year']}")
 
         # 3) MAPPING 요약
         print("\n[MAPPING] j[0..10] =", j_map[:11].tolist(), "...")
@@ -546,7 +546,7 @@ class VACInputBuilder:
                 f"[SET] model={row['model_name']} | "
                 f"maker={row['panel_maker']} | "
                 f"frame={row['frame_rate']} | "
-                f"year={row['model_year']}"
+                # f"year={row['model_year']}"
             )
             print(f"[PK] target_pk={target_pk}, ref_pk={ref_pk}, base_pk={base_pk}")
             print("#" * 100)
@@ -571,6 +571,9 @@ if __name__ == "__main__":
     ]
 
     for case in debug_cases:
+        target_pk = case["target_pk"]
+        ref_pk = case["ref_pk"],
+            
         print("\n" + "=" * 100)
         print(
             f"target_pk={case['target_pk']} "
@@ -580,10 +583,65 @@ if __name__ == "__main__":
         builder = VACInputBuilder(pk=case["target_pk"])
 
         builder.debug_dump_delta_with_mapping(
-            ref_pk=case["ref_pk"],
+            pk=target_pk,
+            ref_pk=ref_pk,
             verbose_lut=True,
             preview_grays=[0, 1, 32, 128, 254, 255]
         )
 
-    # builder.export_mapped_lut_to_csv(open_after=True)
-    
+    builder.export_mapped_lut_to_csv(
+        pk=target_pk,
+        ref_pk=ref_pk,
+        open_after=True)
+
+여기서 아래 에러가 떴어요
+Traceback (most recent call last):
+  File "d:\00 업무\00 가상화기술\25Y\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project\src\data_preparation\prepare_input.py", line 585, in <module>
+    builder.debug_dump_delta_with_mapping(
+  File "d:\00 업무\00 가상화기술\25Y\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project\src\data_preparation\prepare_input.py", line 363, in debug_dump_delta_with_mapping
+    pack = self.prepare_X_delta_lut_with_mapping(ref_pk=ref_pk)
+  File "d:\00 업무\00 가상화기술\25Y\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project\src\data_preparation\prepare_input.py", line 315, in prepare_X_delta_lut_with_mapping
+    lut4096_ref = self._load_vacdata_lut4096(ref_pk)
+  File "d:\00 업무\00 가상화기술\25Y\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project\src\data_preparation\prepare_input.py", line 138, in _load_vacdata_lut4096
+    df_set = pd.read_sql(query_set, engine)
+  File "C:\python310\lib\site-packages\pandas\io\sql.py", line 734, in read_sql
+    return pandas_sql.read_query(
+  File "C:\python310\lib\site-packages\pandas\io\sql.py", line 1836, in read_query
+    result = self.execute(sql, params)
+  File "C:\python310\lib\site-packages\pandas\io\sql.py", line 1659, in execute
+    return self.con.exec_driver_sql(sql, *args)
+  File "C:\python310\lib\site-packages\sqlalchemy\engine\base.py", line 1779, in exec_driver_sql
+    ret = self._execute_context(
+  File "C:\python310\lib\site-packages\sqlalchemy\engine\base.py", line 1846, in _execute_context
+    return self._exec_single_context(
+  File "C:\python310\lib\site-packages\sqlalchemy\engine\base.py", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "C:\python310\lib\site-packages\sqlalchemy\engine\base.py", line 2355, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "C:\python310\lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\python310\lib\site-packages\sqlalchemy\engine\default.py", line 951, in do_execute
+    cursor.execute(statement, parameters)
+  File "C:\python310\lib\site-packages\pymysql\cursors.py", line 153, in execute
+    result = self._query(query)
+  File "C:\python310\lib\site-packages\pymysql\cursors.py", line 322, in _query
+    conn.query(q)
+  File "C:\python310\lib\site-packages\pymysql\connections.py", line 558, in query
+    self._affected_rows = self._read_query_result(unbuffered=unbuffered)
+  File "C:\python310\lib\site-packages\pymysql\connections.py", line 822, in _read_query_result
+    result.read()
+  File "C:\python310\lib\site-packages\pymysql\connections.py", line 1200, in read
+    first_packet = self.connection._read_packet()
+  File "C:\python310\lib\site-packages\pymysql\connections.py", line 772, in _read_packet
+    packet.raise_for_error()
+  File "C:\python310\lib\site-packages\pymysql\protocol.py", line 221, in raise_for_error
+    err.raise_mysql_exception(self._data)
+  File "C:\python310\lib\site-packages\pymysql\err.py", line 143, in raise_mysql_exception
+    raise errorclass(errno, errval)
+sqlalchemy.exc.ProgrammingError: (pymysql.err.ProgrammingError) (1064, "You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near ')' at line 3")
+[SQL:
+        SELECT `VAC_Info_PK`
+        FROM `W_VAC_SET_Info`
+        WHERE `PK` = (4254,)
+        ]
+(Background on this error at: https://sqlalche.me/e/20/f405)
