@@ -1,3 +1,25 @@
+"feature_schema": {
+    "desc": "segment-center gray ΔLUT(6ch) + panel_maker_onehot + frame_rate + gray_norm + LUT_j",
+    "channels": list(channels),
+    "meta": ["panel_maker_onehot", "frame_rate"],
+    "model_year_used": False
+}
+
+"feature_schema": {
+    "desc": "3 gray-triplets ΔLUT + panel_maker_onehot + frame_rate + pattern one-hot",
+    "channels": list(channels),
+    "meta": ["panel_maker_onehot", "frame_rate"],
+    "model_year_used": False
+}
+
+if X_all.size == 0 or y_all.size == 0:
+    raise ValueError(f"[{tag}] Empty dataset. X={X_all.shape}, y={y_all.shape}")
+
+if len(np.unique(groups)) < 4:
+    raise ValueError(f"[{tag}] Too few groups for GroupKFold/holdout. unique groups={len(np.unique(groups))}")
+    
+    .
+
 def main():
     # -------------------------------------------
     # 1) vac_set_mapping.csv 기준 학습 PK 구성
