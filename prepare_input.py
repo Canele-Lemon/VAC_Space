@@ -230,7 +230,7 @@ class VACInputBuilder:
             "meta": meta_dict
         }
         
-    def prepare_X_delta(self):
+    def prepare_X_delta(self, ref_pk: int):
         """
         [자코비안/보정용 데이터셋 생성용]
         target PK (=self.pk)와
@@ -271,9 +271,9 @@ class VACInputBuilder:
 
         # 2) reference 쪽 정보
         #    reference LUT은 VAC_DATA_INFO_TABLE PK=1 고정이라고 하셨습니다.
-        lut4096_ref = self._load_vacdata_lut4096(vac_set_info_pk=1)
+        lut4096_ref = self._load_vacdata_lut4096(vac_set_info_pk=ref_pk)
         if lut4096_ref is None:
-            logging.warning("[VACInputBuilder] No reference LUT found at VAC_Info.PK=1, returning zeros.")
+            logging.warning("[VACInputBuilder] No reference LUT found at PK={ref_pk}, returning zeros.")
             return _empty_return()
 
         # 3) 둘 다 256포인트 정규화 LUT로 변환
@@ -330,7 +330,7 @@ class VACInputBuilder:
     def debug_dump_delta_with_mapping(
         self,
         pk: int | None = None,
-        ref_pk: int = 3007,
+        ref_pk: int | None = None,
         verbose_lut: bool = False,
         preview_grays: list[int] | None = None,
         ):
@@ -354,6 +354,9 @@ class VACInputBuilder:
         # pk 지정되면 세트 PK 교체
         if pk is not None:
             self.pk = int(pk)
+            
+        if ref_pk is None:
+            raise ValueError("[debug_dump_delta_with_mapping] ref_pk must be provided.")
 
         # 1) ΔLUT + 메타 + 매핑 먼저 생성
         pack = self.prepare_X_delta_lut_with_mapping(ref_pk=ref_pk)
