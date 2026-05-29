@@ -1,59 +1,65 @@
-"feature_schema": {
-    "desc": "segment-center gray ΔLUT(6ch) + panel_maker_onehot + frame_rate + gray_norm + LUT_j",
-    "channels": list(channels),
-    "meta": ["panel_maker_onehot", "frame_rate"],
-    "model_year_used": False
-}
+def debug_training_pk_mapping(dataset, n_head=5, n_tail=5):
+    print("\n[DEBUG] Training PK mapping summary")
 
-"feature_schema": {
-    "desc": "3 gray-triplets ΔLUT + panel_maker_onehot + frame_rate + pattern one-hot",
-    "channels": list(channels),
-    "meta": ["panel_maker_onehot", "frame_rate"],
-    "model_year_used": False
-}
+    rows = []
+    for pk in dataset.pk_list:
+        ref_pk = dataset.set_mapping.get_ref_pk(pk)
+        base_pk = dataset.set_mapping.get_base_pk(pk)
+        row = dataset.set_mapping.get_row(pk)
 
-if X_all.size == 0 or y_all.size == 0:
-    raise ValueError(f"[{tag}] Empty dataset. X={X_all.shape}, y={y_all.shape}")
+        rows.append({
+            "pk": pk,
+            "ref_pk": ref_pk,
+            "base_pk": base_pk,
+            "model_name": row["model_name"],
+            "panel_maker": row["panel_maker"],
+            "frame_rate": row["frame_rate"],
+        })
 
-if len(np.unique(groups)) < 4:
-    raise ValueError(f"[{tag}] Too few groups for GroupKFold/holdout. unique groups={len(np.unique(groups))}")
-    
-    .
+    df = pd.DataFrame(rows)
 
-def main():
-    # -------------------------------------------
-    # 1) vac_set_mapping.csv 기준 학습 PK 구성
-    # -------------------------------------------
-    mapping = VACSetMapping()
-    TARGET_PK_LIST = mapping.build_target_pk_list()
-
-    print(f"▶ Train with {len(TARGET_PK_LIST)} PKs")
-    print(f"▶ Mapping file: {mapping.csv_path}")
-    print(mapping.df.to_string(index=False))
-
-    # -------------------------------------------
-    # 2) 데이터셋 생성
-    #    각 PK별 ref_pk는 VACDataset 내부에서 mapping 기준으로 선택
-    # -------------------------------------------
-    dataset = VACDataset(
-        pk_list=TARGET_PK_LIST,
-        set_mapping=mapping,
-        drop_use_flag_N=True
+    print("\n[DEBUG] PK count by set:")
+    print(
+        df.groupby(["model_name", "panel_maker", "frame_rate", "ref_pk", "base_pk"])
+          .size()
+          .reset_index(name="n_pk")
+          .to_string(index=False)
     )
 
-    print(f"▶ Valid PKs after Use_Flag filtering: {len(dataset.pk_list)}")
-    print(f"▶ Collected samples: {len(dataset.samples)}")
+    print("\n[DEBUG] First/last PKs per set:")
+    for _, sub in df.groupby(["model_name", "panel_maker", "frame_rate", "ref_pk", "base_pk"]):
+        sub = sub.sort_values("pk")
+        print("\n", sub[["pk", "ref_pk", "base_pk", "model_name", "panel_maker", "frame_rate"]]
+              .head(n_head)
+              .to_string(index=False))
+        if len(sub) > n_head:
+            print("...")
+            print(sub[["pk", "ref_pk", "base_pk", "model_name", "panel_maker", "frame_rate"]]
+                  .tail(n_tail)
+                  .to_string(index=False))
+                
 
-    # -------------------------------------------
-    # 3) 저장 경로
-    # -------------------------------------------
-    save_dir = os.path.dirname(__file__)
+학습 전 shape 확인
+channels = ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
 
-    # -------------------------------------------
-    # 4) 학습 실행
-    # -------------------------------------------
-    train_Y0_models(dataset, save_dir, patterns=('W',))
-    train_Y1_model(dataset, save_dir, patterns=('W',))
-    train_Y2_model(dataset, save_dir)
+for comp in ("dGamma", "dCx", "dCy"):
+    X_dbg, y_dbg, g_dbg = dataset.build_XY_dataset(
+        target="y0",
+        component=comp,
+        channels=channels,
+        patterns=('W',),
+    )
+    preview(f"Y0-{comp}", X_dbg, y_dbg, g_dbg, n=3)
 
-    print("\n✅ ALL DONE.")
+X_dbg, y_dbg, g_dbg = dataset.build_XY_dataset(
+    target="y1",
+    channels=channels,
+    patterns=('W',),
+)
+preview("Y1", X_dbg, y_dbg, g_dbg, n=3)
+
+X_dbg, y_dbg, g_dbg = dataset.build_XY_dataset(
+    target="y2",
+    channels=channels,
+)
+preview("Y2", X_dbg, y_dbg, g_dbg, n=3)
