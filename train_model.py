@@ -17,6 +17,7 @@ from joblib import parallel_backend
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
+from src.data_preparation.vac_set_mapping import VACSetMapping
 from src.modeling.VAC_dataset import VACDataset
 
 RANDOM_STATE = 42
@@ -34,6 +35,13 @@ def train_hybrid_regressor(X_all, y_all, groups, tag="", normalize_y=True):
     반환:
       - artifacts(dict): linear_model, rf_residual, rf_best_params, metrics
     """
+    
+    if X_all.size == 0 or y_all.size == 0:
+        raise ValueError(f"[{tag}] Empty dataset. X={X_all.shape}, y={y_all.shape}")
+
+    if len(np.unique(groups)) < 4:
+        raise ValueError(f"[{tag}] Too few groups for GroupKFold/holdout. unique groups={len(np.unique(groups))}")
+
     # 1) Group hold-out split
     gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=RANDOM_STATE)
     train_idx, test_idx = next(gss.split(X_all, y_all, groups))
@@ -152,10 +160,12 @@ def train_Y0_models(dataset, save_dir, patterns=('W',), exclude_gray_for_cxcy=(0
             "target": {"type": "Y0-per-gray", "component": comp, "patterns": patterns},
             **artifacts,
             "feature_schema": {
-                "desc": "ΔLUT(6ch) + meta + gray_norm + LUT_j",
+                "desc": "ΔLUT(6ch) + panel_maker_onehot + frame_rate + gray_norm + LUT_j",
                 "channels": list(channels),
+                "meta": ["panel_maker_onehot", "frame_rate"],
                 "add_gray_norm": True,
                 "add_LUT_j": True,
+                "model_year_used": False,
                 "note": f"exclude_gray_for_cxcy={exclude_gray_for_cxcy} is applied inside VACDataset._build_XY0"
             }
         }
@@ -187,7 +197,12 @@ def train_Y1_model(dataset, save_dir, patterns=('W',)):
     payload = {
             "target": {"type": "Y1-slope", "patterns": patterns},
             **artifacts,
-            "feature_schema": {"desc": "segment-center gray ΔLUT(6ch)+meta+gray_norm+LUT_j"}
+            "feature_schema": {
+                "desc": "segment-center gray ΔLUT(6ch) + panel_maker_onehot + frame_rate + gray_norm + LUT_j",
+                "channels": list(channels),
+                "meta": ["panel_maker_onehot", "frame_rate"],
+                "model_year_used": False
+            }
     }
     path = os.path.join(save_dir, "hybrid_Y1_slope_model.pkl")
     joblib.dump(payload, path, compress=("gzip", 3))
@@ -215,7 +230,12 @@ def train_Y2_model(dataset, save_dir):
     payload = {
         "target": {"type": "Y2-delta_uv"},
         **artifacts,
-        "feature_schema": {"desc": "3 gray-triplets ΔLUT + meta + pattern one-hot (already inside dataset)"}
+        "feature_schema": {
+            "desc": "3 gray-triplets ΔLUT + panel_maker_onehot + frame_rate + pattern one-hot",
+            "channels": list(channels),
+            "meta": ["panel_maker_onehot", "frame_rate"],
+            "model_year_used": False
+        }
     }
     path = os.path.join(save_dir, "hybrid_Y2_delta_uv_model.pkl")
     joblib.dump(payload, path, compress=("gzip", 3))
@@ -232,28 +252,36 @@ def preview(name, X, y, groups, n=3):
     print("first y:", y[:n], "first groups:", groups[:n])
     
 def main():
-    BYPASS_PK = 3007
     # -------------------------------------------
-    # 1) 학습에 사용할 PK 리스트와 bypass PK 설정    
+    # 1) vac_set_mapping.csv 기준 학습 PK 구성
     # -------------------------------------------
-    # full_pk_range = list(range(1411, 2455))
-    # exclude_pks = [1934, 2154] # 학습 제외 PKs
-    # TARGET_PK = [pk for pk in full_pk_range if pk not in exclude_pks]
-    TARGET_PK_LIST = list(range(3008, 3317))
-    print(f"▶ TEST with {len(TARGET_PK_LIST)} PKs")
+    mapping = VACSetMapping()
+    TARGET_PK_LIST = mapping.build_target_pk_list()
+
+    print(f"▶ Train with {len(TARGET_PK_LIST)} PKs")
+    print(f"▶ Mapping file: {mapping.csv_path}")
+    print(mapping.df.to_string(index=False))
 
     # -------------------------------------------
     # 2) 데이터셋 생성
+    #    각 PK별 ref_pk는 VACDataset 내부에서 mapping 기준으로 선택
     # -------------------------------------------
-    dataset = VACDataset(TARGET_PK_LIST, ref_pk=BYPASS_PK)
-    
+    dataset = VACDataset(
+        pk_list=TARGET_PK_LIST,
+        set_mapping=mapping,
+        drop_use_flag_N=True
+    )
+
+    print(f"▶ Valid PKs after Use_Flag filtering: {len(dataset.pk_list)}")
+    print(f"▶ Collected samples: {len(dataset.samples)}")
+
     # -------------------------------------------
     # 3) 저장 경로
     # -------------------------------------------
     save_dir = os.path.dirname(__file__)
-    
+
     # -------------------------------------------
-    # 4) 학습 실행 (Y0 → Y1 → Y2)
+    # 4) 학습 실행
     # -------------------------------------------
     train_Y0_models(dataset, save_dir, patterns=('W',))
     train_Y1_model(dataset, save_dir, patterns=('W',))
