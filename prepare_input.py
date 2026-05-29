@@ -12,6 +12,7 @@ from sklearn.preprocessing import OneHotEncoder
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from config.db_config import engine
 from config.app_config import PANEL_MAKER_CATEGORIES
+from src.data_preparation.vac_set_mapping import VACSetMapping
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -512,16 +513,77 @@ class VACInputBuilder:
 
         if open_after:
             webbrowser.open(f"file://{os.path.abspath(out_path)}")
+            
+    @staticmethod
+    def debug_representative_sets(
+        verbose_lut: bool = True,
+        preview_grays: list[int] | None = None,
+    ):
+        """
+        vac_set_mapping.csv 기준으로 각 set 대표 PK 1개씩 선택해서
+        target_pk → ref_pk → ΔLUT feature가 정상 생성되는지 확인.
+        """
+
+        mapping = VACSetMapping()
+        rep_rows = mapping.get_representative_pks()
+
+        if preview_grays is None:
+            preview_grays = [0, 1, 32, 128, 254, 255]
+
+        print("\n" + "=" * 100)
+        print("[DEBUG] Representative set input feature check")
+        print(f"[DEBUG] mapping file: {mapping.csv_path}")
+        print(f"[DEBUG] number of sets: {len(rep_rows)}")
+        print("=" * 100)
+
+        for row in rep_rows:
+            target_pk = int(row["target_pk"])
+            ref_pk = int(row["ref_pk"])
+            base_pk = int(row["base_pk"])
+
+            print("\n" + "#" * 100)
+            print(
+                f"[SET] model={row['model_name']} | "
+                f"maker={row['panel_maker']} | "
+                f"frame={row['frame_rate']} | "
+                f"year={row['model_year']}"
+            )
+            print(f"[PK] target_pk={target_pk}, ref_pk={ref_pk}, base_pk={base_pk}")
+            print("#" * 100)
+
+            builder = VACInputBuilder(pk=target_pk)
+
+            builder.debug_dump_delta_with_mapping(
+                pk=target_pk,
+                ref_pk=ref_pk,
+                verbose_lut=verbose_lut,
+                preview_grays=preview_grays,
+            )
 
 if __name__ == "__main__":
-    TARGET_PK = 3008
-    BYPASS_PK = 3007
     
-    builder = VACInputBuilder(pk=TARGET_PK)
-    builder.debug_dump_delta_with_mapping(
-        pk=TARGET_PK, 
-        ref_pk=BYPASS_PK, 
-        verbose_lut=True,
-        preview_grays=[0,1,32,128,254,255])
+    debug_cases = [
+        {"target_pk": 4300, "ref_pk": 4254},  # 50QNED85 INX
+        {"target_pk": 4000, "ref_pk": 3943},  # 50QNED85 HKC
+        {"target_pk": 3700, "ref_pk": 3631},  # 43UT80 CSOT
+        {"target_pk": 3400, "ref_pk": 3320},  # 43NANO80 HKC
+        {"target_pk": 3100, "ref_pk": 3007},  # 50UB85 INX
+    ]
+
+    for case in debug_cases:
+        print("\n" + "=" * 100)
+        print(
+            f"target_pk={case['target_pk']} "
+            f"ref_pk={case['ref_pk']}"
+        )
+
+        builder = VACInputBuilder(pk=case["target_pk"])
+
+        builder.debug_dump_delta_with_mapping(
+            ref_pk=case["ref_pk"],
+            verbose_lut=True,
+            preview_grays=[0, 1, 32, 128, 254, 255]
+        )
+
     # builder.export_mapped_lut_to_csv(open_after=True)
     
