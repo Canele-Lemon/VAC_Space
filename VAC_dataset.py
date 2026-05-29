@@ -10,6 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 from torch.utils.data import Dataset
 from src.data_preparation.prepare_input import VACInputBuilder
 from src.data_preparation.prepare_output import VACOutputBuilder
+from src.data_preparation.vac_set_mapping import VACSetMapping
 from config.db_config import engine
 
 logging.basicConfig(level=logging.DEBUG)
@@ -17,10 +18,10 @@ logging.basicConfig(level=logging.DEBUG)
 MEASUREMENT_INFO_TABLE = "W_VAC_SET_Info"
 
 class VACDataset(Dataset):
-    def __init__(self, pk_list, ref_pk=2582, drop_use_flag_N: bool = True):
+    def __init__(self, pk_list, set_mapping=None, drop_use_flag_N: bool = True):
 
         self.pk_list_all = list(pk_list)
-        self.ref_pk = int(ref_pk)
+        self.set_mapping = set_mapping or VACSetMapping()
         
         if drop_use_flag_N:
             self.pk_list = self._filter_by_use_flag(self.pk_list_all)
@@ -62,15 +63,17 @@ class VACDataset(Dataset):
 
     def _collect(self):
         for pk in self.pk_list:
+            ref_pk = self.set_mapping.get_ref_pk(pk)
+            
             x_builder = VACInputBuilder(pk)
             # X = raw ΔLUT @ CSV 매핑 인덱스 (정규화 없음)
-            X = x_builder.prepare_X_delta_lut_with_mapping(ref_pk=self.ref_pk)
+            X = x_builder.prepare_X_delta_lut_with_mapping(ref_pk=ref_pk)
 
             # 참조 PK를 동일하게 써서 ΔY0 계산
-            y_builder = VACOutputBuilder(pk, ref_pk=self.ref_pk)
+            y_builder = VACOutputBuilder(pk, ref_pk=ref_pk)
             Y = y_builder.prepare_Y(y1_patterns=('W',))  # Y0만 써도 되지만 구조 유지
 
-            self.samples.append({"pk": pk, "X": X, "Y": Y})
+            self.samples.append({"pk": pk, "ref_pk": ref_pk, "X": X, "Y": Y})
             
     def _build_pattern_onehot(self, pattern: str, patterns: tuple[str]) -> np.ndarray:
         """
@@ -120,7 +123,7 @@ class VACDataset(Dataset):
         # 3) 메타 부착
         row.extend(np.asarray(meta["panel_maker"], dtype=np.float32).tolist())
         row.append(float(meta["frame_rate"]))
-        row.append(float(meta["model_year"]))
+        # row.append(float(meta["model_year"]))
 
         # 4) gray 위치 정보
         row.append(gray / 255.0)                    # gray_norm
@@ -353,7 +356,7 @@ class VACDataset(Dataset):
                 meta = Xd["meta"]
                 feats.extend(np.asarray(meta["panel_maker"], dtype=np.float32).tolist())
                 feats.append(float(meta["frame_rate"]))
-                feats.append(float(meta["model_year"]))
+                # feats.append(float(meta["model_year"]))
 
                 # pattern one-hot (항상 포함)
                 feats.extend(self._build_pattern_onehot(p, pattern_order).tolist())
@@ -425,7 +428,7 @@ class VACDataset(Dataset):
 
         raise ValueError(f"Unknown target='{target}'. (지원: 'jacobian','Y0','Y1','Y2')")
     
-def preview_xy_dataset(X, y, groups, target, channels, n=30):
+def preview_xy_dataset(dataset, X, y, groups, target, channels, n=30):
     print(f"\n[PREVIEW] X-{target} dataset")
     print("X shape:", X.shape)
     print("y shape:", y.shape)
@@ -445,7 +448,8 @@ def preview_xy_dataset(X, y, groups, target, channels, n=30):
         feature_names = (
             [f"d{ch}" for ch in channels] +
             [f"panel_{i}" for i in range(panel_dim)] +
-            ["frame_rate", "model_year", "gray_norm", "LUT_j"]
+            # ["frame_rate", "model_year", "gray_norm", "LUT_j"]
+            ["frame_rate", "gray_norm", "LUT_j"]
         )
 
         # (선택) 만약 Y0에서 패턴 one-hot을 X에 붙였다면 여기에 추가
@@ -462,7 +466,8 @@ def preview_xy_dataset(X, y, groups, target, channels, n=30):
             feature_names += [f"{gi}_gray_norm", f"{gi}_LUT_j"]
 
         feature_names += [f"panel_{i}" for i in range(panel_dim)]
-        feature_names += ["frame_rate", "model_year"]
+        # feature_names += ["frame_rate", "model_year"]
+        feature_names += ["frame_rate"]
         feature_names += [f"pat_{p}" for p in skin_color_patterns]
 
     else:
@@ -513,7 +518,7 @@ if __name__ == "__main__":
     # )
 
     # preview_xy_dataset(
-    #     X, y, grp,
+    #     dataset, X, y, grp,
     #     channels=channels,
     #     target=target,
     #     n=30
@@ -541,7 +546,8 @@ if __name__ == "__main__":
         feature_names = (
             ["dR_High", "dG_High", "dB_High"] +
             [f"panel_{i}" for i in range(K)] +
-            ["frame_rate", "model_year", "gray_norm", "LUT_j"]
+            # ["frame_rate", "model_year", "gray_norm", "LUT_j"]
+            ["frame_rate", "gray_norm", "LUT_j"]
         )
 
         n = min(256, X.shape[0])
