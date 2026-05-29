@@ -1,45 +1,86 @@
-    @staticmethod
-    def debug_representative_sets(
-        verbose_lut: bool = True,
-        preview_grays: list[int] | None = None,
-    ):
-        """
-        vac_set_mapping.csv 기준으로 각 set 대표 PK 1개씩 선택해서
-        target_pk → ref_pk → ΔLUT feature가 정상 생성되는지 확인.
-        """
+if __name__ == "__main__":
 
-        mapping = VACSetMapping()
-        rep_rows = mapping.get_representative_pks()
+    debug_cases = [
+        {"target_pk": 4300, "ref_pk": 4254},  # 50QNED85 INX
+        {"target_pk": 4000, "ref_pk": 3943},  # 50QNED85 HKC
+        {"target_pk": 3700, "ref_pk": 3631},  # 43UT80 CSOT
+        {"target_pk": 3400, "ref_pk": 3320},  # 43NANO80 HKC
+        {"target_pk": 3100, "ref_pk": 3007},  # 50UB85 INX
+    ]
 
-        if preview_grays is None:
-            preview_grays = [0, 1, 32, 128, 254, 255]
-
+    for case in debug_cases:
         print("\n" + "=" * 100)
-        print("[DEBUG] Representative set input feature check")
-        print(f"[DEBUG] mapping file: {mapping.csv_path}")
-        print(f"[DEBUG] number of sets: {len(rep_rows)}")
-        print("=" * 100)
+        print(
+            f"target_pk={case['target_pk']} "
+            f"ref_pk={case['ref_pk']}"
+        )
 
-        for row in rep_rows:
-            target_pk = int(row["target_pk"])
-            ref_pk = int(row["ref_pk"])
-            base_pk = int(row["base_pk"])
+        builder = VACInputBuilder(pk=case["target_pk"])
 
-            print("\n" + "#" * 100)
-            print(
-                f"[SET] model={row['model_name']} | "
-                f"maker={row['panel_maker']} | "
-                f"frame={row['frame_rate']} | "
-                f"year={row['model_year']}"
+        builder.debug_dump_delta_with_mapping(
+            ref_pk=case["ref_pk"],
+            verbose_lut=True,
+            preview_grays=[0, 1, 32, 128, 254, 255]
+        )
+        
+        
+        
+# vac_set_mapping.py
+import os
+import pandas as pd
+
+
+class VACSetMapping:
+    def __init__(self, csv_path=None):
+        if csv_path is None:
+            csv_path = os.path.abspath(
+                os.path.join(
+                    os.path.dirname(__file__),
+                    "..",
+                    "..",
+                    "data",
+                    "vac_set_mapping.csv"
+                )
             )
-            print(f"[PK] target_pk={target_pk}, ref_pk={ref_pk}, base_pk={base_pk}")
-            print("#" * 100)
 
-            builder = VACInputBuilder(pk=target_pk)
+        self.csv_path = csv_path
+        self.df = pd.read_csv(csv_path)
 
-            builder.debug_dump_delta_with_mapping(
-                pk=target_pk,
-                ref_pk=ref_pk,
-                verbose_lut=verbose_lut,
-                preview_grays=preview_grays,
-            )
+        required_cols = [
+            "pk_start", "pk_end", "ref_pk", "base_pk",
+            "model_name", "panel_maker", "frame_rate", "model_year"
+        ]
+        missing = [c for c in required_cols if c not in self.df.columns]
+        if missing:
+            raise ValueError(f"[VACSetMapping] Missing columns: {missing}")
+
+    def get_row(self, pk: int):
+        matched = self.df[
+            (self.df["pk_start"].astype(int) <= pk) &
+            (pk <= self.df["pk_end"].astype(int))
+        ]
+
+        if matched.empty:
+            raise KeyError(f"[VACSetMapping] No mapping found for PK={pk}")
+
+        if len(matched) > 1:
+            raise ValueError(f"[VACSetMapping] Multiple mappings found for PK={pk}")
+
+        return matched.iloc[0]
+
+    def get_ref_pk(self, pk: int) -> int:
+        return int(self.get_row(pk)["ref_pk"])
+
+    def get_base_pk(self, pk: int) -> int:
+        return int(self.get_row(pk)["base_pk"])
+
+    def build_target_pk_list(self):
+        pk_list = []
+        for _, row in self.df.iterrows():
+            pk_list.extend(range(int(row["pk_start"]), int(row["pk_end"]) + 1))
+        return pk_list
+
+    def summary(self):
+        print(f"\n[VACSetMapping] csv_path = {self.csv_path}")
+        print(f"[VACSetMapping] number of sets = {len(self.df)}")
+        print(self.df.to_string(index=False))
