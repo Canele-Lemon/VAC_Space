@@ -1,62 +1,37 @@
-if __name__ == "__main__":
+def main():
+    # -------------------------------------------
+    # 1) vac_set_mapping.csv 기준 학습 PK 구성
+    # -------------------------------------------
+    mapping = VACSetMapping()
+    TARGET_PK_LIST = mapping.build_target_pk_list()
 
-    pk_list = [4300, 4000, 3700, 3400, 3100]
+    print(f"▶ Train with {len(TARGET_PK_LIST)} PKs")
+    print(f"▶ Mapping file: {mapping.csv_path}")
+    print(mapping.df.to_string(index=False))
 
-    dataset = VACDataset(pk_list=pk_list)
-
-    print("\n[DEBUG] collected samples")
-    for s in dataset.samples:
-        print(f"pk={s['pk']}, ref_pk={s['ref_pk']}")
-
-    channels = ('R_Low','R_High','G_Low','G_High','B_Low','B_High')
-
-    # -----------------------------
-    # Y0 dataset preview
-    # -----------------------------
-    target = "y0"
-    X, y, grp = dataset.build_XY_dataset(
-        target=target,
-        component="dCx",
-        channels=channels,
-        patterns=('W',),
+    # -------------------------------------------
+    # 2) 데이터셋 생성
+    #    각 PK별 ref_pk는 VACDataset 내부에서 mapping 기준으로 선택
+    # -------------------------------------------
+    dataset = VACDataset(
+        pk_list=TARGET_PK_LIST,
+        set_mapping=mapping,
+        drop_use_flag_N=True
     )
 
-    preview_xy_dataset(
-        dataset, X, y, grp,
-        channels=channels,
-        target=target,
-        n=30
-    )
+    print(f"▶ Valid PKs after Use_Flag filtering: {len(dataset.pk_list)}")
+    print(f"▶ Collected samples: {len(dataset.samples)}")
 
-    # -----------------------------
-    # Y1 dataset preview
-    # -----------------------------
-    target = "y1"
-    X, y, grp = dataset.build_XY_dataset(
-        target=target,
-        channels=channels,
-        patterns=('W',),
-    )
+    # -------------------------------------------
+    # 3) 저장 경로
+    # -------------------------------------------
+    save_dir = os.path.dirname(__file__)
 
-    preview_xy_dataset(
-        dataset, X, y, grp,
-        channels=channels,
-        target=target,
-        n=30
-    )
+    # -------------------------------------------
+    # 4) 학습 실행
+    # -------------------------------------------
+    train_Y0_models(dataset, save_dir, patterns=('W',))
+    train_Y1_model(dataset, save_dir, patterns=('W',))
+    train_Y2_model(dataset, save_dir)
 
-    # -----------------------------
-    # Y2 dataset preview
-    # -----------------------------
-    target = "y2"
-    X, y, grp = dataset.build_XY_dataset(
-        target=target,
-        channels=channels,
-    )
-
-    preview_xy_dataset(
-        dataset, X, y, grp,
-        channels=channels,
-        target=target,
-        n=30
-    )
+    print("\n✅ ALL DONE.")
