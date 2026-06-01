@@ -1,3 +1,99 @@
+[시야각 보상 알고리즘 최적화 예측 모델 학습 결과 보고]
+
+1. 목적
+VA 패널 시야각 보상 알고리즘의 LUT 변경량을 입력으로 하여,
+보상 전후의 광학 특성 변화량을 예측하는 통합 예측 모델을 구축하였다.
+기존 50UB85 INX 단일 모델 기준에서 5종 set으로 확장하였다.
+
+2. 학습 데이터 구성
+- 총 set 수: 5종
+- 전체 PK 수: 1560개
+- Use_Flag=N 제외 후 유효 PK 수: 1551개
+
+사용 set:
+1) 50QNED85 / INX / 120Hz / ref_pk=4254
+2) 50QNED85 / HKC(H2) / 120Hz / ref_pk=3943
+3) 43UT80 / CSOT(CSPI) / 60Hz / ref_pk=3631
+4) 43NANO80 / HKC(H2) / 60Hz / ref_pk=3320
+5) 50UB85 / INX / 60Hz / ref_pk=3007
+
+3. 입력 Feature
+X = target LUT - ref LUT
+
+Feature 구성:
+- ΔR_Low
+- ΔR_High
+- ΔG_Low
+- ΔG_High
+- ΔB_Low
+- ΔB_High
+- Panel Maker one-hot
+- Frame Rate
+- Gray normalized value
+- LUT_j
+
+※ Model Year는 feature에서 제외하였다.
+이는 추후 시스템 적용 시 년도와 무관하게 Panel Maker + Frame Rate 기준으로 예측하기 위함이다.
+
+4. 출력 Target
+Y0:
+- dGamma
+- dCx
+- dCy
+
+Y1:
+- 측면 Nor.Lv slope
+
+Y2:
+- Macbeth skin color 4종 Δu'v'
+
+5. 학습 방법
+- 1단계: StandardScaler + Ridge Regression
+- 2단계: Random Forest Regressor로 Ridge residual 학습
+- Split 방식: GroupShuffleSplit
+- Group 기준: VAC_SET_Info PK
+- Cross Validation: GroupKFold 3-fold
+
+6. 학습 결과
+
+Y0-dGamma:
+- Linear R²: 0.224
+- Hybrid R²: 0.961
+- Hybrid MSE: 0.000174
+
+Y0-dCx:
+- Linear R²: 0.369
+- Hybrid R²: 0.954
+- Hybrid MSE: 0.000001
+
+Y0-dCy:
+- Linear R²: 0.425
+- Hybrid R²: 0.962
+- Hybrid MSE: 0.000002
+
+Y1-slope:
+- Linear R²: 0.303
+- Hybrid R²: 0.977
+- Hybrid MSE: 0.000653
+
+Y2-delta_uv:
+- Linear R²: 0.963
+- Hybrid R²: 0.998
+- Hybrid MSE: 0.000000
+
+7. 해석
+Linear 모델 단독 성능은 제한적이었으나,
+Random Forest residual 보정 후 모든 target에서 R²가 크게 향상되었다.
+이는 LUT 변화량과 광학 특성 변화 사이에 비선형성이 존재하며,
+Hybrid 모델이 이를 효과적으로 보정했음을 의미한다.
+
+8. 추가 확인 필요 사항
+- set별 test 성능 확인
+- panel maker별 성능 확인
+- frame rate별 성능 확인
+- 실제 최적화 루프 적용 시 대표 PK 검증
+
+
 PS D:\00 업무\00 가상화기술\25Y\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project> & C:/python310/python.exe "d:/00 업무/00 가상화기술/25Y/00 색시야각 보상 최적화/VAC algorithm/VAC_Optimization_Project/src/modeling/train_model.py"
 ▶ Train with 1560 PKs
 ▶ Mapping file: d:\00 업무\00 가상화기술\25Y\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project\data\vac_set_mapping.csv
