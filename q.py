@@ -19,3 +19,12 @@
     print("\n--- y_vec (first 10 values) ---")
     print(y[:10])
     # ========================================================
+
+
+    debug_cases = [
+        {"target_pk": 4300, "ref_pk": 4254},  # 50QNED85 INX
+        {"target_pk": 4000, "ref_pk": 3943},  # 50QNED85 HKC
+        {"target_pk": 3700, "ref_pk": 3631},  # 43UT80 CSOT
+        {"target_pk": 3400, "ref_pk": 3320},  # 43NANO80 HKC
+        {"target_pk": 3100, "ref_pk": 3007},  # 50UB85 INX
+    ]
