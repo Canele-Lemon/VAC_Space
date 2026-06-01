@@ -1,3 +1,24 @@
+    # -------------------------------------------
+    # 1) vac_set_mapping.csv 기준 학습 PK 구성
+    # -------------------------------------------
+    mapping = VACSetMapping()
+    TARGET_PK_LIST = mapping.build_target_pk_list()
+
+    print(f"▶ Train with {len(TARGET_PK_LIST)} PKs")
+    print(f"▶ Mapping file: {mapping.csv_path}")
+    print(mapping.df.to_string(index=False))
+
+
+학습 코드에서 위처럼 하는 것처럼 
+
+    dataset = VACDataset(
+        pk_list=TARGET_PK_LIST,
+        set_mapping=mapping,
+        drop_use_flag_N=True
+    )
+
+이렇게 dataset만들어 디버깅하는 것으로 아래 수정해주세요. 제가 원하는 것은 "실제 학습"에 쓰이는 데이터셋을 열람하여 그것을 검증하고자 함에 있었습니다.
+
     # ================== Dataset 검증용 출력 ==================    
     print("\nTEST - XY dataset preview")
     pd.set_option('display.max_columns', None)
@@ -20,7 +41,7 @@
 
         dataset_dbg = VACDataset(
             pk_list=[target_pk],
-            set_mapping=dataset_dbg.set_mapping,
+            set_mapping=dataset.set_mapping,
             drop_use_flag_N=False
         )
 
@@ -81,5 +102,3 @@
         print("\n--- y first 10 values ---")
         print(y[:10])
     # ========================================================
-
-메인 함수 안에 있습니다. 위와 같이 수정하면되나요?
