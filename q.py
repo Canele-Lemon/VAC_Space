@@ -1,461 +1,404 @@
-TEST - XY dataset preview
-
-========================================================================================================================
-[DATASET PREVIEW] target_pk=4300, ref_pk=4254
-========================================================================================================================
-
-[Y0-dGamma]
-X_mat shape: (251, 14)
-y_vec shape: (251,)
-groups shape: (251,)
-unique groups: [4300]
-
---- X_mat first 5 rows ---
-     0     1     2     3     4     5    6    7    8    9    10     11        12     13
-0 -45.0  22.0 -45.0  23.0 -45.0  22.0  1.0  0.0  0.0  0.0  0.0  120.0  0.015686   52.0
-1 -63.0  30.0 -63.0  31.0 -63.0  30.0  1.0  0.0  0.0  0.0  0.0  120.0  0.019608   72.0
-2 -80.0  39.0 -80.0  40.0 -80.0  39.0  1.0  0.0  0.0  0.0  0.0  120.0  0.023529   92.0
-3 -98.0  47.0 -98.0  48.0 -98.0  47.0  1.0  0.0  0.0  0.0  0.0  120.0  0.027451  112.0
-4 -98.0  47.0 -98.0  48.0 -98.0  47.0  1.0  0.0  0.0  0.0  0.0  120.0  0.031373  112.0
-
---- y first 10 values ---
-[0.00031161 0.07349658 0.09008288 0.15027452 0.15607119 0.17244363
- 0.20005727 0.19734693 0.17828727 0.19073582]
-
-[Y0-dCx]
-X_mat shape: (250, 14)
-y_vec shape: (250,)
-groups shape: (250,)
-unique groups: [4300]
-
---- X_mat first 5 rows ---
-      0     1      2     3      4     5    6    7    8    9    10     11        12     13
-0  -80.0  39.0  -80.0  40.0  -80.0  39.0  1.0  0.0  0.0  0.0  0.0  120.0  0.023529   92.0
-1  -98.0  47.0  -98.0  48.0  -98.0  47.0  1.0  0.0  0.0  0.0  0.0  120.0  0.027451  112.0
-2  -98.0  47.0  -98.0  48.0  -98.0  47.0  1.0  0.0  0.0  0.0  0.0  120.0  0.031373  112.0
-3 -112.0  54.0 -112.0  55.0 -112.0  54.0  1.0  0.0  0.0  0.0  0.0  120.0  0.035294  128.0
-4 -130.0  62.0 -130.0  63.0 -130.0  62.0  1.0  0.0  0.0  0.0  0.0  120.0  0.039216  148.0
-
---- y first 10 values ---
-[-0.00299999 -0.00190002 -0.002      -0.00139999 -0.0007     -0.00019997
-  0.00100002  0.0029      0.00459999  0.005     ]
-
-[Y0-dCy]
-X_mat shape: (250, 14)
-y_vec shape: (250,)
-groups shape: (250,)
-unique groups: [4300]
-
---- X_mat first 5 rows ---
-      0     1      2     3      4     5    6    7    8    9    10     11        12     13
-0  -80.0  39.0  -80.0  40.0  -80.0  39.0  1.0  0.0  0.0  0.0  0.0  120.0  0.023529   92.0
-1  -98.0  47.0  -98.0  48.0  -98.0  47.0  1.0  0.0  0.0  0.0  0.0  120.0  0.027451  112.0
-2  -98.0  47.0  -98.0  48.0  -98.0  47.0  1.0  0.0  0.0  0.0  0.0  120.0  0.031373  112.0
-3 -112.0  54.0 -112.0  55.0 -112.0  54.0  1.0  0.0  0.0  0.0  0.0  120.0  0.035294  128.0
-4 -130.0  62.0 -130.0  63.0 -130.0  62.0  1.0  0.0  0.0  0.0  0.0  120.0  0.039216  148.0
-
---- y first 10 values ---
-[0.005      0.00580001 0.0045     0.0063     0.00999999 0.01120001
- 0.01519999 0.0156     0.01819998 0.01679999]
-
-[Y1-slope]
-X_mat shape: (18, 14)
-y_vec shape: (18,)
-groups shape: (18,)
-unique groups: [4300]
-
---- X_mat first 5 rows ---
-       0      1       2      3       4      5    6    7    8    9    10     11        12      13
-0 -1177.0  591.0 -1177.0  592.0 -1177.0  591.0  1.0  0.0  0.0  0.0  0.0  120.0  0.360784  1466.0
-1 -1228.0  637.0 -1228.0  638.0 -1228.0  637.0  1.0  0.0  0.0  0.0  0.0  120.0  0.392157  1597.0
-2 -1270.0  676.0 -1270.0  677.0 -1270.0  676.0  1.0  0.0  0.0  0.0  0.0  120.0  0.423529  1724.0
-3 -1295.0  707.0 -1295.0  708.0 -1295.0  707.0  1.0  0.0  0.0  0.0  0.0  120.0  0.454902  1856.0
-4 -1308.0  736.0 -1308.0  737.0 -1308.0  736.0  1.0  0.0  0.0  0.0  0.0  120.0  0.486275  1987.0
-
---- y first 10 values ---
-[0.71296763 0.8228751  0.9256578  1.0222794  0.97109246 0.8280726
- 0.7061349  0.7070985  0.7413205  0.6842644 ]
-
-[Y2-delta_uv]
-X_mat shape: (4, 34)
-y_vec shape: (4,)
-groups shape: (4,)
-unique groups: [4300]
-
---- X_mat first 5 rows ---
-       0      1       2      3       4      5         6       7       8      9       10     11      12     13        14      15      16     17      18     19      20     21        22      23   24   25   26   27   28     29   30   31   32   33
-0 -1295.0  707.0 -1295.0  708.0 -1295.0  707.0  0.454902  1856.0 -1084.0  522.0 -1084.0  523.0 -1084.0  522.0  0.313726  1279.0  -935.0  420.0  -935.0  421.0  -935.0  420.0  0.258824  1056.0  1.0  0.0  0.0  0.0  0.0  120.0  1.0  0.0  0.0  0.0
-1  -713.0  550.0  -713.0  551.0  -713.0  550.0  0.768627  3154.0 -1253.0  750.0 -1253.0  751.0 -1253.0  750.0  0.588235  2401.0 -1305.0  751.0 -1305.0  752.0 -1305.0  751.0  0.505882  2063.0  1.0  0.0  0.0  0.0  0.0  120.0  0.0  1.0  0.0  0.0
-2  -713.0  550.0  -713.0  551.0  -713.0  550.0  0.768627  3154.0 -1267.0  751.0 -1267.0  752.0 -1267.0  751.0  0.576471  2345.0 -1298.0  711.0 -1298.0  712.0 -1298.0  711.0  0.462745  1875.0  1.0  0.0  0.0  0.0  0.0  120.0  0.0  0.0  1.0  0.0
-3  -887.0  638.0  -887.0  639.0  -887.0  638.0  0.717647  2945.0 -1305.0  751.0 -1305.0  752.0 -1305.0  751.0  0.509804  2079.0 -1183.0  597.0 -1183.0  598.0 -1183.0  597.0  0.364706  1482.0  1.0  0.0  0.0  0.0  0.0  120.0  0.0  0.0  0.0  1.0
-
---- y first 10 values ---
-[0.04139206 0.01937408 0.02449453 0.03402348]
-
-========================================================================================================================
-[DATASET PREVIEW] target_pk=4000, ref_pk=3943
-========================================================================================================================
-
-[Y0-dGamma]
-X_mat shape: (253, 14)
-y_vec shape: (253,)
-groups shape: (253,)
-unique groups: [4000]
-
---- X_mat first 5 rows ---
-     0     1     2     3     4     5    6    7    8    9    10     11        12    13
-0 -14.0   7.0 -14.0  52.0 -14.0   7.0  0.0  0.0  1.0  0.0  0.0  120.0  0.007843  16.0
-1 -31.0  15.0 -31.0  60.0 -31.0  15.0  0.0  0.0  1.0  0.0  0.0  120.0  0.011765  36.0
-2 -45.0  22.0 -45.0  67.0 -45.0  22.0  0.0  0.0  1.0  0.0  0.0  120.0  0.015686  52.0
-3 -63.0  30.0 -63.0  75.0 -63.0  30.0  0.0  0.0  1.0  0.0  0.0  120.0  0.019608  72.0
-4 -80.0  39.0 -80.0  84.0 -80.0  39.0  0.0  0.0  1.0  0.0  0.0  120.0  0.023529  92.0
-
---- y first 10 values ---
-[-0.00022745 -0.09151483 -0.05397081 -0.00028062 -0.00029421 -0.00030684
- -0.00031877 -0.00032973 -0.00034094 -0.00035095]
-
-[Y0-dCx]
-X_mat shape: (250, 14)
-y_vec shape: (250,)
-groups shape: (250,)
-unique groups: [4000]
-
---- X_mat first 5 rows ---
-      0     1      2      3      4     5    6    7    8    9    10     11        12     13
-0  -80.0  39.0  -80.0   84.0  -80.0  39.0  0.0  0.0  1.0  0.0  0.0  120.0  0.023529   92.0
-1  -98.0  47.0  -98.0   92.0  -98.0  47.0  0.0  0.0  1.0  0.0  0.0  120.0  0.027451  112.0
-2  -98.0  47.0  -98.0   92.0  -98.0  47.0  0.0  0.0  1.0  0.0  0.0  120.0  0.031373  112.0
-3 -112.0  54.0 -112.0   99.0 -112.0  54.0  0.0  0.0  1.0  0.0  0.0  120.0  0.035294  128.0
-4 -130.0  62.0 -130.0  107.0 -130.0  62.0  0.0  0.0  1.0  0.0  0.0  120.0  0.039216  148.0
-
---- y first 10 values ---
-[-0.00080001  0.00230002  0.00219998  0.00449997  0.00600001  0.0095
-  0.009       0.01009998  0.00850001  0.00830001]
-
-[Y0-dCy]
-X_mat shape: (250, 14)
-y_vec shape: (250,)
-groups shape: (250,)
-unique groups: [4000]
-
---- X_mat first 5 rows ---
-      0     1      2      3      4     5    6    7    8    9    10     11        12     13
-0  -80.0  39.0  -80.0   84.0  -80.0  39.0  0.0  0.0  1.0  0.0  0.0  120.0  0.023529   92.0
-1  -98.0  47.0  -98.0   92.0  -98.0  47.0  0.0  0.0  1.0  0.0  0.0  120.0  0.027451  112.0
-2  -98.0  47.0  -98.0   92.0  -98.0  47.0  0.0  0.0  1.0  0.0  0.0  120.0  0.031373  112.0
-3 -112.0  54.0 -112.0   99.0 -112.0  54.0  0.0  0.0  1.0  0.0  0.0  120.0  0.035294  128.0
-4 -130.0  62.0 -130.0  107.0 -130.0  62.0  0.0  0.0  1.0  0.0  0.0  120.0  0.039216  148.0
-
---- y first 10 values ---
-[0.0387     0.04629999 0.046      0.05250001 0.05540001 0.05699998
- 0.05770001 0.0557     0.0512     0.04620001]
-
-[Y1-slope]
-X_mat shape: (18, 14)
-y_vec shape: (18,)
-groups shape: (18,)
-unique groups: [4000]
-
---- X_mat first 5 rows ---
-       0      1       2      3       4      5    6    7    8    9    10     11        12      13
-0 -1177.0  591.0 -1177.0  636.0 -1177.0  591.0  0.0  0.0  1.0  0.0  0.0  120.0  0.360784  1466.0
-1 -1228.0  637.0 -1228.0  682.0 -1228.0  637.0  0.0  0.0  1.0  0.0  0.0  120.0  0.392157  1597.0
-2 -1270.0  676.0 -1270.0  721.0 -1270.0  676.0  0.0  0.0  1.0  0.0  0.0  120.0  0.423529  1724.0
-3 -1295.0  707.0 -1295.0  752.0 -1295.0  707.0  0.0  0.0  1.0  0.0  0.0  120.0  0.454902  1856.0
-4 -1308.0  736.0 -1308.0  781.0 -1308.0  736.0  0.0  0.0  1.0  0.0  0.0  120.0  0.486275  1987.0
-
---- y first 10 values ---
-[0.8739292 0.8908273 0.8764298 0.8862807 0.8832118 0.8857124 0.8020174
- 0.8352453 0.8729062 0.8684354]
-
-[Y2-delta_uv]
-X_mat shape: (4, 34)
-y_vec shape: (4,)
-groups shape: (4,)
-unique groups: [4000]
-
---- X_mat first 5 rows ---
-       0      1       2      3       4      5         6       7       8      9       10     11      12     13        14      15      16     17      18     19      20     21        22      23   24   25   26   27   28     29   30   31   32   33
-0 -1295.0  707.0 -1295.0  752.0 -1295.0  707.0  0.454902  1856.0 -1084.0  522.0 -1084.0  567.0 -1084.0  522.0  0.313726  1279.0  -935.0  420.0  -935.0  465.0  -935.0  420.0  0.258824  1056.0  0.0  0.0  1.0  0.0  0.0  120.0  1.0  0.0  0.0  0.0
-1  -713.0  550.0  -713.0  595.0  -713.0  550.0  0.768627  3154.0 -1253.0  750.0 -1253.0  795.0 -1253.0  750.0  0.588235  2401.0 -1305.0  751.0 -1305.0  796.0 -1305.0  751.0  0.505882  2063.0  0.0  0.0  1.0  0.0  0.0  120.0  0.0  1.0  0.0  0.0
-2  -713.0  550.0  -713.0  595.0  -713.0  550.0  0.768627  3154.0 -1267.0  751.0 -1267.0  796.0 -1267.0  751.0  0.576471  2345.0 -1298.0  711.0 -1298.0  756.0 -1298.0  711.0  0.462745  1875.0  0.0  0.0  1.0  0.0  0.0  120.0  0.0  0.0  1.0  0.0
-3  -887.0  638.0  -887.0  683.0  -887.0  638.0  0.717647  2945.0 -1305.0  751.0 -1305.0  796.0 -1305.0  751.0  0.509804  2079.0 -1183.0  597.0 -1183.0  642.0 -1183.0  597.0  0.364706  1482.0  0.0  0.0  1.0  0.0  0.0  120.0  0.0  0.0  0.0  1.0
-
---- y first 10 values ---
-[0.04501593 0.02407566 0.03048591 0.04034388]
-
-========================================================================================================================
-[DATASET PREVIEW] target_pk=3700, ref_pk=3631
-========================================================================================================================
-
-[Y0-dGamma]
-X_mat shape: (252, 14)
-y_vec shape: (252,)
-groups shape: (252,)
-unique groups: [3700]
-
---- X_mat first 5 rows ---
-     0     1     2     3     4     5    6    7    8    9    10    11        12     13
-0 -31.0  15.0 -31.0   0.0 -31.0  15.0  0.0  1.0  0.0  0.0  0.0  60.0  0.011765   36.0
-1 -45.0  22.0 -45.0   7.0 -45.0  22.0  0.0  1.0  0.0  0.0  0.0  60.0  0.015686   52.0
-2 -63.0  30.0 -63.0  15.0 -63.0  30.0  0.0  1.0  0.0  0.0  0.0  60.0  0.019608   72.0
-3 -80.0  39.0 -80.0  24.0 -80.0  39.0  0.0  1.0  0.0  0.0  0.0  60.0  0.023529   92.0
-4 -98.0  47.0 -98.0  32.0 -98.0  47.0  0.0  1.0  0.0  0.0  0.0  60.0  0.027451  112.0
-
---- y first 10 values ---
-[-0.00024867 -0.00026584  0.12963963  0.08944297  0.09889698  0.10271168
-  0.07812667  0.05960798  0.07762909  0.09376407]
-
-[Y0-dCx]
-X_mat shape: (250, 14)
-y_vec shape: (250,)
-groups shape: (250,)
-unique groups: [3700]
-
---- X_mat first 5 rows ---
-      0     1      2     3      4     5    6    7    8    9    10    11        12     13
-0  -80.0  39.0  -80.0  24.0  -80.0  39.0  0.0  1.0  0.0  0.0  0.0  60.0  0.023529   92.0
-1  -98.0  47.0  -98.0  32.0  -98.0  47.0  0.0  1.0  0.0  0.0  0.0  60.0  0.027451  112.0
-2  -98.0  47.0  -98.0  32.0  -98.0  47.0  0.0  1.0  0.0  0.0  0.0  60.0  0.031373  112.0
-3 -112.0  54.0 -112.0  39.0 -112.0  54.0  0.0  1.0  0.0  0.0  0.0  60.0  0.035294  128.0
-4 -130.0  62.0 -130.0  47.0 -130.0  62.0  0.0  1.0  0.0  0.0  0.0  60.0  0.039216  148.0
-
---- y first 10 values ---
-[-0.00810002 -0.009      -0.00889999 -0.00639999 -0.00959998 -0.00869998
- -0.01140001 -0.01199999 -0.01199999 -0.01119998]
-
-[Y0-dCy]
-X_mat shape: (250, 14)
-y_vec shape: (250,)
-groups shape: (250,)
-unique groups: [3700]
-
---- X_mat first 5 rows ---
-      0     1      2     3      4     5    6    7    8    9    10    11        12     13
-0  -80.0  39.0  -80.0  24.0  -80.0  39.0  0.0  1.0  0.0  0.0  0.0  60.0  0.023529   92.0
-1  -98.0  47.0  -98.0  32.0  -98.0  47.0  0.0  1.0  0.0  0.0  0.0  60.0  0.027451  112.0
-2  -98.0  47.0  -98.0  32.0  -98.0  47.0  0.0  1.0  0.0  0.0  0.0  60.0  0.031373  112.0
-3 -112.0  54.0 -112.0  39.0 -112.0  54.0  0.0  1.0  0.0  0.0  0.0  60.0  0.035294  128.0
-4 -130.0  62.0 -130.0  47.0 -130.0  62.0  0.0  1.0  0.0  0.0  0.0  60.0  0.039216  148.0
-
---- y first 10 values ---
-[ 0.0015     -0.01439999 -0.0152     -0.00669999 -0.0142     -0.02390002
- -0.024      -0.0236     -0.02430001 -0.02309999]
-
-[Y1-slope]
-X_mat shape: (18, 14)
-y_vec shape: (18,)
-groups shape: (18,)
-unique groups: [3700]
-
---- X_mat first 5 rows ---
-       0      1       2      3       4      5    6    7    8    9    10    11        12      13
-0 -1177.0  591.0 -1177.0  576.0 -1177.0  591.0  0.0  1.0  0.0  0.0  0.0  60.0  0.360784  1466.0
-1 -1228.0  637.0 -1228.0  622.0 -1228.0  637.0  0.0  1.0  0.0  0.0  0.0  60.0  0.392157  1597.0
-2 -1270.0  676.0 -1270.0  661.0 -1270.0  676.0  0.0  1.0  0.0  0.0  0.0  60.0  0.423529  1724.0
-3 -1295.0  707.0 -1295.0  692.0 -1295.0  707.0  0.0  1.0  0.0  0.0  0.0  60.0  0.454902  1856.0
-4 -1308.0  736.0 -1308.0  721.0 -1308.0  736.0  0.0  1.0  0.0  0.0  0.0  60.0  0.486275  1987.0
-
---- y first 10 values ---
-[0.8394931 0.9080163 0.977988  1.0013862 1.0598817 1.057709  0.9833919
- 1.0115811 1.1120261 1.0560377]
-
-[Y2-delta_uv]
-X_mat shape: (4, 34)
-y_vec shape: (4,)
-groups shape: (4,)
-unique groups: [3700]
-
---- X_mat first 5 rows ---
-       0      1       2      3       4      5         6       7       8      9       10     11      12     13        14      15      16     17      18     19      20     21        22      23   24   25   26   27   28    29   30   31   32   33
-0 -1295.0  707.0 -1295.0  692.0 -1295.0  707.0  0.454902  1856.0 -1084.0  522.0 -1084.0  507.0 -1084.0  522.0  0.313726  1279.0  -935.0  420.0  -935.0  405.0  -935.0  420.0  0.258824  1056.0  0.0  1.0  0.0  0.0  0.0  60.0  1.0  0.0  0.0  0.0
-1  -713.0  550.0  -713.0  535.0  -713.0  550.0  0.768627  3154.0 -1253.0  750.0 -1253.0  735.0 -1253.0  750.0  0.588235  2401.0 -1305.0  751.0 -1305.0  736.0 -1305.0  751.0  0.505882  2063.0  0.0  1.0  0.0  0.0  0.0  60.0  0.0  1.0  0.0  0.0
-2  -713.0  550.0  -713.0  535.0  -713.0  550.0  0.768627  3154.0 -1267.0  751.0 -1267.0  736.0 -1267.0  751.0  0.576471  2345.0 -1298.0  711.0 -1298.0  696.0 -1298.0  711.0  0.462745  1875.0  0.0  1.0  0.0  0.0  0.0  60.0  0.0  0.0  1.0  0.0
-3  -887.0  638.0  -887.0  623.0  -887.0  638.0  0.717647  2945.0 -1305.0  751.0 -1305.0  736.0 -1305.0  751.0  0.509804  2079.0 -1183.0  597.0 -1183.0  582.0 -1183.0  597.0  0.364706  1482.0  0.0  1.0  0.0  0.0  0.0  60.0  0.0  0.0  0.0  1.0
-
---- y first 10 values ---
-[0.03729615 0.01577186 0.02179583 0.03256826]
-
-========================================================================================================================
-[DATASET PREVIEW] target_pk=3400, ref_pk=3320
-========================================================================================================================
-
-[Y0-dGamma]
-X_mat shape: (252, 14)
-y_vec shape: (252,)
-groups shape: (252,)
-unique groups: [3400]
-
---- X_mat first 5 rows ---
-     0     1     2     3     4     5    6    7    8    9    10    11        12     13
-0 -31.0  15.0 -31.0  10.0 -31.0  15.0  0.0  0.0  1.0  0.0  0.0  60.0  0.011765   36.0
-1 -45.0  22.0 -45.0  17.0 -45.0  22.0  0.0  0.0  1.0  0.0  0.0  60.0  0.015686   52.0
-2 -63.0  30.0 -63.0  25.0 -63.0  30.0  0.0  0.0  1.0  0.0  0.0  60.0  0.019608   72.0
-3 -80.0  39.0 -80.0  34.0 -80.0  39.0  0.0  0.0  1.0  0.0  0.0  60.0  0.023529   92.0
-4 -98.0  47.0 -98.0  42.0 -98.0  47.0  0.0  0.0  1.0  0.0  0.0  60.0  0.027451  112.0
-
---- y first 10 values ---
-[-0.00022197 -0.16706109 -0.07341838 -0.0413754  -0.00027418 -0.00028491
- -0.02245593 -0.05048513 -0.02577758 -0.02143884]
-
-[Y0-dCx]
-X_mat shape: (250, 14)
-y_vec shape: (250,)
-groups shape: (250,)
-unique groups: [3400]
-
---- X_mat first 5 rows ---
-      0     1      2     3      4     5    6    7    8    9    10    11        12     13
-0  -80.0  39.0  -80.0  34.0  -80.0  39.0  0.0  0.0  1.0  0.0  0.0  60.0  0.023529   92.0
-1  -98.0  47.0  -98.0  42.0  -98.0  47.0  0.0  0.0  1.0  0.0  0.0  60.0  0.027451  112.0
-2  -98.0  47.0  -98.0  42.0  -98.0  47.0  0.0  0.0  1.0  0.0  0.0  60.0  0.031373  112.0
-3 -112.0  54.0 -112.0  49.0 -112.0  54.0  0.0  0.0  1.0  0.0  0.0  60.0  0.035294  128.0
-4 -130.0  62.0 -130.0  57.0 -130.0  62.0  0.0  0.0  1.0  0.0  0.0  60.0  0.039216  148.0
-
---- y first 10 values ---
-[0.00409999 0.00390002 0.00400001 0.005      0.00600001 0.0079
- 0.0081     0.0072     0.00470001 0.00439999]
-
-[Y0-dCy]
-X_mat shape: (250, 14)
-y_vec shape: (250,)
-groups shape: (250,)
-unique groups: [3400]
-
---- X_mat first 5 rows ---
-      0     1      2     3      4     5    6    7    8    9    10    11        12     13
-0  -80.0  39.0  -80.0  34.0  -80.0  39.0  0.0  0.0  1.0  0.0  0.0  60.0  0.023529   92.0
-1  -98.0  47.0  -98.0  42.0  -98.0  47.0  0.0  0.0  1.0  0.0  0.0  60.0  0.027451  112.0
-2  -98.0  47.0  -98.0  42.0  -98.0  47.0  0.0  0.0  1.0  0.0  0.0  60.0  0.031373  112.0
-3 -112.0  54.0 -112.0  49.0 -112.0  54.0  0.0  0.0  1.0  0.0  0.0  60.0  0.035294  128.0
-4 -130.0  62.0 -130.0  57.0 -130.0  62.0  0.0  0.0  1.0  0.0  0.0  60.0  0.039216  148.0
-
---- y first 10 values ---
-[0.00490001 0.0024     0.0027     0.0025     0.00569999 0.00629997
- 0.00560001 0.0061     0.00299999 0.00030002]
-
-[Y1-slope]
-X_mat shape: (18, 14)
-y_vec shape: (18,)
-groups shape: (18,)
-unique groups: [3400]
-
---- X_mat first 5 rows ---
-       0      1       2      3       4      5    6    7    8    9    10    11        12      13
-0 -1177.0  591.0 -1177.0  586.0 -1177.0  591.0  0.0  0.0  1.0  0.0  0.0  60.0  0.360784  1466.0
-1 -1228.0  637.0 -1228.0  632.0 -1228.0  637.0  0.0  0.0  1.0  0.0  0.0  60.0  0.392157  1597.0
-2 -1270.0  676.0 -1270.0  671.0 -1270.0  676.0  0.0  0.0  1.0  0.0  0.0  60.0  0.423529  1724.0
-3 -1295.0  707.0 -1295.0  702.0 -1295.0  707.0  0.0  0.0  1.0  0.0  0.0  60.0  0.454902  1856.0
-4 -1308.0  736.0 -1308.0  731.0 -1308.0  736.0  0.0  0.0  1.0  0.0  0.0  60.0  0.486275  1987.0
-
---- y first 10 values ---
-[0.7641172  0.8070723  0.8278844  0.8593445  0.89007854 0.89213556
- 0.83695936 0.88777953 0.9745368  0.9072606 ]
-
-[Y2-delta_uv]
-X_mat shape: (4, 34)
-y_vec shape: (4,)
-groups shape: (4,)
-unique groups: [3400]
-
---- X_mat first 5 rows ---
-       0      1       2      3       4      5         6       7       8      9       10     11      12     13        14      15      16     17      18     19      20     21        22      23   24   25   26   27   28    29   30   31   32   33
-0 -1295.0  707.0 -1295.0  702.0 -1295.0  707.0  0.454902  1856.0 -1084.0  522.0 -1084.0  517.0 -1084.0  522.0  0.313726  1279.0  -935.0  420.0  -935.0  415.0  -935.0  420.0  0.258824  1056.0  0.0  0.0  1.0  0.0  0.0  60.0  1.0  0.0  0.0  0.0
-1  -713.0  550.0  -713.0  545.0  -713.0  550.0  0.768627  3154.0 -1253.0  750.0 -1253.0  745.0 -1253.0  750.0  0.588235  2401.0 -1305.0  751.0 -1305.0  746.0 -1305.0  751.0  0.505882  2063.0  0.0  0.0  1.0  0.0  0.0  60.0  0.0  1.0  0.0  0.0
-2  -713.0  550.0  -713.0  545.0  -713.0  550.0  0.768627  3154.0 -1267.0  751.0 -1267.0  746.0 -1267.0  751.0  0.576471  2345.0 -1298.0  711.0 -1298.0  706.0 -1298.0  711.0  0.462745  1875.0  0.0  0.0  1.0  0.0  0.0  60.0  0.0  0.0  1.0  0.0
-3  -887.0  638.0  -887.0  633.0  -887.0  638.0  0.717647  2945.0 -1305.0  751.0 -1305.0  746.0 -1305.0  751.0  0.509804  2079.0 -1183.0  597.0 -1183.0  592.0 -1183.0  597.0  0.364706  1482.0  0.0  0.0  1.0  0.0  0.0  60.0  0.0  0.0  0.0  1.0
-
---- y first 10 values ---
-[0.03425663 0.0134369  0.01853669 0.02778598]
-
-========================================================================================================================
-[DATASET PREVIEW] target_pk=3100, ref_pk=3007
-========================================================================================================================
-
-[Y0-dGamma]
-X_mat shape: (251, 14)
-y_vec shape: (251,)
-groups shape: (251,)
-unique groups: [3100]
-
---- X_mat first 5 rows ---
-     0     1     2     3     4     5    6    7    8    9    10    11        12     13
-0 -45.0  24.0 -45.0  22.0 -45.0  22.0  1.0  0.0  0.0  0.0  0.0  60.0  0.015686   52.0
-1 -63.0  32.0 -63.0  30.0 -63.0  30.0  1.0  0.0  0.0  0.0  0.0  60.0  0.019608   72.0
-2 -80.0  41.0 -80.0  39.0 -80.0  39.0  1.0  0.0  0.0  0.0  0.0  60.0  0.023529   92.0
-3 -98.0  49.0 -98.0  47.0 -98.0  47.0  1.0  0.0  0.0  0.0  0.0  60.0  0.027451  112.0
-4 -98.0  49.0 -98.0  47.0 -98.0  47.0  1.0  0.0  0.0  0.0  0.0  60.0  0.031373  112.0
-
---- y first 10 values ---
-[0.00107288 0.05788755 0.03260207 0.00124025 0.00128794 0.00133324
- 0.00137687 0.00141859 0.01538372 0.02390552]
-
-[Y0-dCx]
-X_mat shape: (250, 14)
-y_vec shape: (250,)
-groups shape: (250,)
-unique groups: [3100]
-
---- X_mat first 5 rows ---
-      0     1      2     3      4     5    6    7    8    9    10    11        12     13
-0  -80.0  41.0  -80.0  39.0  -80.0  39.0  1.0  0.0  0.0  0.0  0.0  60.0  0.023529   92.0
-1  -98.0  49.0  -98.0  47.0  -98.0  47.0  1.0  0.0  0.0  0.0  0.0  60.0  0.027451  112.0
-2  -98.0  49.0  -98.0  47.0  -98.0  47.0  1.0  0.0  0.0  0.0  0.0  60.0  0.031373  112.0
-3 -112.0  56.0 -112.0  54.0 -112.0  54.0  1.0  0.0  0.0  0.0  0.0  60.0  0.035294  128.0
-4 -130.0  64.0 -130.0  62.0 -130.0  62.0  1.0  0.0  0.0  0.0  0.0  60.0  0.039216  148.0
-
---- y first 10 values ---
-[-0.01299998 -0.00759998 -0.00730002 -0.0038     -0.00319999 -0.00040001
- -0.0011     -0.00080001  0.00140002 -0.00010002]
-
-[Y0-dCy]
-X_mat shape: (250, 14)
-y_vec shape: (250,)
-groups shape: (250,)
-unique groups: [3100]
-
---- X_mat first 5 rows ---
-      0     1      2     3      4     5    6    7    8    9    10    11        12     13
-0  -80.0  41.0  -80.0  39.0  -80.0  39.0  1.0  0.0  0.0  0.0  0.0  60.0  0.023529   92.0
-1  -98.0  49.0  -98.0  47.0  -98.0  47.0  1.0  0.0  0.0  0.0  0.0  60.0  0.027451  112.0
-2  -98.0  49.0  -98.0  47.0  -98.0  47.0  1.0  0.0  0.0  0.0  0.0  60.0  0.031373  112.0
-3 -112.0  56.0 -112.0  54.0 -112.0  54.0  1.0  0.0  0.0  0.0  0.0  60.0  0.035294  128.0
-4 -130.0  64.0 -130.0  62.0 -130.0  62.0  1.0  0.0  0.0  0.0  0.0  60.0  0.039216  148.0
-
---- y first 10 values ---
-[0.0293     0.02080001 0.01800001 0.01669998 0.0098     0.01030001
- 0.0086     0.00799999 0.00709999 0.00319999]
-
-[Y1-slope]
-X_mat shape: (18, 14)
-y_vec shape: (18,)
-groups shape: (18,)
-unique groups: [3100]
-
---- X_mat first 5 rows ---
-       0      1       2      3       4      5    6    7    8    9    10    11        12      13
-0 -1177.0  593.0 -1177.0  591.0 -1177.0  591.0  1.0  0.0  0.0  0.0  0.0  60.0  0.360784  1466.0
-1 -1228.0  639.0 -1228.0  637.0 -1228.0  637.0  1.0  0.0  0.0  0.0  0.0  60.0  0.392157  1597.0
-2 -1270.0  678.0 -1270.0  676.0 -1270.0  676.0  1.0  0.0  0.0  0.0  0.0  60.0  0.423529  1724.0
-3 -1295.0  709.0 -1295.0  707.0 -1295.0  707.0  1.0  0.0  0.0  0.0  0.0  60.0  0.454902  1856.0
-4 -1308.0  738.0 -1308.0  736.0 -1308.0  736.0  1.0  0.0  0.0  0.0  0.0  60.0  0.486275  1987.0
-
---- y first 10 values ---
-[0.74079454 0.79780483 0.82529193 0.83913726 0.8814878  0.88026613
- 0.8620093  0.9548546  1.014444   0.9902146 ]
-
-[Y2-delta_uv]
-X_mat shape: (4, 34)
-y_vec shape: (4,)
-groups shape: (4,)
-unique groups: [3100]
-
---- X_mat first 5 rows ---
-       0      1       2      3       4      5         6       7       8      9       10     11      12     13        14      15      16     17      18     19      20     21        22      23   24   25   26   27   28    29   30   31   32   33
-0 -1295.0  709.0 -1295.0  707.0 -1295.0  707.0  0.454902  1856.0 -1084.0  524.0 -1084.0  522.0 -1084.0  522.0  0.313726  1279.0  -935.0  422.0  -935.0  420.0  -935.0  420.0  0.258824  1056.0  1.0  0.0  0.0  0.0  0.0  60.0  1.0  0.0  0.0  0.0
-1  -713.0  552.0  -713.0  550.0  -713.0  550.0  0.768627  3154.0 -1253.0  752.0 -1253.0  750.0 -1253.0  750.0  0.588235  2401.0 -1305.0  753.0 -1305.0  751.0 -1305.0  751.0  0.505882  2063.0  1.0  0.0  0.0  0.0  0.0  60.0  0.0  1.0  0.0  0.0
-2  -713.0  552.0  -713.0  550.0  -713.0  550.0  0.768627  3154.0 -1267.0  753.0 -1267.0  751.0 -1267.0  751.0  0.576471  2345.0 -1298.0  713.0 -1298.0  711.0 -1298.0  711.0  0.462745  1875.0  1.0  0.0  0.0  0.0  0.0  60.0  0.0  0.0  1.0  0.0
-3  -887.0  640.0  -887.0  638.0  -887.0  638.0  0.717647  2945.0 -1305.0  753.0 -1305.0  751.0 -1305.0  751.0  0.509804  2079.0 -1183.0  599.0 -1183.0  597.0 -1183.0  597.0  0.364706  1482.0  1.0  0.0  0.0  0.0  0.0  60.0  0.0  0.0  0.0  1.0
-
---- y first 10 values ---
-[0.03316246 0.01482179 0.02072143 0.03091979]
+PS D:\00 업무\00 가상화기술\25Y\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project> & C:/python310/python.exe "d:/00 업무/00 가상화기술/25Y/00 색시야각 보상 최적화/VAC algorithm/VAC_Optimization_Project/src/modeling/train_model.py"
+▶ Train with 1560 PKs
+▶ Mapping file: d:\00 업무\00 가상화기술\25Y\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project\data\vac_set_mapping.csv
+ pk_start  pk_end  ref_pk  base_pk model_name panel_maker  frame_rate model_year                     memo
+     4254    4566    4254     4255   50QNED85         INX         120        Y25    ref_pk=4565,4348,4336
+     3943    4253    3943     3944   50QNED85     HKC(H2)         120        Y25              ref_pk=4163
+     3631    3942    3631     3632     43UT80  CSOT(CSPI)          60        Y24         ref_pk=3931,3940
+     3320    3630    3320     3321   43NANO80     HKC(H2)          60        Y25              ref_pk=3553
+     3007    3319    3007     3008     50UB85         INX          60        Y26 ref_pk=3317/base_pk=3318
+INFO:root:[VACDataset] Use_Flag='N' 이라 제외된 PK: [3317, 3318, 3553, 3931, 3940, 4163, 4336, 4348, 4565]
+▶ Valid PKs after Use_Flag filtering: 1551
+▶ Collected samples: 1551
+
+=== Train Y0: dGamma ===
+⏱️ [Y0-dGamma] Linear fit: 0.2s | MSE=0.003478 R²=0.223856
+Fitting 3 folds for each of 20 candidates, totalling 60 fits
+[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  49.1s
+[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  49.8s
+[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  52.7s
+[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 2.0min
+[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 2.0min
+[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 2.0min
+[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 2.2min
+[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 2.2min
+[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  35.4s
+[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 1.7min
+[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  36.1s
+[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 1.7min
+[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  28.0s
+[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  36.3s
+[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 2.2min
+[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  27.2s
+[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  26.9s
+[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 1.7min
+[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.1min
+[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.1min
+[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.2min
+[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.5min
+[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.4min
+[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.4min
+[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time= 1.2min
+[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time= 1.2min
+[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=  54.1s
+[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 2.4min
+[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=  53.8s
+[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time= 1.2min
+[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 2.3min
+[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=  55.6s
+[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 2.3min
+[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=  59.6s
+[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=  58.6s
+[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.8min
+[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time= 1.0min
+[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.8min
+[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.8min
+[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time= 1.0min
+[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time= 1.0min
+[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 2.0min
+[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time= 1.0min
+[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 2.1min
+[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 2.0min
+[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.4min
+[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.4min
+[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.4min
+[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  56.2s
+[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  53.7s
+[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  55.7s
+[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  31.4s
+[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  29.6s
+[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  29.5s
+[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  42.1s
+[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  43.6s
+[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  42.2s
+[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 2.1min
+[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 2.1min
+[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 2.1min
+⏱️ [Y0-dGamma] RF(residual) search: 12.3 min
+✅ [Y0-dGamma] RF best params: {'max_depth': 17, 'max_features': 0.5598033066958126, 'min_samples_leaf': 13, 'min_samples_split': 7, 'n_estimators': 133}
+✅ [Y0-dGamma] RF best R² (CV): 0.946552
+🏁 [Y0-dGamma] Hybrid — MAE:0.007790 RMSE:0.013181 R²:0.961234
+
+====================================================================================================
+[SET METRIC] Y0-dGamma
+model_name panel_maker  frame_rate  ref_pk     n      mae     rmse       r2    y_mean    y_std
+  43NANO80     HKC(H2)          60    3320 18348 0.008375 0.013075 0.951153 -0.023952 0.059159
+    43UT80  CSOT(CSPI)          60    3631 14853 0.008999 0.015875 0.928466 -0.016791 0.059354
+  50QNED85     HKC(H2)         120    3943 17191 0.007805 0.013837 0.963828 -0.003706 0.072753
+  50QNED85         INX         120    4254 12790 0.006578 0.010922 0.984563 -0.003357 0.087903
+    50UB85         INX          60    3007 15148 0.006899 0.011234 0.949374 -0.000324 0.049927
+📁 saved: d:\00 업무\00 가상화기술\25Y\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project\src\modeling\hybrid_dGamma_model.pkl
+
+=== Train Y0: dCx ===
+⏱️ [Y0-dCx] Linear fit: 0.1s | MSE=0.000012 R²=0.369124
+Fitting 3 folds for each of 20 candidates, totalling 60 fits
+[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  50.2s
+[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  50.2s
+[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  52.5s
+[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 2.2min
+[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 2.2min
+[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 2.3min
+[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 2.4min
+[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 2.4min
+[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  35.9s
+[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 1.9min
+[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  27.2s
+[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  36.6s
+[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  35.7s
+[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 2.1min
+[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 2.2min
+[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  28.2s
+[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  29.1s
+[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.2min
+[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.2min
+[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.1min
+[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 2.0min
+[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.5min
+[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.5min
+[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.5min
+[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time= 1.3min
+[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time= 1.4min
+[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=  51.7s
+[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=  55.6s
+[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 2.5min
+[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time= 1.4min
+[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=  54.2s
+[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 2.5min
+[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 2.5min
+[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time= 1.0min
+[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time= 1.0min
+[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.8min
+[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=  57.5s
+[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.9min
+[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.9min
+[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time= 1.1min
+[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time= 1.1min
+[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time= 1.1min
+[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 2.2min
+[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 2.2min
+[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.5min
+[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 2.2min
+[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.6min
+[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  58.2s
+[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  57.8s
+[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.6min
+[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  28.7s
+[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  59.4s
+[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  29.1s
+[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  28.6s
+[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  42.8s
+[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  41.7s
+[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  42.7s
+[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 2.4min
+[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 2.4min
+[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 2.4min
+⏱️ [Y0-dCx] RF(residual) search: 15.1 min
+✅ [Y0-dCx] RF best params: {'max_depth': 17, 'max_features': 0.9722042458113105, 'min_samples_leaf': 15, 'min_samples_split': 5, 'n_estimators': 160}
+✅ [Y0-dCx] RF best R² (CV): 0.922507
+🏁 [Y0-dCx] Hybrid — MAE:0.000585 RMSE:0.000941 R²:0.953518
+
+====================================================================================================
+[SET METRIC] Y0-dCx
+model_name panel_maker  frame_rate  ref_pk     n      mae     rmse       r2    y_mean    y_std
+  43NANO80     HKC(H2)          60    3320 18250 0.000468 0.000926 0.949313  0.000291 0.004112
+    43UT80  CSOT(CSPI)          60    3631 14750 0.000412 0.000685 0.963717 -0.003664 0.003594
+  50QNED85     HKC(H2)         120    3943 17000 0.000822 0.001115 0.948123 -0.001029 0.004897
+  50QNED85         INX         120    4254 12750 0.000754 0.000981 0.945320 -0.000606 0.004195
+    50UB85         INX          60    3007 15000 0.000483 0.000924 0.928673  0.000494 0.003460
+📁 saved: d:\00 업무\00 가상화기술\25Y\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project\src\modeling\hybrid_dCx_model.pkl
+
+=== Train Y0: dCy ===
+⏱️ [Y0-dCy] Linear fit: 0.1s | MSE=0.000036 R²=0.425287
+Fitting 3 folds for each of 20 candidates, totalling 60 fits
+[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  46.7s
+[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  46.9s
+[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=  47.8s
+[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 1.9min
+[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 1.9min
+[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time= 2.0min
+[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 2.1min
+[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 2.1min
+[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 1.7min
+[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  33.3s
+[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  34.3s
+[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 1.7min
+[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  26.7s
+[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=  34.9s
+[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time= 2.1min
+[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  27.5s
+[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=  26.9s
+[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time= 1.7min
+[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.1min
+[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.1min
+[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time= 1.1min
+[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.4min
+[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.4min
+[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time= 1.4min
+[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time= 1.2min
+[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time= 1.2min
+[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 2.2min
+[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=  52.2s
+[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time= 1.2min
+[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=  53.7s
+[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=  52.2s
+[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 2.2min
+[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time= 2.3min
+[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=  53.0s
+[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=  54.9s
+[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.7min
+[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=  54.6s
+[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.6min
+[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time= 1.7min
+[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=  57.4s
+[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=  59.0s
+[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=  59.3s
+[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 1.9min
+[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 2.0min
+[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time= 1.9min
+[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.4min
+[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.4min
+[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  53.8s
+[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time= 1.4min
+[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  54.0s
+[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=  53.9s
+[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  28.1s
+[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  29.0s
+[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=  29.1s
+[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  40.9s
+[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  41.7s
+[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=  40.6s
+[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 2.1min
+[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 2.0min
+[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time= 2.0min
+⏱️ [Y0-dCy] RF(residual) search: 13.4 min
+✅ [Y0-dCy] RF best params: {'max_depth': 17, 'max_features': 0.9722042458113105, 'min_samples_leaf': 15, 'min_samples_split': 5, 'n_estimators': 160}
+✅ [Y0-dCy] RF best R² (CV): 0.935396
+🏁 [Y0-dCy] Hybrid — MAE:0.000863 RMSE:0.001551 R²:0.961848
+
+====================================================================================================
+[SET METRIC] Y0-dCy
+model_name panel_maker  frame_rate  ref_pk     n      mae     rmse       r2    y_mean    y_std
+  43NANO80     HKC(H2)          60    3320 18250 0.000700 0.001405 0.958753  0.000384 0.006918
+    43UT80  CSOT(CSPI)          60    3631 14750 0.000854 0.001747 0.940087 -0.006917 0.007137
+  50QNED85     HKC(H2)         120    3943 17000 0.001067 0.001560 0.947359 -0.001536 0.006800
+  50QNED85         INX         120    4254 12750 0.000945 0.001385 0.970368 -0.000118 0.008048
+    50UB85         INX          60    3007 15000 0.000768 0.001634 0.958763  0.001934 0.008048
+📁 saved: d:\00 업무\00 가상화기술\25Y\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project\src\modeling\hybrid_dCy_model.pkl
+
+=== Train Y1 ===
+⏱️ [Y1-slope] Linear fit: 0.0s | MSE=0.019510 R²=0.302873
+Fitting 3 folds for each of 20 candidates, totalling 60 fits
+[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=   3.1s
+[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=   3.1s
+[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=   3.1s
+[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time=   5.3s
+[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time=   5.3s
+[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time=   5.4s
+[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time=   6.6s
+[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time=   6.7s
+[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=   2.1s
+[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=   2.1s
+[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time=   5.0s
+[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time=   4.9s
+[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=   2.2s
+[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=   2.6s
+[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time=   7.1s
+[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=   2.5s
+[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=   2.5s
+[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time=   5.4s
+[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time=   4.3s
+[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time=   4.1s
+[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time=   4.2s
+[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time=   4.9s
+[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time=   4.8s
+[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time=   4.8s
+[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time=   3.4s
+[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time=   3.5s
+[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time=   3.5s
+[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time=   7.2s
+[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time=   7.1s
+[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=   3.5s
+[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=   3.4s
+[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time=   7.3s
+[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=   3.5s
+[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=   3.4s
+[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time=   5.2s
+[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=   3.6s
+[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=   3.4s
+[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time=   5.4s
+[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time=   5.3s
+[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=   2.7s
+[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=   2.7s
+[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=   2.8s
+[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time=   6.0s
+[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time=   6.2s
+[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time=   3.8s
+[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time=   3.8s
+[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time=   6.2s
+[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=   3.0s
+[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=   3.1s
+[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time=   4.0s
+[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=   3.2s
+[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=   2.3s
+[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=   2.4s
+[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=   2.2s
+[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time=   5.3s
+[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=   3.0s
+[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time=   5.4s
+[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time=   5.2s
+[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=   2.8s
+[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=   2.5s
+⏱️ [Y1-slope] RF(residual) search: 0.7 min
+✅ [Y1-slope] RF best params: {'max_depth': 12, 'max_features': 0.5109418317515857, 'min_samples_leaf': 5, 'min_samples_split': 6, 'n_estimators': 143}
+✅ [Y1-slope] RF best R² (CV): 0.972032
+🏁 [Y1-slope] Hybrid — MAE:0.012824 RMSE:0.025554 R²:0.976667
+
+====================================================================================================
+[SET METRIC] Y1-slope
+model_name panel_maker  frame_rate  ref_pk    n      mae     rmse       r2   y_mean    y_std
+  43NANO80     HKC(H2)          60    3320 1314 0.012921 0.020698 0.976869 0.792932 0.136089
+    43UT80  CSOT(CSPI)          60    3631 1062 0.012008 0.031949 0.940795 0.920067 0.131305
+  50QNED85     HKC(H2)         120    3943 1224 0.015171 0.034016 0.951051 0.800856 0.153750
+  50QNED85         INX         120    4254  918 0.011201 0.017310 0.993723 0.738908 0.218484
+    50UB85         INX          60    3007 1080 0.012227 0.017135 0.979055 0.910998 0.118401
+📁 saved: d:\00 업무\00 가상화기술\25Y\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project\src\modeling\hybrid_Y1_slope_model.pkl
+
+=== Train Y2 (delta_uv) ===
+⏱️ [Y2-delta_uv] Linear fit: 0.0s | MSE=0.000003 R²=0.963173
+Fitting 3 folds for each of 20 candidates, totalling 60 fits
+[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=   1.9s
+[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=   2.0s
+[CV] END max_depth=12, max_features=0.3248149123539492, min_samples_leaf=6, min_samples_split=4, n_estimators=207; total time=   2.0s
+[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time=   3.1s
+[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time=   3.1s
+[CV] END max_depth=14, max_features=0.8372343894881864, min_samples_leaf=18, min_samples_split=4, n_estimators=191; total time=   3.2s
+[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time=   3.9s
+[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time=   3.9s
+[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=   1.4s
+[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=   1.4s
+[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time=   2.8s
+[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time=   2.8s
+[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=   1.6s
+[CV] END max_depth=9, max_features=0.3454599737656805, min_samples_leaf=8, min_samples_split=2, n_estimators=177; total time=   1.9s
+[CV] END max_depth=12, max_features=0.9759278817295955, min_samples_leaf=15, min_samples_split=7, n_estimators=157; total time=   3.3s
+[CV] END max_depth=12, max_features=0.6808920093945671, min_samples_leaf=11, min_samples_split=4, n_estimators=269; total time=   4.4s
+[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=   1.7s
+[CV] END max_depth=13, max_features=0.20565304417577393, min_samples_leaf=12, min_samples_split=2, n_estimators=178; total time=   1.8s
+[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time=   2.6s
+[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time=   2.7s
+[CV] END max_depth=17, max_features=0.23733253057089235, min_samples_leaf=15, min_samples_split=7, n_estimators=294; total time=   2.5s
+[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time=   2.9s
+[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time=   2.9s
+[CV] END max_depth=10, max_features=0.5059695930137302, min_samples_leaf=7, min_samples_split=2, n_estimators=250; total time=   2.8s
+[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time=   2.0s
+[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time=   2.0s
+[CV] END max_depth=9, max_features=0.9591084298026666, min_samples_leaf=15, min_samples_split=7, n_estimators=128; total time=   1.9s
+[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time=   4.2s
+[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time=   4.3s
+[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=   2.3s
+[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=   2.2s
+[CV] END max_depth=17, max_features=0.2781376912051071, min_samples_leaf=7, min_samples_split=5, n_estimators=230; total time=   2.3s
+[CV] END max_depth=12, max_features=0.6860358815211507, min_samples_leaf=8, min_samples_split=2, n_estimators=286; total time=   4.5s
+[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time=   3.1s
+[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=   2.4s
+[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time=   3.1s
+[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=   2.3s
+[CV] END max_depth=14, max_features=0.6879973262260968, min_samples_leaf=11, min_samples_split=4, n_estimators=200; total time=   3.1s
+[CV] END max_depth=11, max_features=0.3457888702304499, min_samples_leaf=7, min_samples_split=3, n_estimators=253; total time=   2.4s
+[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=   1.5s
+[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=   1.5s
+[CV] END max_depth=17, max_features=0.5598033066958126, min_samples_leaf=13, min_samples_split=7, n_estimators=133; total time=   1.6s
+[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time=   3.6s
+[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time=   3.4s
+[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time=   2.1s
+[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time=   2.2s
+[CV] END max_depth=13, max_features=0.6373682234746237, min_samples_leaf=9, min_samples_split=6, n_estimators=265; total time=   3.8s
+[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=   1.9s
+[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=   2.0s
+[CV] END max_depth=12, max_features=0.5109418317515857, min_samples_leaf=5, min_samples_split=6, n_estimators=143; total time=   2.0s
+[CV] END max_depth=15, max_features=0.6563551795243195, min_samples_leaf=15, min_samples_split=2, n_estimators=159; total time=   2.6s
+[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time=   3.3s
+[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=   2.1s
+[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time=   3.4s
+[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=   2.2s
+[CV] END max_depth=17, max_features=0.9722042458113105, min_samples_leaf=15, min_samples_split=5, n_estimators=160; total time=   3.5s
+[CV] END max_depth=8, max_features=0.21250912539295516, min_samples_leaf=12, min_samples_split=2, n_estimators=255; total time=   2.1s
+[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=   2.0s
+[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=   2.0s
+[CV] END max_depth=15, max_features=0.21126385817206758, min_samples_leaf=6, min_samples_split=2, n_estimators=255; total time=   1.3s
+⏱️ [Y2-delta_uv] RF(residual) search: 0.4 min
+✅ [Y2-delta_uv] RF best params: {'max_depth': 17, 'max_features': 0.9722042458113105, 'min_samples_leaf': 15, 'min_samples_split': 5, 'n_estimators': 160}
+✅ [Y2-delta_uv] RF best R² (CV): 0.944005
+🏁 [Y2-delta_uv] Hybrid — MAE:0.000227 RMSE:0.000374 R²:0.998478
+
+====================================================================================================
+[SET METRIC] Y2-delta_uv
+model_name panel_maker  frame_rate  ref_pk   n      mae     rmse       r2   y_mean    y_std
+  43NANO80     HKC(H2)          60    3320 292 0.000189 0.000297 0.998637 0.023593 0.008035
+    43UT80  CSOT(CSPI)          60    3631 236 0.000152 0.000337 0.998470 0.027207 0.008619
+  50QNED85     HKC(H2)         120    3943 272 0.000252 0.000442 0.997566 0.036302 0.008964
+  50QNED85         INX         120    4254 204 0.000278 0.000376 0.998067 0.030303 0.008551
+    50UB85         INX          60    3007 240 0.000273 0.000408 0.997074 0.024837 0.007539
+📁 saved: d:\00 업무\00 가상화기술\25Y\00 색시야각 보상 최적화\VAC algorithm\VAC_Optimization_Project\src\modeling\hybrid_Y2_delta_uv_model.pkl
+
+✅ ALL DONE.
