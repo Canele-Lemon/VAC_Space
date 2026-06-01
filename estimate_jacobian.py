@@ -409,7 +409,7 @@ def main():
     lam = 1e-3
     
     # 4. delta-window
-    delta_window = 80
+    delta_window = None
     
     # 5. gauss-sigma
     gauss_sigma = None
@@ -467,8 +467,8 @@ def main():
         else:
             print(f"\n[g={g}] no estimate (NaN or insufficient samples)")
     
-    jac_path = r"artifacts\jacobian_bundle_ref2744_lam0.001_dw900.0_gs30.0_20251110_105631.npy"
-
+    jac_path = out_npy
+    
     debug_deltaG_sample_with_dataset(
         pk_list=pk_list,
         ref_pk=ref_pk,
