@@ -1,40 +1,19 @@
-# ─────────────────────────────
-# main: R / G / B / RG / RB / GB / RGB 조합 sweep
-# ─────────────────────────────
-def main():
-    offsets = build_offset_values()  # [-70 ~ 70, 0 포함 45개]
+coef, A = solve_weighted_ridge(Xg, Yg, lam=lam, w=w)
 
-    # 모든 (R,G,B) offset 조합을 set으로 모아서 중복 제거
-    combos = set()
+# coef: (input RGB, output Cx/Cy/Gamma)
+# J:    (output Cx/Cy/Gamma, input RGB)
+J = coef.T
 
-    # 1) 기준 LUT (0,0,0)
-    combos.add((0, 0, 0))
+cond = np.linalg.cond(A)
 
-    for o in offsets:
-        # 2) 단일 채널 변화: R-only / G-only / B-only
-        combos.add((o, 0, 0))  # R-only
-        combos.add((0, o, 0))  # G-only
-        combos.add((0, 0, o))  # B-only
+jac[g] = {"J": J.astype(np.float32), "n": n, "cond": float(cond)}
 
-        # 3) 두 채널 동시 변화: RG / RB / GB (같은 offset)
-        combos.add((o, o, 0))  # RG
-        combos.add((o, 0, o))  # RB
-        combos.add((0, o, o))  # GB
+rows.append({
+    "gray": g,
+    "n_samples": n,
+    "cond": float(cond),
+    "J_Cx_R": float(J[0, 0]), "J_Cx_G": float(J[0, 1]), "J_Cx_B": float(J[0, 2]),
+    "J_Cy_R": float(J[1, 0]), "J_Cy_G": float(J[1, 1]), "J_Cy_B": float(J[1, 2]),
+    "J_Gam_R": float(J[2, 0]), "J_Gam_G": float(J[2, 1]), "J_Gam_B": float(J[2, 2]),
+})
 
-        # 4) 세 채널 동시 변화: RGB
-        combos.add((o, o, o))  # RGB
-
-    combos = sorted(combos)  # 정렬해서 항상 같은 순서로 생성되도록
-
-    print(f"[INFO] total unique (R,G,B) offset combos = {len(combos)}")
-
-    # 실제 LUT 생성 & 저장
-    for (R_off, G_off, B_off) in combos:
-        df = build_single_lut(BASE_LUT_CSV, R_off, G_off, B_off)
-        save_lut_df(df, OUTPUT_DIR, BASE_NAME, R_off, G_off, B_off)
-
-    print("\n[✅ 모든 LUT 생성 완료]")
-
-
-if __name__ == "__main__":
-    main()
