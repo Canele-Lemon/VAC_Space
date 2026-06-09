@@ -1,196 +1,135 @@
-    def _update_legend(self):
-        handles, labels = [], []
-
-        for ln in self.ax.lines:
-            lb = ln.get_label()
-            if lb in ("BT.709", "DCI"):
-                handles.append(ln)
-                labels.append(lb)
-
-        for k in (('OFF', 'main'), ('OFF', 'sub'), ('ON', 'main'), ('ON', 'sub')):
-            ln = self.lines.get(k)
-
-            if ln is not None:
-                x = ln.get_xdata()
-                y = ln.get_ydata()
-
-                if x.size > 0 and y.size > 0:
-                    handles.append(ln)
-                    labels.append(ln.get_label())
-
-        if handles:
-            self.ax.legend(handles, labels, fontsize=8, loc='lower right')
-        else:
-            leg = self.ax.get_legend()
-            if leg:
-                leg.remove()
-
-여기서도 아래 에러 발생:
+2026-06-09 19:13:28,531 - INFO - subpage_vacspace.py:2718 - [TV Control] VAC 적용 상태: True
+2026-06-09 19:13:28,531 - INFO - subpage_vacspace.py:786 - [TV Control] VAC ON 전환 성공
+2026-06-09 19:13:28,531 - INFO - subpage_vacspace.py:788 - [Measurement] VAC ON 측정 시작
+2026-06-09 19:13:28,578 - INFO - subpage_vacspace.py:2591 - [DB] VAC Info fetched for PK=3025 - Version: LUT_3_Base
+2026-06-09 19:13:28,592 - INFO - subpage_vacspace.py:2671 - [Correction] loaded d:\DEV\gayasan\he_opticalmeasurement\subpages\vacspace_130\data\LUT_index_mapping.csv, shape=(256, 2), range=0~4095
+2026-06-09 19:13:28,690 - INFO - subpage_vacspace.py:2591 - [DB] VAC Info fetched for PK=1 - Version: bypass
+2026-06-09 19:13:28,696 - DEBUG - subpage_vacspace.py:3273 - [UI META] panel_maker='INX', frame_rate='120.0Hz', model_year='Y25'
+2026-06-09 19:13:28,699 - ERROR - subpage_vacspace.py:1586 - [PredictOpt] failed
 Traceback (most recent call last):
-  File "d:\DEV\gayasan\he_opticalmeasurement\subpages\vacspace_130\subpage_vacspace.py", line 2239, in handle
-    if got_main and got_sub:
-        ^^^^^^^^^^^^^^^^^^^^^
-  File "d:\DEV\gayasan\he_opticalmeasurement\subpages\vacspace_130\subpage_vacspace.py", line 2297, in _consume_colorshift_pair
-    # 차트 갱신 (vac_optimization_cie1976_chart 는 u' v' scatter)
-  File "d:\DEV\gayasan\he_opticalmeasurement\subpages\vacspace_130\charts\chromaticity_diagram.py", line 107, in add_point
-    self._update_legend()
-  File "d:\DEV\gayasan\he_opticalmeasurement\subpages\vacspace_130\charts\chromaticity_diagram.py", line 127, in _update_legend
-    if x.size > 0 and y.size > 0:
-       ^^^^^^
-AttributeError: 'list' object has no attribute 'size'
+  File "d:\DEV\gayasan\he_opticalmeasurement\subpages\vacspace_130\subpage_vacspace.py", line 1489, in _generate_predicted_vac_lut
+    dCx_pred, dCy_pred, dGamma_pred = _predict_y0(d_lut_256, pat=pat)
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "d:\DEV\gayasan\he_opticalmeasurement\subpages\vacspace_130\subpage_vacspace.py", line 1472, in _predict_y0
+    dCx_pred    = _hybrid_predict(self.models_Y0_bundle["dCx"], X)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "d:\DEV\gayasan\he_opticalmeasurement\subpages\vacspace_130\subpage_vacspace.py", line 1462, in _hybrid_predict
+    base_s = lm.predict(X).astype(np.float32)
+             ^^^^^^^^^^^^^
+  File "D:\DEV\gayasan\he_opticalmeasurement\.venv\Lib\site-packages\sklearn\pipeline.py", line 796, in predict
+    Xt = transform.transform(Xt)
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\DEV\gayasan\he_opticalmeasurement\.venv\Lib\site-packages\sklearn\utils\_set_output.py", line 319, in wrapped
+    data_to_wrap = f(self, X, *args, **kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\DEV\gayasan\he_opticalmeasurement\.venv\Lib\site-packages\sklearn\preprocessing\_data.py", line 1111, in transform
+    X = validate_data(
+        ^^^^^^^^^^^^^^
+  File "D:\DEV\gayasan\he_opticalmeasurement\.venv\Lib\site-packages\sklearn\utils\validation.py", line 3059, in validate_data
+    _check_n_features(_estimator, X, reset=reset)
+  File "D:\DEV\gayasan\he_opticalmeasurement\.venv\Lib\site-packages\sklearn\utils\validation.py", line 2923, in _check_n_features
+    raise ValueError(
+ValueError: X has 15 features, but StandardScaler is expecting 14 features as input.
+2026-06-09 19:13:28,700 - ERROR - subpage_vacspace.py:819 - [PredictOpt] 예측 기반 1st 보정 중 예외 발생 - Base VAC로 진행
+Traceback (most recent call last):
+  File "d:\DEV\gayasan\he_opticalmeasurement\subpages\vacspace_130\subpage_vacspace.py", line 817, in apply_predicted_vac_and_measure_on
+    raise RuntimeError("predicted_vac_data is None")
+RuntimeError: predicted_vac_data is None
 
-메인 클래스 코드:
+위와 같은 에러가 발생했는데 어떻게 해결해야 할지 봐주시겠어요?
 
-    def _trigger_colorshift_pair(self, patch_name):
-        s = self._sess
-        s['_cs'] = {}
+현재 코드:
 
-        def handle(role, res):
-            s['_cs'][role] = res
-            got_main = 'main' in s['_cs']
-            got_sub = ('sub') in s['_cs'] or (self.sub_instrument_cls is None)
-            if got_main and got_sub:
-                self._consume_colorshift_pair(patch_name, s['_cs'])
-                s['cs_idx'] += 1
-                QTimer.singleShot(80, lambda: self._session_step())
+    def apply_predicted_vac_and_measure_on(self):
+        self._step_start(2)
+        
+        BASE_VAC_PK = 3025
+        vac_version, base_vac_data = self._fetch_vac_by_vac_info_pk(BASE_VAC_PK)
+        if base_vac_data is None:
+            logging.error("[DB] VAC 데이터 로딩 실패 - 최적화 루프 종료")
+            return
 
-        if self.main_instrument_cls:
-            self.main_measure_thread = MeasureThread(self.main_instrument_cls, 'main')
-            self.main_measure_thread.measure_completed.connect(handle)
-            self.main_measure_thread.start()
+        base_vac_dict = json.loads(base_vac_data)
+        self._vac_dict_cache = base_vac_dict
+        
+        try:
+            predicted_vac_data, new_lut_4096, debug_info = self._generate_predicted_vac_lut(
+                base_vac_dict,
+                n_iters=1,
+                wG=0.4,
+                wC=1.0,
+                lambda_ridge=1e-3
+            )
+            if predicted_vac_data is None:
+                raise RuntimeError("predicted_vac_data is None")
+        except Exception:
+            logging.exception("[PredictOpt] 예측 기반 1st 보정 중 예외 발생 - Base VAC로 진행")
+            predicted_vac_data = base_vac_data
+            debug_info = None
+            
+        predicted_vac_dict = json.loads(predicted_vac_data)
+        self._vac_dict_cache = predicted_vac_dict
+            
+        lut_dict_plot = {key.replace("channel", "_"): v for key, v in predicted_vac_dict.items() if "channel" in key}
+        self._update_lut_chart_and_table(lut_dict_plot)
+        self._step_done(2)
 
-        if self.sub_instrument_cls:
-            self.sub_measure_thread = MeasureThread(self.sub_instrument_cls, 'sub')
-            self.sub_measure_thread.measure_completed.connect(handle)
-            self.sub_measure_thread.start()
+        def _after_write(ok, msg):
+            if not ok:
+                logging.error(f"[VAC Writing] 예측 기반 최적화 VAC 데이터 Writing 실패: {msg} - 최적화 루프 종료")
+                return
+            
+            logging.info(f"[VAC Writing] 예측 기반 최적화 VAC 데이터 Writing 완료: {msg}")
+            logging.info("[VAC Reading] VAC Reading 시작")
+            self._read_vac_from_tv(_after_read)
 
-    def _consume_colorshift_pair(self, patch_name, results):
-        """
-        results: {
-            'main': (x, y, lv, cct, duv)  또는  None,   # main = 0°
-            'sub' : (x, y, lv, cct, duv)  또는  None    # sub  = 60°
-        }
-        """
-        s = self._sess
-        store = s['store']
-        profile: SessionProfile = s['profile']
+        def _after_read(read_vac_dict):
+            self.send_command(self.ser_tv, 'exit')
+            if not read_vac_dict:
+                logging.error("[VAC Reading] VAC Reading 실패 - 최적화 루프 종료")
+                return
+            logging.info("[VAC Reading] VAC Reading 완료. Written VAC 데이터와의 일치 여부를 판단합니다.")
+            mismatch_keys = self.verify_vac_data_match(written_data=predicted_vac_dict, read_data=read_vac_dict)
 
-        # 현재 세션 상태 문자열 ('VAC OFF...' 이면 OFF, 아니면 ON)
-        state = 'OFF' if profile.session_mode.startswith('VAC OFF') else 'ON'
+            if mismatch_keys:
+                logging.warning("[VAC Reading] VAC 데이터 불일치 - 최적화 루프 종료")
+                return
+            else:
+                logging.info("[VAC Reading] Written VAC 데이터와 Read VAC 데이터 일치")
 
-        # 이 측정 패턴의 row index (op.colorshift_patterns 순서 그대로)
-        row_idx = s['cs_idx']
+            self._step_done(3)
 
-        # 이 테이블: vac_table_opt_mes_results_colorshift
-        tbl_cs_raw = self.ui.vac_table_opt_mes_results_colorshift
+            self._fine_mode = False
+            
+            self.vac_optimization_gamma_chart.reset_on()
+            self.vac_optimization_cie1976_chart.reset_on()
 
-        # ------------------------------------------------
-        # 1) main / sub 결과 변환해서 store에 넣고 차트 갱신
-        #    store['colorshift'][role][row_idx] = (Lv, u', v')
-        # ------------------------------------------------
-        for role in ('main', 'sub'):
-            res = results.get(role, None)
-            if res is None:
-                # 측정 실패 시 해당 row에 placeholder 저장
-                store['colorshift'][role].append((np.nan, np.nan, np.nan))
-                continue
-
-            x, y, lv, cct, duv_unused = res
-
-            # xy -> u' v'
-            u_p, v_p = op.convert_xyz_to_uvprime(float(x), float(y))
-
-            # store에 (Lv, u', v') 저장
-            store['colorshift'][role].append((
-                float(lv),
-                float(u_p),
-                float(v_p),
-            ))
-
-            # 차트 갱신 (vac_optimization_cie1976_chart 는 u' v' scatter)
-            self.vac_optimization_cie1976_chart.add_point(
-                state=state,
-                role=role,      # 'main' or 'sub'
-                u_p=float(u_p),
-                v_p=float(v_p)
+            profile_on = SessionProfile(
+                session_mode="VAC ON",
+                cie_label="data_2",
+                table_cols={"lv":4, "cx":5, "cy":6, "gamma":7, "d_cx":8, "d_cy":9, "d_gamma":10},
+                ref_store=self._off_store
             )
 
-        # ------------------------------------------------
-        # 2) 표 업데이트
-        #    OFF 세션:
-        #        2열,3열,4열 ← main의 Lv / u' / v'
-        #    ON/CORR 세션:
-        #        5열,6열,7열 ← main의 Lv / u' / v'
-        #        8열        ← du'v' (sub vs main 거리)
-        # ------------------------------------------------
+            def _after_on(store_on):
+                logging.info("[Measurement] 예측 기반 최적화 VAC 데이터 기준 측정 완료")
+                self._step_done(4)
+                self._on_store = store_on
+                self._update_last_on_lv_norm(store_on)
+                
+                logging.info("[Evaluation] ΔCx / ΔCy / ΔGamma의 Spec 만족 여부를 평가합니다.")
+                self._step_start(5)
+                pol = self._spec_policy
+                self._spec_thread = SpecEvalThread(self._off_store, self._on_store, policy=pol, parent=self)
+                self._spec_thread.finished.connect(lambda ok, metrics: self.on_spec_eval_done(ok, metrics, iter_idx=0, max_iters=1))
+                self._spec_thread.start()
 
-        # 이제 방금 append한 값들을 row_idx에서 꺼냄
-        main_ok = row_idx < len(store['colorshift']['main'])
-        sub_ok  = row_idx < len(store['colorshift']['sub'])
+            logging.info("[Measurement] 예측 기반 최적화 VAC 데이터 기준 측정 시작")
+            self._step_start(4)
+            self.start_viewing_angle_session(
+                profile=profile_on,
+                on_done=_after_on
+            )
 
-        if main_ok:
-            lv_main, up_main, vp_main = store['colorshift']['main'][row_idx]
-        else:
-            lv_main, up_main, vp_main = (np.nan, np.nan, np.nan)
-
-        if sub_ok:
-            lv_sub, up_sub, vp_sub = store['colorshift']['sub'][row_idx]
-        else:
-            lv_sub, up_sub, vp_sub = (np.nan, np.nan, np.nan)
-
-        if profile.session_mode.startswith('VAC OFF'):
-            # ---------- VAC OFF ----------
-            # row_idx 행의
-            #   col=1 → Lv(main)
-            #   col=2 → u'(main)
-            #   col=3 → v'(main)
-
-            txt_lv_off = f"{lv_main:.6f}" if np.isfinite(lv_main) else ""
-            txt_u_off  = f"{up_main:.6f}"  if np.isfinite(up_main)  else ""
-            txt_v_off  = f"{vp_main:.6f}"  if np.isfinite(vp_main)  else ""
-
-            self.set_item(tbl_cs_raw, row_idx, 1, txt_lv_off)
-            self.set_item(tbl_cs_raw, row_idx, 2, txt_u_off)
-            self.set_item(tbl_cs_raw, row_idx, 3, txt_v_off)
-
-        else:
-            # ---------- VAC ON (또는 CORR 이후) ----------
-            # row_idx 행의
-            #   col=4 → Lv(main)
-            #   col=5 → u'(main)
-            #   col=6 → v'(main)
-            #   col=7 → du'v' = sqrt((u'_sub - u'_main)^2 + (v'_sub - v'_main)^2)
-
-            txt_lv_on = f"{lv_main:.6f}" if np.isfinite(lv_main) else ""
-            txt_u_on  = f"{up_main:.6f}"  if np.isfinite(up_main)  else ""
-            txt_v_on  = f"{vp_main:.6f}"  if np.isfinite(vp_main)  else ""
-
-            self.set_item(tbl_cs_raw, row_idx, 4, txt_lv_on)
-            self.set_item(tbl_cs_raw, row_idx, 5, txt_u_on)
-            self.set_item(tbl_cs_raw, row_idx, 6, txt_v_on)
-
-            # du'v' 계산
-            # 엑셀식: =SQRT( (60deg_u' - 0deg_u')^2 + (60deg_v' - 0deg_v')^2 )
-            # 여기서 main=0°, sub=60°
-            duv_txt = ""
-            if np.isfinite(up_main) and np.isfinite(vp_main) and np.isfinite(up_sub) and np.isfinite(vp_sub):
-                dist = np.sqrt((up_sub - up_main)**2 + (vp_sub - vp_main)**2)
-                duv_txt = f"{dist:.6f}"
-
-            self.set_item(tbl_cs_raw, row_idx, 7, duv_txt)
-            
-    def add_point(self, *, state: str, role: str, u_p: float, v_p: float):
-        key = (state, role)
-        role_map = {'main': 'front', 'sub': 'side'}
-        view_angle = role_map.get(role, role)
-
-        if key not in self.lines:
-            return
-        self.data[key]['u'].append(float(u_p))
-        self.data[key]['v'].append(float(v_p))
-        self.lines[key].set_data(self.data[key]['u'], self.data[key]['v'])
-        self.lines[key].set_label(f"{state} {view_angle}")
-        self._update_legend()
-        self.canvas.draw_idle()
-
-        
+        # logging.info("[VAC Writing] 예측기반 최적화 VAC 데이터 TV Writing 시작")
+        # self._write_vac_to_tv(predicted_vac_data, on_finished=_after_write)
